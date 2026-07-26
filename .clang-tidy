@@ -1,0 +1,70 @@
+---
+Checks: '
+*,
+abseil-*,
+altera-*,
+android-*,
+boost-*,
+bugprone-*,
+-bugprone-easily-swappable-parameters,
+cert-*,
+-cert-dcl21-cpp,
+-cert-err58-cpp,
+clang-analyzer-*,
+concurrency-*,
+cppcoreguidelines-*,
+-cppcoreguidelines-avoid-magic-numbers,
+-cppcoreguidelines-non-private-member-variables-in-classes,
+darwin-*,
+fuchsia-*,
+-fuchsia-default-arguments-calls,
+-fuchsia-default-arguments-declarations,
+-fuchsia-multiple-inheritance,
+-fuchsia-overloaded-operator,
+-fuchsia-trailing-return,
+-fuchsia-virtual-inheritance,
+google-*,
+-google-objc-avoid-throwing-exception,
+-google-objc-function-naming,
+-google-objc-global-variable-declaration,
+-google-readability-todo,
+hicpp-*,
+-hicpp-no-assembler,
+linuxkernel-*,
+llvm-*
+-llvm-header-guard,
+-llvm-header-guard,
+-llvm-include-order,
+-llvm-prefer-static-over-anonymous-namespace,
+llvmlibc-*,
+-llvmlibc-callee-namespace,
+-llvmlibc-implementation-in-namespace,
+-llvmlibc-inline-function-decl,
+-llvmlibc-restrict-system-libc-headers,
+misc-*,
+-misc-non-private-member-variables-in-classes,
+modernize-*,
+-modernize-use-trailing-return-type,
+mpi-*,
+objc-*,
+openmp-*,
+performance-*,
+-performance-avoid-endl,
+portability-*,
+-portability-restrict-system-includes,
+readability-*,
+-readability-function-cognitive-complexity,
+-readability-identifier-length,
+-readability-magic-numbers,
+zircon-*,
+-zircon-temporary-objects,
+'
+WarningsAsErrors: ''
+HeaderFilterRegex: ''
+FormatStyle: none
+User: ''
+CheckOptions:
+  - key: hicpp-signed-bitwise.IgnorePositiveIntegerLiterals
+    value: 'true'
+  - key: readability-redundant-member-init.IgnoreBaseInCopyConstructors
+    value: 'true'

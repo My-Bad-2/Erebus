@@ -1,0 +1,15 @@
+[subproject] [subcomponent] Brief imperative summary (max 50 chars)
+
+# Details (Optional)
+
+# Fixes: #<issue_number> (if applicable)
+
+# --- Commit Message Guidelines ---
+# Format: [subproject] [subcomponent] <Imperative summary>
+#
+# Valid Subprojects:
+#   [kernel]   - Core microkernel routines (PMM, VMM, Scheduler)
+#   [klibc]    - Freestanding C library implementations
+#   [userland] - Userspace applications and services
+#   [build]    - CMake modules, toolchains, ISO generation
+#   [docs]     - Documentation and reference manuals
