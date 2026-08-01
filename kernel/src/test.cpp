@@ -1,3 +1,7 @@
+#include <stddef.h>
+
 extern "C" void _start() {
-	while (true);
+	size_t i = 0;
+	while (true)
+		;
 }

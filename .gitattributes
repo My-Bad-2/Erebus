@@ -1,0 +1,14 @@
+* text=auto eol=lf
+
+*.c     text eol=lf
+*.cpp    text eol=lf
+*.h      text eol=lf
+*.hpp    text eol=lf
+*.ld     text eol=lf
+*.sh     text eol=lf
+*.cmake  text eol=lf
+
+*.iso    binary
+*.bin    binary
+*.EFI    binary
+*.fd     binary

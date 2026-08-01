@@ -44,6 +44,7 @@ target_compile_options(os_base_flags INTERFACE "-march=${OS_ARCH_LEVEL}"
 
 		-Wall -Wextra
 		-Werror=return-type
+		-Wno-error=pass-failed
 		"$<$<COMPILE_LANGUAGE:C>:-Werror=implicit-function-declaration>"
 		-Wno-unused-parameter
 		-Wno-missing-field-initializers

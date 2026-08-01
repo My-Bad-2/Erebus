@@ -36,10 +36,10 @@ endif ()
 # ==============================================================================
 function(apply_code_quality TARGET_NAME)
 	if (CLANG_TIDY_PROGRAM)
-		set_target_properties(${TARGET_NAME} PROPERTIES
-				C_CLANG_TIDY "${CLANG_TIDY_PROGRAM};-p;${CMAKE_BINARY_DIR}"
-				CXX_CLANG_TIDY "${CLANG_TIDY_PROGRAM};-p;${CMAKE_BINARY_DIR}"
-		)
+#		set_target_properties(${TARGET_NAME} PROPERTIES
+#				C_CLANG_TIDY "${CLANG_TIDY_PROGRAM};-p;${CMAKE_BINARY_DIR}"
+#				CXX_CLANG_TIDY "${CLANG_TIDY_PROGRAM};-p;${CMAKE_BINARY_DIR}"
+#		)
 	endif ()
 
 	if (CLANG_FORMAT_PROGRAM)

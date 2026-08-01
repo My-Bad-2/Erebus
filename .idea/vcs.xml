@@ -2,6 +2,7 @@
 <project version="4">
   <component name="VcsDirectoryMappings">
     <mapping directory="$PROJECT_DIR$" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/build-release/_deps/googletest-src" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/third_party/freestanding-cxx-hdrs-gnu" vcs="Git" />
   </component>
 </project>
