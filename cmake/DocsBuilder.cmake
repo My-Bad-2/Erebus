@@ -70,7 +70,7 @@ function(add_typst_documentation TARGET_NAME)
 	foreach (FILE ${TYP_FILES})
 		# Convert path to standard forward slashes to prevent Typst string escape errors
 		file(TO_CMAKE_PATH "${FILE}" SAFE_FILE_PATH)
-		string(APPEND MASTER_CONTENT "#include \"${SAFE_FILE_PATH}\"\n")
+		string(APPEND MASTER_CONTENT "#import \"${SAFE_FILE_PATH}\"\n")
 	endforeach ()
 
 	# Write the master file to the build directory
@@ -85,8 +85,10 @@ function(add_typst_documentation TARGET_NAME)
 
 	set(BUILD_COMMANDS
 			${TYPST_PROGRAM} compile
+			--root /
 			"${MASTER_TYP}"
 			"${FINAL_OUTPUT}"
+			"-f" ${FORMAT_LOWER}
 	)
 
 	add_custom_command(

@@ -22,9 +22,17 @@ target_include_directories(klibc SYSTEM PUBLIC
 		"$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
 )
 
+target_precompile_headers(klibc PUBLIC include/kformat.hpp)
+
 if (COMMAND apply_code_quality)
 	apply_code_quality(klibc)
 endif ()
+
+add_typst_documentation(docs
+		DOCS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/docs
+		OUTPUT_FILE "docs.pdf"
+		FORMAT pdf
+)
 
 if (EREBUS_BUILD_HOST_TESTS)
 	add_host_test(klibc_tests
@@ -41,5 +49,14 @@ if (EREBUS_BUILD_HOST_TESTS)
 			"tests/string/strspn.cpp"
 			"tests/string/strpbrk.cpp"
 			"tests/string/strtok.cpp"
+
+			"tests/ctype.cpp"
+
+			"tests/stdlib/atoi.cpp"
+			"tests/stdlib/strtol.cpp"
+			"tests/stdlib/qsort-bsearch.cpp"
+			"tests/stdlib/abs.cpp"
+
+			"tests/kformat.cpp"
 	)
 endif ()
