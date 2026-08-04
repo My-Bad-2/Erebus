@@ -4,7 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="BackendCodeEditorMiscSettings">
-    <option name="/Default/Environment/Hierarchy/GeneratedFilesCacheKey/Timestamp/@EntryValue" value="5" type="long" />
+    <option name="/Default/Environment/Hierarchy/GeneratedFilesCacheKey/Timestamp/@EntryValue" value="4" type="long" />
     <option name="/Default/Housekeeping/FeatureSuggestion/FeatureSuggestionManager/DisabledSuggesters/=SwitchToGoToActionSuggester/@EntryIndexedValue" value="true" type="bool" />
     <option name="/Default/Housekeeping/LiveTemplatesHousekeeping/HotspotSessionHintIsShown/@EntryValue" value="true" type="bool" />
     <option name="/Default/Housekeeping/OptionsDialog/SelectedPageId/@EntryValue" value="CppGeneralOptions" type="string" />
@@ -22,14 +22,19 @@
     <generated>
       <config projectName="Erebus" targetName="qemu_debug" />
       <config projectName="Erebus" targetName="qemu_vars" />
-      <config projectName="Erebus" targetName="format_klibc" />
+      <config projectName="Erebus" targetName="klib_tests" />
       <config projectName="Erebus" targetName="format_kernel" />
+      <config projectName="Erebus" targetName="format_klib" />
       <config projectName="Erebus" targetName="docs" />
+      <config projectName="Erebus" targetName="gtest" />
+      <config projectName="Erebus" targetName="klib" />
       <config projectName="Erebus" targetName="kernel" />
+      <config projectName="Erebus" targetName="gtest_main" />
       <config projectName="Erebus" targetName="os_iso" />
+      <config projectName="Erebus" targetName="gmock" />
       <config projectName="Erebus" targetName="qemu_run" />
-      <config projectName="Erebus" targetName="klibc" />
       <config projectName="Erebus" targetName="format" />
+      <config projectName="Erebus" targetName="gmock_main" />
     </generated>
   </component>
   <component name="CMakeSettings">
@@ -39,23 +44,63 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="88f3297f-a857-4315-a795-de78c49ea4e5" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/.gitignore" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/Erebus.iml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/GitScopePro.xml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/codeStyles/codeStyleConfig.xml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/dictionaries/project.xml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/editor.xml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/inspectionProfiles/Project_Default.xml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/modules.xml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/vcs.xml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/cmake/DocsBuilder.cmake" beforeDir="false" afterPath="$PROJECT_DIR$/cmake/DocsBuilder.cmake" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/klib/include/internal/compiler.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gitmessage" beforeDir="false" afterPath="$PROJECT_DIR$/.gitmessage" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/CMakeLists.txt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/cmake/HostTesting.cmake" beforeDir="false" afterPath="$PROJECT_DIR$/cmake/HostTesting.cmake" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/CMakeLists.txt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/kernel/src/test.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/test.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/klibc/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/klibc/CMakeLists.txt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/klibc/include/sys/compiler.h" beforeDir="false" afterPath="$PROJECT_DIR$/klibc/include/sys/compiler.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/third_party/freestanding-cxx-hdrs-gnu-wrapper/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/third_party/freestanding-cxx-hdrs-gnu-wrapper/CMakeLists.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/klib/CMakeLists.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/docs/kformat.typ" beforeDir="false" afterPath="$PROJECT_DIR$/klib/docs/kformat.typ" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/include/ctype.h" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/ctype.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/include/kformat.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/kformat.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/include/kformat/format_buffer.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/kformat/format_buffer.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/include/kformat/format_string.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/kformat/format_string.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/include/kformat/formatter.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/kformat/formatter.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/include/kformat/utils.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/kformat/utils.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/include/stdlib.h" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/stdlib.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/include/string.h" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/string.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/include/sys/compiler.h" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/src/include/string.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/include/string.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/src/stdlib/abs.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/stdlib/abs.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/src/stdlib/atoi.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/stdlib/atoi.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/src/stdlib/bsearch.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/stdlib/bsearch.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/src/stdlib/qsort.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/stdlib/qsort.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/src/stdlib/strtol.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/stdlib/strtol.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/src/string/memchr.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/string/memchr.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/src/string/memcmp.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/string/memcmp.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/src/string/memcpy.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/string/memcpy.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/src/string/memmove.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/string/memmove.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/src/string/memset.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/string/memset.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/src/string/strcat.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/string/strcat.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/src/string/strchr.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/string/strchr.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/src/string/strcmp.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/string/strcmp.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/src/string/strcpy.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/string/strcpy.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/src/string/strlen.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/string/strlen.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/src/string/strpbrk.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/string/strpbrk.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/src/string/strspn.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/string/strspn.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/src/string/strtok.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/string/strtok.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/src/test.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/test.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/tests/ctype.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/tests/ctype.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/tests/kformat.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/tests/kformat.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/tests/stdlib/abs.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/tests/stdlib/abs.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/tests/stdlib/atoi.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/tests/stdlib/atoi.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/tests/stdlib/qsort-bsearch.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/tests/stdlib/qsort-bsearch.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/tests/stdlib/strtol.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/tests/stdlib/strtol.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/tests/string/memchr.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/tests/string/memchr.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/tests/string/memcmp.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/tests/string/memcmp.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/tests/string/memcpy.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/tests/string/memcpy.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/tests/string/memmove.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/tests/string/memmove.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/tests/string/memset.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/tests/string/memset.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/tests/string/strcat.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/tests/string/strcat.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/tests/string/strchr.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/tests/string/strchr.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/tests/string/strcmp.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/tests/string/strcmp.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/tests/string/strcpy.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/tests/string/strcpy.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/tests/string/strlen.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/tests/string/strlen.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/tests/string/strpbrk.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/tests/string/strpbrk.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/tests/string/strspn.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/tests/string/strspn.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klibc/tests/string/strtok.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/tests/string/strtok.cpp" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -89,8 +134,11 @@
   }
 }</component>
   <component name="HighlightingSettingsPerFile">
-    <setting file="file://$PROJECT_DIR$/klibc/include/sys/compiler.h" root0="FORCE_HIGHLIGHTING" />
-    <setting file="file://$PROJECT_DIR$/klibc/tests/ctype.cpp" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/klib/include/internal/bitfield.hpp" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/klib/include/kformat.hpp" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/klib/include/kformat/format_string.hpp" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/klib/include/kformat/formatter.hpp" root0="FORCE_HIGHLIGHTING" />
+    <setting file="file://$PROJECT_DIR$/klib/tests/kformat.cpp" root0="FORCE_HIGHLIGHTING" />
   </component>
   <component name="MacroExpansionManager">
     <option name="directoryName" value="l7yPbNbK" />
@@ -147,20 +195,37 @@
 }</component>
   <component name="RecentsManager">
     <key name="MoveFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/klib/include/internal" />
+      <recent name="$PROJECT_DIR$/klib/include" />
+      <recent name="$PROJECT_DIR$/klib/include/sys" />
       <recent name="$PROJECT_DIR$/klibc/docs" />
       <recent name="$PROJECT_DIR$/klibc" />
-      <recent name="$PROJECT_DIR$/klibc/include" />
-      <recent name="$PROJECT_DIR$/klibc/src/stdlib" />
-      <recent name="$PROJECT_DIR$/klibc/tests" />
     </key>
   </component>
   <component name="RunManager" selected="CTest Application.All CTest">
-    <configuration default="true" type="CLionExternalRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true">
+    <configuration name="klib_tests" type="CMakeGoogleTestRunConfigurationType" factoryName="Google Test" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="klib_tests" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="Erebus" RUN_TARGET_NAME="klib_tests" TEST_MODE="SUITE_TEST">
       <method v="2">
-        <option name="CLION.EXTERNAL.BUILD" enabled="true" />
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+        <option name="BeforeTestRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="klib_tests" type="CMakeGoogleTestRunConfigurationType" factoryName="Google Test" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="klib_tests" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="Erebus" RUN_TARGET_NAME="klib_tests" TEST_MODE="SUITE_TEST">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+        <option name="BeforeTestRunTask" enabled="true" />
       </method>
     </configuration>
     <configuration name="docs" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="docs" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="docs" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="docs" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="format" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="format" CONFIG_NAME="Debug">
       <method v="2">
         <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
       </method>
@@ -175,7 +240,57 @@
         <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
       </method>
     </configuration>
-    <configuration name="format_klibc" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="format_klibc" CONFIG_NAME="Debug">
+    <configuration name="format_kernel" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="format_kernel" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="format_klib" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="format_klib" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="format_klib" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="format_klib" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="gmock" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="gmock" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="gmock" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="gmock" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="gmock_main" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="gmock_main" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="gmock_main" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="gmock_main" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="gtest" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="gtest" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="gtest" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="gtest" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="gtest_main" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="gtest_main" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="gtest_main" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="gtest_main" CONFIG_NAME="Debug">
       <method v="2">
         <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
       </method>
@@ -185,7 +300,22 @@
         <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
       </method>
     </configuration>
-    <configuration name="klibc" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="klibc" CONFIG_NAME="Debug">
+    <configuration name="kernel" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="kernel" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="Erebus" RUN_TARGET_NAME="kernel">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="klib" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="klib" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="klib" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="klib" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="os_iso" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="os_iso" CONFIG_NAME="Debug">
       <method v="2">
         <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
       </method>
@@ -200,7 +330,22 @@
         <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
       </method>
     </configuration>
+    <configuration name="qemu_debug" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="qemu_debug" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
     <configuration name="qemu_run" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="qemu_run" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="qemu_run" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="qemu_run" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="qemu_vars" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="qemu_vars" CONFIG_NAME="Debug">
       <method v="2">
         <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
       </method>
@@ -216,18 +361,29 @@
         <option name="BeforeTestRunTask" enabled="true" />
       </method>
     </configuration>
+    <configuration name="All CTest" type="CTestRunConfiguration" factoryName="CTestRun" PROGRAM_PARAMS="--extra-verbose" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" WORKING_DIR="file://$CMakeCurrentLocalGenerationDir$" PASS_PARENT_ENVS_2="true" CONFIG_NAME="Debug" RUN_PATH="$CTestCurrentExecutableName$" EXPLICIT_BUILD_TARGET_NAME="all" TEST_MODE="SUITE_TEST">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+        <option name="BeforeTestRunTask" enabled="true" />
+      </method>
+    </configuration>
     <list>
       <item itemvalue="CMake Application.format" />
       <item itemvalue="CMake Application.format_kernel" />
-      <item itemvalue="CMake Application.format_klibc" />
+      <item itemvalue="CMake Application.format_klib" />
       <item itemvalue="CMake Application.docs" />
       <item itemvalue="CMake Application.kernel" />
-      <item itemvalue="CMake Application.klibc" />
+      <item itemvalue="CMake Application.klib" />
       <item itemvalue="CMake Application.os_iso" />
       <item itemvalue="CMake Application.qemu_debug" />
       <item itemvalue="CMake Application.qemu_run" />
       <item itemvalue="CMake Application.qemu_vars" />
+      <item itemvalue="CMake Application.gmock" />
+      <item itemvalue="CMake Application.gmock_main" />
+      <item itemvalue="CMake Application.gtest" />
+      <item itemvalue="CMake Application.gtest_main" />
       <item itemvalue="CTest Application.All CTest" />
+      <item itemvalue="Google Test.klib_tests" />
     </list>
   </component>
   <component name="TaskManager">

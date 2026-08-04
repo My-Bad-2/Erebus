@@ -3,7 +3,7 @@
 # Automatically fetches GoogleTest and provides functions for host execution
 # ==============================================================================
 
-option(EREBUS_BUILD_HOST_TESTS "Build host-side unit tests for algorithms and data structures" OFF)
+option(EREBUS_BUILD_HOST_TESTS "Build host-side unit tests for algorithms and data structures" ON)
 
 if (EREBUS_BUILD_HOST_TESTS)
 	enable_testing()

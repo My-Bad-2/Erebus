@@ -18,7 +18,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Include subprojects
 add_subdirectory(third_party)
-add_subdirectory(klibc)
+add_subdirectory(klib)
 add_subdirectory(kernel)
 
 # Packaging ISO

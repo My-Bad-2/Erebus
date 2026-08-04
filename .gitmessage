@@ -9,7 +9,7 @@
 #
 # Valid Subprojects:
 #   [kernel]   - Core microkernel routines (PMM, VMM, Scheduler)
-#   [klibc]    - Freestanding C library implementations
+#   [klib]    - Freestanding C library implementations
 #   [userland] - Userspace applications and services
 #   [build]    - CMake modules, toolchains, ISO generation
 #   [docs]     - Documentation and reference manuals
