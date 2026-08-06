@@ -34,6 +34,7 @@ endif ()
 
 add_subdirectory(limine)
 add_subdirectory(ovmf)
+add_subdirectory(uacpi-wrapper)
 
 if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/freestanding-cxx-hdrs-gnu/README")
 	add_subdirectory(freestanding-cxx-hdrs-gnu-wrapper)

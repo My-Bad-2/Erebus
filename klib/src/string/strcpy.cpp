@@ -2,7 +2,8 @@
 #include "string.h"
 
 namespace klib {
-	char *strncpy(char *__restrict dest, const char *__restrict src, size_t count) noexcept {
+	char *strncpy(char *__restrict dest, const char *__restrict src,
+								size_t count) noexcept {
 		if (count == 0) [[unlikely]] {
 			return dest;
 		}

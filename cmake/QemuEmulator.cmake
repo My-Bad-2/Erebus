@@ -68,7 +68,7 @@ function(add_qemu_targets TARGET_PREFIX)
 	add_custom_target(${VARS_TARGET} DEPENDS "${LOCAL_OVMF_VARS}")
 
 	set(QEMU_BASE_ARGS
-			-M q35
+			-M q35,spcr=on
 			-m ${ARG_MEMORY}
 			-smp ${ARG_SMP}
 

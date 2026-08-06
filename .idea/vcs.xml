@@ -3,5 +3,6 @@
   <component name="VcsDirectoryMappings">
     <mapping directory="" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/third_party/freestanding-cxx-hdrs-gnu" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/third_party/uacpi" vcs="Git" />
   </component>
 </project>

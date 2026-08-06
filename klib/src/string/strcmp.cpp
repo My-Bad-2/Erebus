@@ -29,8 +29,10 @@ namespace klib {
 				continue;
 			}
 
-			const auto v1 = unaligned_load<std::uint64_t>(reinterpret_cast<const void *>(p1));
-			const auto v2 = unaligned_load<std::uint64_t>(reinterpret_cast<const void *>(p2));
+			const auto v1 =
+					unaligned_load<std::uint64_t>(reinterpret_cast<const void *>(p1));
+			const auto v2 =
+					unaligned_load<std::uint64_t>(reinterpret_cast<const void *>(p2));
 
 			const std::uint64_t diff = v1 ^ v2;
 			const std::uint64_t nulls = has_zero_byte<std::uint64_t>(v1);
@@ -44,8 +46,12 @@ namespace klib {
 			}
 
 			// Either a mismatch, a null terminator, or both.
-			const std::uint32_t diff_shift = diff ? (static_cast<std::uint32_t>(std::countr_zero(diff)) & ~7U) : 64;
-			const std::uint32_t null_shift = nulls ? (static_cast<std::uint32_t>(std::countr_zero(nulls)) & ~7U) : 64;
+			const std::uint32_t diff_shift =
+					diff ? (static_cast<std::uint32_t>(std::countr_zero(diff)) & ~7U)
+							 : 64;
+			const std::uint32_t null_shift =
+					nulls ? (static_cast<std::uint32_t>(std::countr_zero(nulls)) & ~7U)
+								: 64;
 
 			if (null_shift < diff_shift) {
 				return 0;

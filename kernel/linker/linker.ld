@@ -34,10 +34,7 @@ SECTIONS
 
     .text : ALIGN(CONSTANT(MAXPAGESIZE)) {
         __text_start = .;
-        fred_entry_page = .;
-        KEEP(*(.text.fred_entry))
-        KEEP(*(.text.idt_entry))
-
+        
         *(.text .text.*)
         *(.init .init.*)
         *(.fini .fini.*)

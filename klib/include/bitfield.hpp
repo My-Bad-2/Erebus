@@ -7,8 +7,10 @@
 #include "kformat/formatter.hpp"
 
 namespace klib {
-	enum class Access { RW, RO, WO };
-	template<internal::kstring Name, std::size_t Offset, std::size_t Width = 1, Access acc = Access::RW>
+	enum class Access : std::uint8_t { RW, RO, WO };
+
+	template<internal::kstring Name, std::size_t Offset, std::size_t Width = 1,
+					 Access acc = Access::RW>
 	struct Field {
 		static constexpr internal::kstring name = Name;
 		static constexpr std::size_t offset = Offset;
@@ -31,10 +33,14 @@ namespace klib {
 
 	template<std::size_t Offset, std::size_t Width = 1>
 	struct Reserved {
+		static constexpr auto name = internal::kstring<1>{""};
+
 		static constexpr std::size_t offset = Offset;
 		static constexpr std::size_t width = Width;
 		static constexpr std::size_t max_bit = Offset + Width - 1;
 		static constexpr bool is_reserved = true;
+
+		static constexpr auto access = Access::RO;
 	};
 
 	namespace detail {
@@ -92,7 +98,7 @@ namespace klib {
 		}
 
 		template<std::size_t MaxBit>
-		using hw_type_t = decltype([]<std::size_t M = MaxBit>() {
+		using hw_type_t = decltype([]<std::size_t M = MaxBit> {
 			if constexpr (M < 8) {
 				return std::uint8_t{};
 			} else if constexpr (M < 16) {
@@ -105,12 +111,36 @@ namespace klib {
 		}());
 	} // namespace detail
 
+	template<std::size_t Offset, typename T, Access Acc = Access::RW>
+	struct Register {
+		static constexpr std::size_t offset = Offset;
+		static constexpr Access access = Acc;
+		using ValueType = T;
+		using HwType = detail::hw_type_t<(sizeof(T) * 8) - 1>;
+	};
+
+	template<std::size_t BaseOffset, std::size_t Stride, typename T,
+					 Access Acc = Access::RW>
+	struct RegisterArray {
+		static constexpr std::size_t base_offset = BaseOffset;
+		static constexpr std::size_t stride = Stride;
+		static constexpr Access access = Acc;
+		using ValueType = T;
+		using HwType = detail::hw_type_t<(sizeof(T) * 8) - 1>;
+
+		static constexpr std::size_t offset_for(const std::size_t index) noexcept {
+			return base_offset + (index * stride);
+		}
+	};
+
 	template<typename... Fields>
 	struct BitfieldSchema {
-		static_assert(detail::validate_no_overlap<Fields...>(), "BitfieldSchema contains overlapping bits!");
+		static_assert(detail::validate_no_overlap<Fields...>(),
+									"BitfieldSchema contains overlapping bits!");
 
 		static constexpr std::size_t MAX_BIT = detail::get_max_bit<Fields...>();
-		static_assert(MAX_BIT < 64, "Bitfields exceeding 64 bits are not supported.");
+		static_assert(MAX_BIT < 64,
+									"Bitfields exceeding 64 bits are not supported.");
 
 		using Type = detail::hw_type_t<MAX_BIT>;
 		Type data;
@@ -121,7 +151,9 @@ namespace klib {
 
 			auto apply_mask = [&]<internal::kstring N>() {
 				using F = decltype(detail::find_field<N, Fields...>());
-				constexpr Type m = (F::width == sizeof(Type) * 8) ? ~Type{0} : (Type{1} << F::width) - 1;
+				constexpr Type m = (F::width == sizeof(Type) * 8)
+															 ? ~Type{0}
+															 : (Type{1} << F::width) - 1;
 				combined_mask |= m << F::offset;
 			};
 
@@ -135,9 +167,11 @@ namespace klib {
 		[[nodiscard]] constexpr Ret get() const noexcept {
 			using F = decltype(detail::find_field<Name, Fields...>());
 
-			static_assert(F::access != Access::WO, "Attempted to read a Write-Only bitfield!");
+			static_assert(F::access != Access::WO,
+										"Attempted to read a Write-Only bitfield!");
 
-			constexpr Type mask = (F::width == sizeof(Type) * 8) ? ~Type{0} : (Type{1} << F::width) - 1;
+			constexpr Type mask =
+					(F::width == sizeof(Type) * 8) ? ~Type{0} : (Type{1} << F::width) - 1;
 			return static_cast<Ret>((data >> F::offset) & mask);
 		}
 
@@ -145,14 +179,17 @@ namespace klib {
 		[[nodiscard]] constexpr BitfieldSchema set(V value) const noexcept {
 			using F = decltype(detail::find_field<Name, Fields...>());
 
-			static_assert(F::access != Access::RO, "Attempted to write to a Read-Only bitfield!");
+			static_assert(F::access != Access::RO,
+										"Attempted to write to a Read-Only bitfield!");
 
 			Type raw_val = static_cast<Type>(value);
-			constexpr Type mask = (F::width == sizeof(Type) * 8) ? ~Type{0} : (Type{1} << F::width) - 1;
+			constexpr Type mask =
+					(F::width == sizeof(Type) * 8) ? ~Type{0} : (Type{1} << F::width) - 1;
 			constexpr Type shifted_mask = mask << F::offset;
 
 			BitfieldSchema copy = *this;
-			copy.data = (copy.data & ~shifted_mask) | ((raw_val << F::offset) & shifted_mask);
+			copy.data =
+					(copy.data & ~shifted_mask) | ((raw_val << F::offset) & shifted_mask);
 			return copy;
 		}
 
@@ -167,7 +204,9 @@ namespace klib {
 	template<typename... Fields>
 	struct formatter<BitfieldSchema<Fields...>> {
 		template<typename Sink>
-		static constexpr void format(Sink &sink, const BitfieldSchema<Fields...> &bf, const FormatSpec &) noexcept {
+		static constexpr void format(Sink &sink,
+																 const BitfieldSchema<Fields...> &bf,
+																 const FormatSpec &) noexcept {
 			sink.push('[');
 			bool first = true;
 

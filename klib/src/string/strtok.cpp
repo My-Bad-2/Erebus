@@ -3,7 +3,8 @@
 #include "string.h"
 
 namespace klib {
-	char *strtok_r(char *__restrict str, const char *__restrict delim, char **__restrict saveptr) noexcept {
+	char *strtok_r(char *__restrict str, const char *__restrict delim,
+								 char **__restrict saveptr) noexcept {
 		if (str == nullptr) {
 			str = *saveptr;
 		}

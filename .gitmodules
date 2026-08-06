@@ -1,3 +1,6 @@
 [submodule "third_party/freestanding-cxx-hdrs-gnu"]
 	path = third_party/freestanding-cxx-hdrs-gnu
 	url = https://github.com/osdev0/freestanding-cxx-hdrs-gnu.git
+[submodule "third_party/uacpi"]
+	path = third_party/uacpi
+	url = https://github.com/uACPI/uACPI.git

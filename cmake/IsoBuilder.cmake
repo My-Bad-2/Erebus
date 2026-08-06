@@ -62,6 +62,7 @@ function(add_uefi_iso TARGET_NAME)
 		list(APPEND BUILD_COMMANDS
 				COMMAND ${CMAKE_COMMAND} -E make_directory "${DEST_DIR}"
 				COMMAND ${CMAKE_COMMAND} -E copy "${SRC}" "${ISO_ROOT}/${DEST}"
+				COMMAND ${CMAKE_COMMAND} -E rm -f ${FINAL_ISO}
 		)
 
 		list(APPEND DEPENDENCIES "${SRC}")

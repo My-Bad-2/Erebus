@@ -11,7 +11,8 @@ namespace klib {
 		const std::uint32_t offset = base & 7UL;
 		std::uintptr_t current = base - offset;
 
-		const auto w = unaligned_load<std::uint64_t>(reinterpret_cast<const void *>(current));
+		const auto w =
+				unaligned_load<std::uint64_t>(reinterpret_cast<const void *>(current));
 
 		const auto m_c = has_zero_byte<std::uint64_t>(w ^ v8) >> (offset * 8);
 		const auto m_0 = has_zero_byte<std::uint64_t>(w) >> (offset * 8);
@@ -35,7 +36,8 @@ namespace klib {
 		};
 
 		auto check_chunk = [v8](const std::uintptr_t curr) -> ChunkResult {
-			const auto w_chunk = unaligned_load<std::uint64_t>(reinterpret_cast<const void *>(curr));
+			const auto w_chunk =
+					unaligned_load<std::uint64_t>(reinterpret_cast<const void *>(curr));
 			const auto mc = has_zero_byte<std::uint64_t>(w_chunk ^ v8);
 			const auto m0 = has_zero_byte<std::uint64_t>(w_chunk);
 
@@ -44,7 +46,8 @@ namespace klib {
 				const int tz_0 = std::countr_zero(m0);
 
 				if (tz_c <= tz_0) {
-					return {.stop = true, .ptr = reinterpret_cast<char *>(curr) + (tz_c / 8)};
+					return {.stop = true,
+									.ptr = reinterpret_cast<char *>(curr) + (tz_c / 8)};
 				}
 
 				return {.stop = true, .ptr = nullptr};
@@ -82,7 +85,8 @@ namespace klib {
 			return const_cast<char *>(str + len);
 		}
 
-		while (len > 0 && (reinterpret_cast<std::uintptr_t>(str + len) & 7UL) != 0) {
+		while (len > 0 &&
+					 (reinterpret_cast<std::uintptr_t>(str + len) & 7UL) != 0) {
 			--len;
 
 			if (str[len] == static_cast<char>(ch)) {
@@ -96,7 +100,8 @@ namespace klib {
 
 		while (curr >= base + 8) {
 			curr -= 8;
-			const auto w = unaligned_load<std::uint64_t>(reinterpret_cast<const void *>(curr));
+			const auto w =
+					unaligned_load<std::uint64_t>(reinterpret_cast<const void *>(curr));
 
 			if (const auto m = has_zero_byte<std::uint64_t>(w ^ v8); m != 0) {
 				const std::uint32_t lz = std::countl_zero(m);

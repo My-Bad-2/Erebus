@@ -10,7 +10,8 @@ namespace klib {
 		return dest;
 	}
 
-	char *strncat(char *__restrict dest, const char *__restrict src, size_t count) noexcept {
+	char *strncat(char *__restrict dest, const char *__restrict src,
+								size_t count) noexcept {
 		if (count == 0) [[unlikely]] {
 			return dest;
 		}
