@@ -1,5 +1,4 @@
-#ifndef EREBUS_klib_INCLUDE_KFORMAT_UTILS_HPP
-#define EREBUS_klib_INCLUDE_KFORMAT_UTILS_HPP
+#pragma once
 
 #include <bit>
 #include <cstdint>
@@ -79,5 +78,3 @@ namespace klib::detail {
 		return (bits + shift - 1) / shift;
 	}
 } // namespace klib::detail
-
-#endif // EREBUS_klib_INCLUDE_KFORMAT_UTILS_HPP

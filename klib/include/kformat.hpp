@@ -1,5 +1,4 @@
-#ifndef EREBUS_klib_INCLUDE_KFORMAT_HPP
-#define EREBUS_klib_INCLUDE_KFORMAT_HPP
+#pragma once
 
 #include <cstddef>
 #include <cstdint>
@@ -178,5 +177,3 @@ namespace klib {
 		return buf.finish();
 	}
 } // namespace klib
-
-#endif // EREBUS_klib_INCLUDE_KFORMAT_HPP

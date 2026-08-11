@@ -1,5 +1,4 @@
-#ifndef EREBUS_klib_INCLUDE_CTYPE_H
-#define EREBUS_klib_INCLUDE_CTYPE_H
+#pragma once
 
 #include <stdint.h>
 #include "internal/compiler.h"
@@ -78,5 +77,3 @@ namespace klib {
 #endif
 } // namespace klib
 #endif
-
-#endif // EREBUS_klib_INCLUDE_CTYPE_H

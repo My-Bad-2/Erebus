@@ -1,5 +1,4 @@
-#ifndef EREBUS_klib_INCLUDE_KFORMAT_FORMAT_BUFFER_HPP
-#define EREBUS_klib_INCLUDE_KFORMAT_FORMAT_BUFFER_HPP
+#pragma once
 
 #include <cstddef>
 #include <string_view>
@@ -67,5 +66,3 @@ namespace klib {
 		}
 	};
 } // namespace klib
-
-#endif // EREBUS_klib_INCLUDE_KFORMAT_FORMAT_BUFFER_HPP

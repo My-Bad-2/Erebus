@@ -1,5 +1,4 @@
-#ifndef EREBUS_klib_SRC_INCLUDE_SYS_COMPILER_HPP
-#define EREBUS_klib_SRC_INCLUDE_SYS_COMPILER_HPP
+#pragma once
 
 #ifndef __cplusplus
 #define noexcept
@@ -10,5 +9,3 @@
 #else
 #define constexpr_func constexpr
 #endif
-
-#endif // EREBUS_klib_SRC_INCLUDE_SYS_COMPILER_HPP

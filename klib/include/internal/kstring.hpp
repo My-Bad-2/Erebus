@@ -1,5 +1,4 @@
-#ifndef EREBUS_KLIB_INCLUDE_KSTRING_HPP
-#define EREBUS_KLIB_INCLUDE_KSTRING_HPP
+#pragma once
 
 #include <cstdint>
 #include <string_view>
@@ -26,5 +25,3 @@ namespace klib::internal {
 	template<std::size_t N>
 	kstring(const char (&)[N]) -> kstring<N>;
 } // namespace klib::internal
-
-#endif // EREBUS_KLIB_INCLUDE_KSTRING_HPP

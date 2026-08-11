@@ -4,10 +4,10 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="BackendCodeEditorMiscSettings">
-    <option name="/Default/Environment/Hierarchy/GeneratedFilesCacheKey/Timestamp/@EntryValue" value="4" type="long" />
+    <option name="/Default/Environment/Hierarchy/GeneratedFilesCacheKey/Timestamp/@EntryValue" value="14" type="long" />
     <option name="/Default/Housekeeping/FeatureSuggestion/FeatureSuggestionManager/DisabledSuggesters/=SwitchToGoToActionSuggester/@EntryIndexedValue" value="true" type="bool" />
     <option name="/Default/Housekeeping/LiveTemplatesHousekeeping/HotspotSessionHintIsShown/@EntryValue" value="true" type="bool" />
-    <option name="/Default/Housekeeping/OptionsDialog/SelectedPageId/@EntryValue" value="CppGeneralOptions" type="string" />
+    <option name="/Default/Housekeeping/OptionsDialog/SelectedPageId/@EntryValue" value="RiderCppLiveTemplatesSettings" type="string" />
   </component>
   <component name="CMakePresetLoader">{
   &quot;useNewFormat&quot;: true
@@ -26,7 +26,6 @@
       <config projectName="Erebus" targetName="klib_tests" />
       <config projectName="Erebus" targetName="format_kernel" />
       <config projectName="Erebus" targetName="format_klib" />
-      <config projectName="Erebus" targetName="docs" />
       <config projectName="Erebus" targetName="gtest" />
       <config projectName="Erebus" targetName="klib" />
       <config projectName="Erebus" targetName="kernel" />
@@ -45,22 +44,45 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="88f3297f-a857-4315-a795-de78c49ea4e5" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/third_party/uacpi" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/codeStyles/codeStyleConfig.xml" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/.idea/dictionaries/project.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.clang-format" beforeDir="false" afterPath="$PROJECT_DIR$/.clang-format" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.gitmodules" beforeDir="false" afterPath="$PROJECT_DIR$/.gitmodules" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/vcs.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/editor.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/editor.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cmake/IsoBuilder.cmake" beforeDir="false" afterPath="$PROJECT_DIR$/cmake/IsoBuilder.cmake" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cmake/QemuEmulator.cmake" beforeDir="false" afterPath="$PROJECT_DIR$/cmake/QemuEmulator.cmake" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/CMakeLists.txt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/linker/linker.ld" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/linker/linker.ld" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/src/test.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/main.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cmake/CompilerFlags.cmake" beforeDir="false" afterPath="$PROJECT_DIR$/cmake/CompilerFlags.cmake" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/boot/boot.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/boot/boot.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/boot/limine.h" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/boot/limine.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/drivers/acpi.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/drivers/acpi.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/drivers/acpi/parser.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/drivers/acpi/parser.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/drivers/acpi/table.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/drivers/acpi/table.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/drivers/uart.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/drivers/uart.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/hal/io.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/hal/io.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/utils/logger.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/utils/logger.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/boot/limine.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/boot/limine.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/drivers/acpi.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/drivers/acpi.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/drivers/uart.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/drivers/uart.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/glue/uacpi.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/glue/uacpi.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/main.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/main.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/utils/logger.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/utils/logger.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/klib/include/bitfield.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/bitfield.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klib/include/ctype.h" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/ctype.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klib/include/fixed_point.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/fixed_point.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klib/include/internal/compiler.h" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/internal/compiler.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klib/include/internal/kstring.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/internal/kstring.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klib/include/kformat.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/kformat.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klib/include/kformat/format_buffer.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/kformat/format_buffer.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klib/include/kformat/format_string.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/kformat/format_string.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klib/include/kformat/formatter.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/kformat/formatter.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klib/include/kformat/utils.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/kformat/utils.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klib/include/stdlib.h" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/stdlib.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klib/include/string.h" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/string.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/klib/src/stdlib/abs.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/stdlib/abs.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klib/src/stdlib/atoi.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/stdlib/atoi.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/klib/src/stdlib/bsearch.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/stdlib/bsearch.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/klib/src/stdlib/qsort.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/stdlib/qsort.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/klib/src/stdlib/strtol.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/stdlib/strtol.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/klib/src/string/memchr.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/string/memchr.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klib/src/string/memcmp.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/string/memcmp.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/klib/src/string/memcpy.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/string/memcpy.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/klib/src/string/memmove.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/string/memmove.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/klib/src/string/memset.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/string/memset.cpp" afterDir="false" />
@@ -72,7 +94,7 @@
       <change beforePath="$PROJECT_DIR$/klib/src/string/strpbrk.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/string/strpbrk.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/klib/src/string/strspn.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/string/strspn.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/klib/src/string/strtok.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/string/strtok.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/third_party/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/third_party/CMakeLists.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klib/src/test.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/test.cpp" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -178,7 +200,7 @@
     "codeWithMe.voiceChat.enabledByDefault": "false",
     "ctest.advertisement.all.test.configuration.is.created": "true",
     "git-widget-placeholder": "main",
-    "last_opened_file_path": "/home/ice/CLionProjects/Erebus",
+    "last_opened_file_path": "/bin/clang-format",
     "node.js.detected.package.jshint": "true",
     "node.js.selected.package.jshint": "",
     "nodejs_package_manager_path": "npm",
@@ -209,7 +231,7 @@
         <option name="BeforeTestRunTask" enabled="true" />
       </method>
     </configuration>
-    <configuration name="docs" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="docs" CONFIG_NAME="Debug">
+    <configuration default="true" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true">
       <method v="2">
         <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
       </method>
@@ -367,21 +389,21 @@
       </method>
     </configuration>
     <list>
+      <item itemvalue="CMake Application.docs" />
       <item itemvalue="CMake Application.format" />
       <item itemvalue="CMake Application.format_kernel" />
       <item itemvalue="CMake Application.format_klib" />
-      <item itemvalue="CMake Application.docs" />
-      <item itemvalue="CMake Application.kernel" />
-      <item itemvalue="CMake Application.klib" />
-      <item itemvalue="CMake Application.uacpi" />
-      <item itemvalue="CMake Application.os_iso" />
-      <item itemvalue="CMake Application.qemu_debug" />
-      <item itemvalue="CMake Application.qemu_run" />
-      <item itemvalue="CMake Application.qemu_vars" />
       <item itemvalue="CMake Application.gmock" />
       <item itemvalue="CMake Application.gmock_main" />
       <item itemvalue="CMake Application.gtest" />
       <item itemvalue="CMake Application.gtest_main" />
+      <item itemvalue="CMake Application.kernel" />
+      <item itemvalue="CMake Application.klib" />
+      <item itemvalue="CMake Application.os_iso" />
+      <item itemvalue="CMake Application.qemu_debug" />
+      <item itemvalue="CMake Application.qemu_run" />
+      <item itemvalue="CMake Application.qemu_vars" />
+      <item itemvalue="CMake Application.uacpi" />
       <item itemvalue="CTest Application.All CTest" />
       <item itemvalue="Google Test.klib_tests" />
     </list>
@@ -393,10 +415,10 @@
         &quot;##RUN_CONFIGURATION##&quot;: &quot;CTest Application.All CTest&quot;,
         &quot;cmake&quot;: &quot;CMakeBuildProfile:Debug&quot;
       },
-      &quot;second&quot;: &quot;8d02e817-e1f0-4d0e-bf4e-9415ad934b69&quot;
+      &quot;second&quot;: &quot;75103339-491b-435f-a7e2-6bd894a029ef&quot;
     }
   ],
-  &quot;modificationCount&quot;: 4
+  &quot;modificationCount&quot;: 10
 }</component>
   <component name="TaskManager">
     <task active="true" id="Default" summary="Default task">

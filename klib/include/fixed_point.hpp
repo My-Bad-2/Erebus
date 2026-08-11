@@ -1,5 +1,4 @@
-#ifndef EREBUS_KLIB_INCLUDE_FIXED_POINT_HPP
-#define EREBUS_KLIB_INCLUDE_FIXED_POINT_HPP
+#pragma once
 
 #include <algorithm>
 #include <cstdint>
@@ -147,5 +146,3 @@ namespace klib {
 		}
 	};
 } // namespace klib
-
-#endif // EREBUS_KLIB_INCLUDE_FIXED_POINT_HPP

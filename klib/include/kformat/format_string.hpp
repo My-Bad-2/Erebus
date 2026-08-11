@@ -1,5 +1,4 @@
-#ifndef EREBUS_klib_INCLUDE_KFORMAT_FORMAT_STRING_HPP
-#define EREBUS_klib_INCLUDE_KFORMAT_FORMAT_STRING_HPP
+#pragma once
 
 namespace klib {
 	namespace detail {
@@ -82,5 +81,3 @@ namespace klib {
 	template<typename... Args>
 	using format_string = basic_format_string<std::type_identity_t<Args>...>;
 } // namespace klib
-
-#endif // EREBUS_klib_INCLUDE_KFORMAT_FORMAT_STRING_HPP

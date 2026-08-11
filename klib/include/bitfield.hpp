@@ -1,5 +1,4 @@
-#ifndef EREBUS_KLIB_INCLUDE_BITFIELD_HPP
-#define EREBUS_KLIB_INCLUDE_BITFIELD_HPP
+#pragma once
 
 #include <algorithm>
 
@@ -244,5 +243,3 @@ namespace klib {
 		}
 	};
 } // namespace klib
-
-#endif // EREBUS_KLIB_INCLUDE_BITFIELD_HPP
