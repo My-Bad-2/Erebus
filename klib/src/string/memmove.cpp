@@ -33,8 +33,7 @@ void *memmove(void *dest, const void *src, size_t count) noexcept {
       if (count <= 32) {
         transfer<std::uint64_t>(d_base, s_base, 0, 8, count - 16, count - 8);
       } else {
-        transfer<std::uint64_t>(d_base, s_base, 0, 8, 16, 24, count - 32,
-                                count - 24, count - 16, count - 8);
+        transfer<std::uint64_t>(d_base, s_base, 0, 8, 16, 24, count - 32, count - 24, count - 16, count - 8);
       }
 
       return dest;
@@ -66,8 +65,7 @@ void *memmove(void *dest, const void *src, size_t count) noexcept {
     }
 
     // 33-64 bytes
-    transfer<std::uint64_t>(d_base, s_base, count - 8, count - 16, count - 24,
-                            count - 32, 24, 16, 8, 0);
+    transfer<std::uint64_t>(d_base, s_base, count - 8, count - 16, count - 24, count - 32, 24, 16, 8, 0);
     return dest;
   }
 
@@ -76,8 +74,8 @@ void *memmove(void *dest, const void *src, size_t count) noexcept {
 
   while (rem >= 64) { // NOLINT(*-id-dependent-backward-branch)
     rem -= 64;
-    transfer<std::uint64_t>(d_base, s_base, rem + 56, rem + 48, rem + 40,
-                            rem + 32, rem + 24, rem + 16, rem + 8, rem + 0);
+    transfer<std::uint64_t>(d_base, s_base, rem + 56, rem + 48, rem + 40, rem + 32, rem + 24, rem + 16, rem + 8,
+                            rem + 0);
   }
 
   // Process remaining tail
@@ -95,8 +93,7 @@ void *memmove(void *dest, const void *src, size_t count) noexcept {
     } else if (rem <= 32) {
       transfer<std::uint64_t>(d_base, s_base, rem - 8, rem - 16, 8, 0);
     } else {
-      transfer<std::uint64_t>(d_base, s_base, rem - 8, rem - 16, rem - 24,
-                              rem - 32, 24, 16, 8, 0);
+      transfer<std::uint64_t>(d_base, s_base, rem - 8, rem - 16, rem - 24, rem - 32, 24, 16, 8, 0);
     }
   }
 

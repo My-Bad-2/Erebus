@@ -5,15 +5,13 @@
 #include "utils/logger.hpp"
 
 uacpi_status uacpi_kernel_get_rsdp(uacpi_phys_addr *out_rsdp_address) {
-  *out_rsdp_address = reinterpret_cast<std::uintptr_t>(
-                          kernel::boot::rsdp_request.response->address) -
+  *out_rsdp_address = reinterpret_cast<std::uintptr_t>(kernel::boot::rsdp_request.response->address) -
                       kernel::boot::hhdm_request.response->offset;
   return UACPI_STATUS_OK;
 }
 
 void *uacpi_kernel_map(uacpi_phys_addr addr, uacpi_size) {
-  return reinterpret_cast<void *>(addr +
-                                  kernel::boot::hhdm_request.response->offset);
+  return reinterpret_cast<void *>(addr + kernel::boot::hhdm_request.response->offset);
 }
 
 void uacpi_kernel_unmap(void *, uacpi_size) {}

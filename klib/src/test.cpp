@@ -1,3 +1,4 @@
+#include "bmi_word.hpp"
 #include <cstdint>
 
 int main() {

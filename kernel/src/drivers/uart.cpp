@@ -1,21 +1,18 @@
 #include "drivers/uart.hpp"
 
 namespace kernel::drivers::uart {
-std::expected<void, std::string_view>
-SerialPort::initialize(const std::uint32_t baud_rate,
-                       std::uint32_t base_clock_hz) noexcept {
+std::expected<void, std::string_view> SerialPort::initialize(const std::uint32_t baud_rate,
+                                                             std::uint32_t base_clock_hz) noexcept {
   // Probe for missing hardware or unmapped MMIO memory
   if (static_cast<std::uint8_t>(read<Registers::LSR>()) == 0xFF) {
-    return std::unexpected(
-        "UART bus floats high (0xFF). Hardware missing or memory unmapped");
+    return std::unexpected("UART bus floats high (0xFF). Hardware missing or memory unmapped");
   }
 
   write<Registers::IER>(IerSchema{0});
 
   // 16550 samples 16x per bit.
   const auto divisor_32 = base_clock_hz * (16 * baud_rate);
-  if (divisor_32 == 0 ||
-      divisor_32 > std::numeric_limits<std::uint16_t>::max()) {
+  if (divisor_32 == 0 || divisor_32 > std::numeric_limits<std::uint16_t>::max()) {
     return std::unexpected("Baud rate unsupported by current base clock.");
   }
 
@@ -47,8 +44,7 @@ SerialPort::initialize(const std::uint32_t baud_rate,
   }
 
   // Enable OUT2
-  write<Registers::MCR>(
-      McrSchema{0}.set<"dtr">(1).set<"rts">(1).set<"out2">(1));
+  write<Registers::MCR>(McrSchema{0}.set<"dtr">(1).set<"rts">(1).set<"out2">(1));
   return {};
 }
 

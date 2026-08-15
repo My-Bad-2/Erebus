@@ -6,8 +6,7 @@
 
 namespace klib {
 namespace {
-[[gnu::always_inline]] void memswap(void *__restrict a, void *__restrict b,
-                                    std::size_t size) noexcept {
+[[gnu::always_inline]] void memswap(void *__restrict a, void *__restrict b, std::size_t size) noexcept {
   using namespace string;
 
   if (size == 8) [[likely]] {
@@ -48,8 +47,7 @@ namespace {
 
 using cmp_func_t = int (*)(const void *, const void *);
 
-void heap_sort(char *base, std::size_t num, std::size_t size,
-               cmp_func_t compar) noexcept {
+void heap_sort(char *base, std::size_t num, std::size_t size, cmp_func_t compar) noexcept {
   if (num < 2) {
     return;
   }
@@ -59,8 +57,7 @@ void heap_sort(char *base, std::size_t num, std::size_t size,
       std::size_t child = root * 2 + 1;
 
       // Pick the larger child
-      if (child + 1 <= end &&
-          compar(base + child * size, base + (child + 1) * size) < 0) {
+      if (child + 1 <= end && compar(base + child * size, base + (child + 1) * size) < 0) {
         child++;
       }
 
@@ -86,8 +83,7 @@ void heap_sort(char *base, std::size_t num, std::size_t size,
   }
 }
 
-void introsort(char *base, std::size_t num, std::size_t size, cmp_func_t compar,
-               std::size_t depth_limit) noexcept {
+void introsort(char *base, std::size_t num, std::size_t size, cmp_func_t compar, std::size_t depth_limit) noexcept {
   while (num > 16) {
     if (depth_limit == 0) [[unlikely]] {
       heap_sort(base, num, size, compar);
@@ -140,16 +136,14 @@ void introsort(char *base, std::size_t num, std::size_t size, cmp_func_t compar,
       base = base + (pivot_idx + 1) * size;
       num = num - (pivot_idx + 1);
     } else {
-      introsort(base + (pivot_idx + 1) * size, num - (pivot_idx + 1), size,
-                compar, depth_limit);
+      introsort(base + (pivot_idx + 1) * size, num - (pivot_idx + 1), size, compar, depth_limit);
       num = pivot_idx;
     }
   }
 }
 } // namespace
 
-void qsort(void *__restrict ptr, std::size_t count, std::size_t size,
-           cmp_func_t compar) noexcept {
+void qsort(void *__restrict ptr, std::size_t count, std::size_t size, cmp_func_t compar) noexcept {
   if (count < 2 || size == 0) {
     return;
   }
@@ -162,8 +156,7 @@ void qsort(void *__restrict ptr, std::size_t count, std::size_t size,
   introsort(base, depth_limit, size, compar, depth_limit);
 
   for (std::size_t i = 1; i < count; ++i) {
-    for (std::size_t j = i;
-         j > 0 && compar(base + j * size, base + (j - 1) * size) < 0; --j) {
+    for (std::size_t j = i; j > 0 && compar(base + j * size, base + (j - 1) * size) < 0; --j) {
       memswap(base + j * size, base + (j - 1) * size, size);
     }
   }

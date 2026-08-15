@@ -9,8 +9,7 @@ namespace {
 using cmp_func_t = int (*)(const void *, const void *);
 }
 
-void *bsearch(const void *key, const void *ptr, std::size_t count,
-              std::size_t size, cmp_func_t compar) noexcept {
+void *bsearch(const void *key, const void *ptr, std::size_t count, std::size_t size, cmp_func_t compar) noexcept {
   if (count == 0 || size == 0) [[unlikely]] {
     return nullptr;
   }

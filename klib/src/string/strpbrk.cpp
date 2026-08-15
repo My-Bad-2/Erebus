@@ -38,8 +38,7 @@ char *strstr(const char *haystack, const char *needle) noexcept {
 
   while (current < end_search) {
     // Jump directly to the next possible match
-    current = static_cast<const char *>(
-        memchr(current, first_char, end_search - current));
+    current = static_cast<const char *>(memchr(current, first_char, end_search - current));
 
     if (!current) {
       // First character no longer exists in search bounds
@@ -52,8 +51,7 @@ char *strstr(const char *haystack, const char *needle) noexcept {
     if (current[needle_len - 1] == last_char) {
       // If the needle is 1 or 2 chars, the first & last checks already proved
       // it! Otherwise, blast the remaining middle bytes with memcmp.
-      if (needle_len <= 2 ||
-          memcmp(current + 1, needle + 1, needle_len - 2) == 0) {
+      if (needle_len <= 2 || memcmp(current + 1, needle + 1, needle_len - 2) == 0) {
         return const_cast<char *>(current);
       }
     }

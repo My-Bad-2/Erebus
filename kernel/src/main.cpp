@@ -4,6 +4,7 @@
 #include <kformat.hpp>
 #include <stddef.h>
 
+#include "hal/cpu_info.hpp"
 #include "memory/address.hpp"
 #include "utils/maths.hpp"
 
@@ -12,10 +13,13 @@ extern "C" void _start() noexcept {
   drivers::uart::SerialPort &sink = utils::logger::get_debug_console();
   sink.append("\x1b[2J"); // Clear screen on host (can be safely removed)
 
+  auto cpu_info = hw::profile_manager.register_cpu();
+
   drivers::acpi::early_initialize();
 
   memory::PhysicalAddress addr{0x1020};
 
+  utils::logger::info("{} by {}\n", cpu_info->brand_string(), cpu_info->vendor_string());
   utils::logger::info("{}\n", addr);
 
   utils::logger::info("Hello, World!\n");

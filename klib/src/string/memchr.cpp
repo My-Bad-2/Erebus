@@ -5,15 +5,12 @@ namespace klib {
 namespace {
 template <typename T, typename... Offsets>
 [[gnu::always_inline]]
-void *find_match(std::uintptr_t base, std::uint64_t broadcast,
-                 Offsets... offsets) noexcept {
+void *find_match(std::uintptr_t base, std::uint64_t broadcast, Offsets... offsets) noexcept {
   void *match = nullptr;
 
   // Expands to: ((match = check(off1)) != nullptr) || ((match =
   // check(off2)) != nullptr) ...
-  (void)(((match = string::check_chunk_offset<T>(
-               base, static_cast<std::size_t>(offsets), broadcast)) !=
-          nullptr) ||
+  (void)(((match = string::check_chunk_offset<T>(base, static_cast<std::size_t>(offsets), broadcast)) != nullptr) ||
          ...);
 
   return match;
@@ -53,8 +50,7 @@ void *memchr(const void *ptr, const int ch, size_t count) noexcept {
 
   std::size_t offset = 0;
   while (count - offset >= 32) {
-    if (void *res = find_match<std::uint64_t>(p, v8, offset, offset + 8,
-                                              offset + 16, offset + 24)) {
+    if (void *res = find_match<std::uint64_t>(p, v8, offset, offset + 8, offset + 16, offset + 24)) {
       return res;
     }
 
@@ -63,8 +59,7 @@ void *memchr(const void *ptr, const int ch, size_t count) noexcept {
 
   if (offset < count) {
     const std::size_t tail = count - 32;
-    return find_match<std::uint64_t>(p, v8, tail, tail + 8, tail + 16,
-                                     tail + 24);
+    return find_match<std::uint64_t>(p, v8, tail, tail + 8, tail + 16, tail + 24);
   }
 
   return nullptr;
