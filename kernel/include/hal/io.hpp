@@ -1,4 +1,5 @@
 #pragma once
+
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -57,6 +58,4 @@ public:
     return *reinterpret_cast<volatile T *>(m_base + (offset * m_stride));
   }
 };
-
-[[gnu::always_inline]] inline void cpu_relax() noexcept { asm volatile("pause" : : : "memory"); }
 } // namespace kernel::hw

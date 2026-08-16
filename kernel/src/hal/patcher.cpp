@@ -315,7 +315,6 @@ void apply_all_boot_patches() noexcept {
   for (const auto *key = __start_static_keys; key < __stop_static_keys; ++key) {
     const auto key_def_addr =
         reinterpret_cast<std::uintptr_t>(&key->key_def_offset) + static_cast<std::int64_t>(key->key_def_offset);
-
     const auto *key_def = reinterpret_cast<const StaticKeyDef *>(key_def_addr);
 
     if (!key_def->enabled) {
@@ -327,7 +326,7 @@ void apply_all_boot_patches() noexcept {
     const auto target_addr =
         reinterpret_cast<std::uintptr_t>(&key->target_offset) + static_cast<std::int64_t>(key->target_offset);
 
-    std::int64_t disp64 = static_cast<std::int64_t>(target_addr) - static_cast<std::int64_t>(nop_addr + 5);
+    const std::int64_t disp64 = static_cast<std::int64_t>(target_addr) - static_cast<std::int64_t>(nop_addr + 5);
 
     constexpr std::int64_t MAX_REL32 = std::numeric_limits<std::int32_t>::max();
     constexpr std::int64_t MIN_REL32 = std::numeric_limits<std::int32_t>::min();
@@ -340,7 +339,7 @@ void apply_all_boot_patches() noexcept {
     auto *dest = reinterpret_cast<std::uint8_t *>(target_addr);
     dest[0] = 0xE9; // JMP rel32
 
-    std::int32_t disp = static_cast<std::int32_t>(disp64);
+    const std::int32_t disp = static_cast<std::int32_t>(disp64);
     klib::memcpy(dest + 1, &disp, sizeof(disp));
   }
 }

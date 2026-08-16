@@ -73,6 +73,7 @@ enum class Feature : std::uint32_t {
   // Base Features: Leaf 1
   SSE3 = make_feat(1, 0, Reg::ECX, 0),
   PCLMULQDQ = make_feat(1, 0, Reg::ECX, 1),
+  MONITOR = make_feat(1, 0, Reg::ECX, 3),
   SSSE3 = make_feat(1, 0, Reg::ECX, 9),
   FMA = make_feat(1, 0, Reg::ECX, 12),
   PCID = make_feat(1, 0, Reg::ECX, 17),
@@ -86,6 +87,7 @@ enum class Feature : std::uint32_t {
   AVX = make_feat(1, 0, Reg::ECX, 28),
   F16C = make_feat(1, 0, Reg::ECX, 29),
   RDRAND = make_feat(1, 0, Reg::ECX, 30),
+  HYPERVISOR = make_feat(1, 0, Reg::ECX, 31),
 
   FPU = make_feat(1, 0, Reg::EDX, 0),
   PSE = make_feat(1, 0, Reg::EDX, 3),
@@ -101,6 +103,9 @@ enum class Feature : std::uint32_t {
   SSE = make_feat(1, 0, Reg::EDX, 25),
   SSE2 = make_feat(1, 0, Reg::EDX, 26),
   HTT = make_feat(1, 0, Reg::EDX, 28),
+
+  // MONITOR/MWAIT Features: Leaf 5, Subleaf 0
+  IBE = make_feat(5, 0, Reg::ECX, 1),
 
   // Extended Features: Leaf 7, Subleaf 0
   FSGSBASE = make_feat(7, 0, Reg::EBX, 0),
@@ -120,6 +125,7 @@ enum class Feature : std::uint32_t {
 
   UMIP = make_feat(7, 0, Reg::ECX, 2),
   PKU = make_feat(7, 0, Reg::ECX, 3),
+  WAITPKG = make_feat(7, 0, Reg::ECX, 5),
   CET_SHSTK = make_feat(7, 0, Reg::ECX, 7),
   GNFI = make_feat(7, 0, Reg::ECX, 8),
   VAES = make_feat(7, 0, Reg::ECX, 9),
@@ -138,6 +144,7 @@ enum class Feature : std::uint32_t {
   // AMD/Intel Extended Features: Leaf 0x80000001
   SVM = make_feat(0x80000001, 0, Reg::ECX, 2),
   LZCNT = make_feat(0x80000001, 0, Reg::ECX, 5),
+  MONITORX = make_feat(0x80000001, 0, Reg::ECX, 29),
 
   SYSCALL = make_feat(0x80000001, 0, Reg::EDX, 11),
   NX = make_feat(0x80000001, 0, Reg::EDX, 20),

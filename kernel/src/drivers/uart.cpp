@@ -1,4 +1,5 @@
 #include "drivers/uart.hpp"
+#include "hal/hal.hpp"
 
 namespace kernel::drivers::uart {
 std::expected<void, std::string_view> SerialPort::initialize(const std::uint32_t baud_rate,

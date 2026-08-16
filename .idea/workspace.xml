@@ -41,21 +41,14 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="88f3297f-a857-4315-a795-de78c49ea4e5" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/third_party/zydis" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.gitmodules" beforeDir="false" afterPath="$PROJECT_DIR$/.gitmodules" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/vcs.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cmake/CompilerFlags.cmake" beforeDir="false" afterPath="$PROJECT_DIR$/cmake/CompilerFlags.cmake" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cmake/HostTesting.cmake" beforeDir="false" afterPath="$PROJECT_DIR$/cmake/HostTesting.cmake" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/cmake/QemuEmulator.cmake" beforeDir="false" afterPath="$PROJECT_DIR$/cmake/QemuEmulator.cmake" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/CMakeLists.txt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/kernel/include/hal/cpu_info.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/hal/cpu_info.hpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/linker/linker.ld" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/linker/linker.ld" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/src/glue/cxxabi.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/glue/cxxabi.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/src/hal/cpu_info.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/hal/cpu_info.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/hal/io.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/hal/io.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/hal/patch.h" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/hal/patch.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/drivers/uart.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/drivers/uart.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/hal/patcher.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/hal/patcher.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/kernel/src/main.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/main.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/klib/include/ctype.h" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/ctype.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/third_party/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/third_party/CMakeLists.txt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -334,6 +327,10 @@
       </method>
     </configuration>
     <list>
+      <item itemvalue="CMake Application.gmock" />
+      <item itemvalue="CMake Application.gmock_main" />
+      <item itemvalue="CMake Application.gtest" />
+      <item itemvalue="CMake Application.gtest_main" />
       <item itemvalue="CMake Application.docs" />
       <item itemvalue="CMake Application.format" />
       <item itemvalue="CMake Application.format_kernel" />
@@ -348,6 +345,7 @@
       <item itemvalue="CMake Application.Zydis" />
       <item itemvalue="CMake Application.Zycore" />
       <item itemvalue="CTest Application.All CTest" />
+      <item itemvalue="Google Test.klib_tests" />
     </list>
   </component>
   <component name="SelectedDebugProfileService">{

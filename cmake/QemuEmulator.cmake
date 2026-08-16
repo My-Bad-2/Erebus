@@ -73,7 +73,8 @@ function(add_qemu_targets TARGET_PREFIX)
             -smp ${ARG_SMP}
 
             # 'max' exposes all host CPU features to the guest OS
-            -cpu max
+            -cpu max,migratable=no
+#            -overcommit cpu-pm=on # Enable if you want to let the guest use `mwait/monitor`
 
             # Tries the host hypervisor first, falls back to software rendering (tcg)
             -accel ${HOST_ACCEL}
