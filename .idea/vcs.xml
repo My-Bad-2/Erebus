@@ -4,5 +4,7 @@
     <mapping directory="" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/third_party/freestanding-cxx-hdrs-gnu" vcs="Git" />
     <mapping directory="$PROJECT_DIR$/third_party/uacpi" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/third_party/zydis" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/third_party/zydis/dependencies/zycore" vcs="Git" />
   </component>
 </project>

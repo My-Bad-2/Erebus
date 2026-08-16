@@ -3,7 +3,7 @@
 # Description: CMake interface for LLVM/Clang and Clang Assembler
 # ======================================================================
 
-if (NOT CMAKE_C_COMPILER_ID MATCHES "^(Clang|AppleClang)$")
+if (NOT CMAKE_C_COMPILER_ID MATCHES "^(clang|Clang|AppleClang)$")
     message(FATAL_ERROR "CompilerFlags is designed for LLVM toolchain. Current Compiler: ${CMAKE_C_COMPILER_ID}")
 endif ()
 
@@ -29,7 +29,7 @@ add_library(os_base_flags INTERFACE)
 target_compile_options(os_base_flags INTERFACE "-march=${OS_ARCH_LEVEL}"
         -ffreestanding
         -fno-builtin
-        -nostdlibinc
+        "$<$<COMPILE_LANGUAGE:CXX>:-nostdlibinc>"
 
         --target=x86_64-elf
 

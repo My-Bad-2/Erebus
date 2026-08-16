@@ -327,4 +327,17 @@ const CpuInfo *CpuProfileManager::register_cpu() noexcept {
 
   return &m_profiles[0].info;
 }
+
+const CpuInfo *CpuProfileManager::get_current() const noexcept {
+  const std::uint64_t fingerprint = generate_fingerprint();
+  const std::size_t active = m_active_profiles.load(std::memory_order_relaxed);
+
+  for (std::size_t i = 0; i < active; ++i) {
+    if (m_profiles[i].fingerprint.load(std::memory_order_relaxed) == fingerprint) {
+      return &m_profiles[i].info;
+    }
+  }
+
+  return nullptr;
+}
 } // namespace kernel::hw

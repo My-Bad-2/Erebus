@@ -45,7 +45,7 @@ consteval std::uint32_t make_feat(const std::uint32_t leaf, const std::uint32_t 
   return bit | (static_cast<std::uint32_t>(reg) << 5) | (subleaf << 7) | (base_id << 15) | (is_ext << 23);
 }
 
-consteval std::uint32_t map_leaf_to_index(const std::uint32_t leaf, const std::uint32_t subleaf) {
+constexpr std::uint32_t map_leaf_to_index(const std::uint32_t leaf, const std::uint32_t subleaf) {
   if (leaf == 1 && subleaf == 0) {
     return 0;
   }
@@ -252,6 +252,38 @@ public:
     }
   }
 
+  [[nodiscard]] constexpr bool has(Feature feat) const noexcept {
+    const auto val = static_cast<std::uint32_t>(feat);
+    const std::uint32_t leaf_base = (val >> 15) & 0xFF;
+    const std::uint32_t is_ext = (val >> 23) & 0x1;
+    const std::uint32_t leaf = is_ext ? (leaf_base | 0x80000000) : leaf_base;
+    const std::uint32_t subleaf = (val >> 7) & 0xFF;
+
+    const std::uint32_t bit = val & 0x1F;
+    const std::uint32_t reg = (val >> 5) & 0x3;
+    const std::uint32_t cache_idx = map_leaf_to_index(leaf, subleaf);
+
+    if (cache_idx != 0xFFFFFFFF) [[likely]] {
+      return (m_leaves[cache_idx][reg] & (1u << bit)) != 0;
+    }
+
+    const auto r = query(leaf, subleaf);
+
+    if (reg == static_cast<uint32_t>(Reg::EAX)) {
+      return (r.eax & (1u << bit)) != 0;
+    }
+
+    if (reg == static_cast<uint32_t>(Reg::EBX)) {
+      return (r.ebx & (1u << bit)) != 0;
+    }
+
+    if (reg == static_cast<uint32_t>(Reg::ECX)) {
+      return (r.ecx & (1u << bit)) != 0;
+    }
+
+    return (r.edx & (1u << bit)) != 0;
+  }
+
   void initialize() noexcept;
 };
 
@@ -270,6 +302,7 @@ class CpuProfileManager {
 
 public:
   const CpuInfo *register_cpu() noexcept;
+  [[nodiscard]] const CpuInfo *get_current() const noexcept;
 };
 
 inline CpuProfileManager profile_manager;

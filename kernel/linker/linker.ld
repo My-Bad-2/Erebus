@@ -38,21 +38,11 @@ SECTIONS
         *(.text .text.*)
         *(.init .init.*)
         *(.fini .fini.*)
+
+        . = ALIGN(16);
+        *(.altinstr_replacement)
         __text_end = .;
     } :text
-
-    . = ALIGN(8);
-    .altinstructions : {
-        __alt_instructions_start = .;
-        KEEP(*(.altinstructions))
-        __alt_instructions_end = .;
-    }
-
-    .altinstr_replacement : {
-        __altinstr_replacement_start = .;
-        KEEP(*(.altinstr_replacement))
-        __altinstr_replacement_end = .;
-    }
 
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
@@ -84,6 +74,24 @@ SECTIONS
         KEEP(*(SORT_BY_INIT_PRIORITY(.dtors.*)))
         KEEP(*(.dtors))
         __fini_array_end = .;
+
+        /* Alternative Instructions Metadata Table */
+        . = ALIGN(8);
+        __start_altinstructions = .;
+        *(.altinstructions)
+        __stop_altinstructions = .;
+
+        /* Static Keys Metadata Table */
+        . = ALIGN(8);
+        __start_static_keys = .;
+        *(.static_keys)
+        __stop_static_keys = .;
+
+        /* Exception Fixup Table */
+        . = ALIGN(8);
+        __start_extable = .;
+        *(.extable)
+        __stop_extable = .;
 
         __rodata_end = .;
     } :rodata

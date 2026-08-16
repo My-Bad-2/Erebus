@@ -4,7 +4,7 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="BackendCodeEditorMiscSettings">
-    <option name="/Default/Environment/Hierarchy/GeneratedFilesCacheKey/Timestamp/@EntryValue" value="4" type="long" />
+    <option name="/Default/Environment/Hierarchy/GeneratedFilesCacheKey/Timestamp/@EntryValue" value="5" type="long" />
     <option name="/Default/Housekeeping/FeatureSuggestion/FeatureSuggestionManager/DisabledSuggesters/=SwitchToGoToActionSuggester/@EntryIndexedValue" value="true" type="bool" />
     <option name="/Default/Housekeeping/LiveTemplatesHousekeeping/HotspotSessionHintIsShown/@EntryValue" value="true" type="bool" />
     <option name="/Default/Housekeeping/OptionsDialog/SelectedPageId/@EntryValue" value="RiderCppLiveTemplatesSettings" type="string" />
@@ -22,19 +22,16 @@
     <generated>
       <config projectName="Erebus" targetName="qemu_debug" />
       <config projectName="Erebus" targetName="qemu_vars" />
+      <config projectName="Erebus" targetName="Zydis" />
       <config projectName="Erebus" targetName="uacpi" />
-      <config projectName="Erebus" targetName="klib_tests" />
       <config projectName="Erebus" targetName="format_kernel" />
       <config projectName="Erebus" targetName="format_klib" />
-      <config projectName="Erebus" targetName="gtest" />
       <config projectName="Erebus" targetName="klib" />
       <config projectName="Erebus" targetName="kernel" />
-      <config projectName="Erebus" targetName="gtest_main" />
       <config projectName="Erebus" targetName="os_iso" />
-      <config projectName="Erebus" targetName="gmock" />
+      <config projectName="Erebus" targetName="Zycore" />
       <config projectName="Erebus" targetName="qemu_run" />
       <config projectName="Erebus" targetName="format" />
-      <config projectName="Erebus" targetName="gmock_main" />
     </generated>
   </component>
   <component name="CMakeSettings">
@@ -44,13 +41,21 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="88f3297f-a857-4315-a795-de78c49ea4e5" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.clang-format" beforeDir="false" afterPath="$PROJECT_DIR$/.clang-format" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/third_party/zydis" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.gitmodules" beforeDir="false" afterPath="$PROJECT_DIR$/.gitmodules" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/vcs.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/include/utils/logger.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/utils/logger.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cmake/CompilerFlags.cmake" beforeDir="false" afterPath="$PROJECT_DIR$/cmake/CompilerFlags.cmake" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cmake/HostTesting.cmake" beforeDir="false" afterPath="$PROJECT_DIR$/cmake/HostTesting.cmake" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cmake/QemuEmulator.cmake" beforeDir="false" afterPath="$PROJECT_DIR$/cmake/QemuEmulator.cmake" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/CMakeLists.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/hal/cpu_info.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/hal/cpu_info.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/linker/linker.ld" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/linker/linker.ld" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/glue/cxxabi.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/glue/cxxabi.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/hal/cpu_info.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/hal/cpu_info.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/kernel/src/main.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/main.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/src/memory/memory.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/memory/memory.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/klib/include/bitfield.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/bitfield.hpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/klib/src/test.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/klib/src/test.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/klib/include/ctype.h" beforeDir="false" afterPath="$PROJECT_DIR$/klib/include/ctype.h" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/third_party/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/third_party/CMakeLists.txt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -175,16 +180,25 @@
     </key>
   </component>
   <component name="RunManager" selected="CTest Application.All CTest">
-    <configuration name="klib_tests" type="CMakeGoogleTestRunConfigurationType" factoryName="Google Test" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="klib_tests" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="Erebus" RUN_TARGET_NAME="klib_tests" TEST_MODE="SUITE_TEST">
+    <configuration default="true" type="CLionExternalRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true">
       <method v="2">
-        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
-        <option name="BeforeTestRunTask" enabled="true" />
+        <option name="CLION.EXTERNAL.BUILD" enabled="true" />
       </method>
     </configuration>
     <configuration name="klib_tests" type="CMakeGoogleTestRunConfigurationType" factoryName="Google Test" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="klib_tests" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="Erebus" RUN_TARGET_NAME="klib_tests" TEST_MODE="SUITE_TEST">
       <method v="2">
         <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
         <option name="BeforeTestRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="Zycore" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="Zycore" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration name="Zydis" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="Zydis" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
       </method>
     </configuration>
     <configuration name="docs" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="docs" CONFIG_NAME="Debug">
@@ -227,32 +241,12 @@
         <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
       </method>
     </configuration>
-    <configuration name="gmock" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="gmock" CONFIG_NAME="Debug">
-      <method v="2">
-        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
-      </method>
-    </configuration>
-    <configuration name="gmock_main" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="gmock_main" CONFIG_NAME="Debug">
-      <method v="2">
-        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
-      </method>
-    </configuration>
     <configuration name="gmock_main" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="gmock_main" CONFIG_NAME="Debug">
       <method v="2">
         <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
       </method>
     </configuration>
     <configuration name="gtest" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="gtest" CONFIG_NAME="Debug">
-      <method v="2">
-        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
-      </method>
-    </configuration>
-    <configuration name="gtest" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="gtest" CONFIG_NAME="Debug">
-      <method v="2">
-        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
-      </method>
-    </configuration>
-    <configuration name="gtest_main" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="gtest_main" CONFIG_NAME="Debug">
       <method v="2">
         <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
       </method>
@@ -340,15 +334,10 @@
       </method>
     </configuration>
     <list>
-      <item itemvalue="Google Test.klib_tests" />
       <item itemvalue="CMake Application.docs" />
       <item itemvalue="CMake Application.format" />
       <item itemvalue="CMake Application.format_kernel" />
       <item itemvalue="CMake Application.format_klib" />
-      <item itemvalue="CMake Application.gmock" />
-      <item itemvalue="CMake Application.gmock_main" />
-      <item itemvalue="CMake Application.gtest" />
-      <item itemvalue="CMake Application.gtest_main" />
       <item itemvalue="CMake Application.kernel" />
       <item itemvalue="CMake Application.klib" />
       <item itemvalue="CMake Application.os_iso" />
@@ -356,6 +345,8 @@
       <item itemvalue="CMake Application.qemu_run" />
       <item itemvalue="CMake Application.qemu_vars" />
       <item itemvalue="CMake Application.uacpi" />
+      <item itemvalue="CMake Application.Zydis" />
+      <item itemvalue="CMake Application.Zycore" />
       <item itemvalue="CTest Application.All CTest" />
     </list>
   </component>

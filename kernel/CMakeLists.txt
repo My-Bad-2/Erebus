@@ -48,7 +48,7 @@ endif ()
 
 add_executable(kernel ${KERNEL_SOURCES})
 
-target_link_libraries(kernel PRIVATE os_kernel_flags klib freestanding-cxx-hdrs uacpi)
+target_link_libraries(kernel PRIVATE os_kernel_flags klib freestanding-cxx-hdrs uacpi Zydis)
 target_include_directories(kernel PRIVATE
 		"${CMAKE_CURRENT_SOURCE_DIR}/include"
 		"${CMAKE_CURRENT_BINARY_DIR}/include/generated"
