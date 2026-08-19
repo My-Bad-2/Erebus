@@ -43,12 +43,18 @@
   <component name="ChangeListManager">
     <list default="true" id="88f3297f-a857-4315-a795-de78c49ea4e5" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/include/hal/cpu_info.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/hal/cpu_info.hpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/kernel/include/hal/hal.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/hal/hal.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/hal/patch.h" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/hal/patch.h" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/kernel/include/utils/lock.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/utils/lock.hpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/src/hal/cpu_info.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/hal/cpu_info.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/linker/linker.ld" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/linker/linker.ld" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/hal/hal.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/hal/hal.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/hal/patcher.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/hal/patcher.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/main.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/main.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/kernel/src/utils/locks/clhlock.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/utils/locks/clhlock.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/src/utils/locks/rwlock.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/utils/locks/rwlock.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/utils/logger.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/utils/logger.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/third_party/limine/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/third_party/limine/CMakeLists.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/third_party/zydis" beforeDir="false" afterPath="$PROJECT_DIR$/third_party/zydis" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/third_party/zydis/dependencies/zycore" beforeDir="false" afterPath="$PROJECT_DIR$/third_party/zydis/dependencies/zycore" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -165,11 +171,11 @@
 }</component>
   <component name="RecentsManager">
     <key name="MoveFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/kernel/include/utils/locks" />
       <recent name="$PROJECT_DIR$/kernel/src/utils/locks" />
       <recent name="$PROJECT_DIR$/kernel/src/utils/ticket-spinlock" />
       <recent name="$PROJECT_DIR$/kernel/include/boot" />
       <recent name="$PROJECT_DIR$/klib/include/internal" />
-      <recent name="$PROJECT_DIR$/klib/include" />
     </key>
   </component>
   <component name="RunManager" selected="CTest Application.All CTest">
@@ -185,6 +191,11 @@
       </method>
     </configuration>
     <configuration name="Zydis" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="Zydis" CONFIG_NAME="Debug">
+      <method v="2">
+        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
+      </method>
+    </configuration>
+    <configuration default="true" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true">
       <method v="2">
         <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
       </method>

@@ -337,10 +337,23 @@ void apply_all_boot_patches() noexcept {
     }
 
     auto *dest = reinterpret_cast<std::uint8_t *>(target_addr);
-    dest[0] = 0xE9; // JMP rel32
 
-    const std::int32_t disp = static_cast<std::int32_t>(disp64);
-    klib::memcpy(dest + 1, &disp, sizeof(disp));
+    if (disp64 >= -128 && disp64 <= 127) {
+      std::int8_t disp8 = static_cast<std::int8_t>(target_addr - (nop_addr + 2));
+
+      dest[0] = 0xEB; // JMP rel8
+      dest[1] = disp8;
+
+      // Multi-byte NOP
+      dest[2] = 0x0F;
+      dest[3] = 0x1F;
+      dest[4] = 0x00;
+    } else {
+      dest[0] = 0xE9; // JMP rel32
+
+      const std::int32_t disp = static_cast<std::int32_t>(disp64);
+      klib::memcpy(dest + 1, &disp, sizeof(disp));
+    }
   }
 }
 } // namespace kernel::hw::patcher

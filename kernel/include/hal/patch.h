@@ -6,7 +6,7 @@
     bool _branch_res;                                                                                                  \
     asm goto("1:\n\t"                                                                                                  \
              "  .byte 0x0F, 0x1F, 0x44, 0x00, 0x00\n\t"                                                                \
-             ".pushsection .static_keys,\"a\"\n\t"                                                                     \
+             ".pushsection .init.static_keys,\"a\"\n\t"                                                                \
              "  .long 1b - .\n\t"                                                                                      \
              "  .long %l[l_yes] - .\n\t"                                                                               \
              "  .long %P[key] - .\n\t"                                                                                 \
@@ -27,7 +27,7 @@
   asm volatile("661:\n\t"                                                                                              \
                "  call %P[orig]\n\t"                                                                                   \
                "662:\n\t"                                                                                              \
-               ".pushsection .altinstructions,\"a\"\n\t"                                                               \
+               ".pushsection .init.altinstructions,\"a\"\n\t"                                                          \
                "  .long 661b - .\n\t"                                                                                  \
                "  .long 663f - .\n\t"                                                                                  \
                "  .long %c[feat]\n\t"                                                                                  \
@@ -36,7 +36,7 @@
                "  .byte " #prio "\n\t"                                                                                 \
                "  .byte 0\n\t"                                                                                         \
                ".popsection\n\t"                                                                                       \
-               ".pushsection .altinstr_replacement,\"ax\"\n\t"                                                         \
+               ".pushsection .init.altinstr_replacement,\"ax\"\n\t"                                                    \
                "663:\n\t"                                                                                              \
                "  call %P[repl]\n\t"                                                                                   \
                "664:\n\t"                                                                                              \
@@ -51,7 +51,7 @@
   asm volatile("661:\n\t"                                                                                              \
                "  " old_asm "\n\t"                                                                                     \
                "662:\n\t"                                                                                              \
-               ".pushsection .altinstructions,\"a\"\n\t"                                                               \
+               ".pushsection .init.altinstructions,\"a\"\n\t"                                                          \
                "  .long 661b - .\n\t"                                                                                  \
                "  .long 663f - .\n\t"                                                                                  \
                "  .long %c[feat]\n\t"                                                                                  \
@@ -60,7 +60,7 @@
                "  .byte " #prio "\n\t"                                                                                 \
                "  .byte 0\n\t"                                                                                         \
                ".popsection\n\t"                                                                                       \
-               ".pushsection .altinstr_replacement,\"ax\"\n\t"                                                         \
+               ".pushsection .init.altinstr_replacement,\"ax\"\n\t"                                                    \
                "663:\n\t"                                                                                              \
                "  " new_asm "\n\t"                                                                                     \
                "664:\n\t"                                                                                              \

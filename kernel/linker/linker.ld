@@ -4,88 +4,48 @@ OUTPUT_ARCH(i386:x86-64)
 
 ENTRY(_start)
 
-PHDRS
-{
-    requests  PT_LOAD FLAGS((1 << 1) | (1 << 2)); /* Write + Read */
-    text      PT_LOAD FLAGS((1 << 0) | (1 << 2)); /* Execute + Read */
-    rodata    PT_LOAD FLAGS((1 << 2));            /* Read only */
-    dynamic   PT_DYNAMIC FLAGS((1 << 2));         /* Read only */
-    data      PT_LOAD FLAGS((1 << 1) | (1 << 2)); /* Write + Read */
+PHDRS {
+    requests  PT_LOAD       FLAGS((1 << 1) | (1 << 2));             /* RW */
+    text      PT_LOAD       FLAGS((1 << 0) | (1 << 2));             /* RX */
+    rodata    PT_LOAD       FLAGS((1 << 2));                        /* R */
+    data      PT_LOAD       FLAGS((1 << 1) | (1 << 2));             /* RW */
+    dynamic   PT_DYNAMIC    FLAGS((1 << 2));                        /* R */
+    init      PT_LOAD       FLAGS((1 << 0) | (1 << 1) | (1 << 2));  /* RWX */
 }
 
-SECTIONS
-{
+SECTIONS {
     /* Kernel virtual base. */
     . = 0xffffffff80000000;
     __image_base = .;
 
-    .limine_requests : ALIGN(CONSTANT(MAXPAGESIZE)) {
+    .limine_requests : {
         __limine_requests_start = .;
-
         KEEP(*(.limine_requests_start))
         KEEP(*(.limine_requests))
         KEEP(*(.limine_requests_end))
-
         __limine_requests_end = .;
     } :requests
 
     /* Align to page boundary. */
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
-    .text : ALIGN(CONSTANT(MAXPAGESIZE)) {
+    .text : {
         __text_start = .;
-        
-        *(.text .text.*)
-        *(.init .init.*)
-        *(.fini .fini.*)
 
-        . = ALIGN(16);
+        *(.text.hot .text.hot.*)
+        *(.text.unlikely .text.unlikely.*)
+        . = ALIGN(64);
         *(.altinstr_replacement)
+
         __text_end = .;
     } :text
 
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
-    .rodata : ALIGN(CONSTANT(MAXPAGESIZE)) {
+    .rodata : {
         __rodata_start = .;
-        *(.rodata .rodata.*)
-        *(.srodata .srodata.*)
-        *(.gcc_except_table .gcc_except_table.*)
-
-        . = ALIGN(8);
-        __preinit_array_start = .;
-        KEEP(*(.preinit_array))
-        __preinit_array_end = .;
-
-        . = ALIGN(8);
-        __init_array_start = .;
-        KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*)))
-        KEEP(*(.init_array))
-        /* Map legacy ctors directly into the init_array */
-        KEEP(*(SORT_BY_INIT_PRIORITY(.ctors.*)))
-        KEEP(*(.ctors))
-        __init_array_end = .;
-
-        . = ALIGN(8);
-        __fini_array_start = .;
-        KEEP(*(SORT_BY_INIT_PRIORITY(.fini_array.*)))
-        KEEP(*(.fini_array))
-        /* Map legacy dtors directly into the fini_array */
-        KEEP(*(SORT_BY_INIT_PRIORITY(.dtors.*)))
-        KEEP(*(.dtors))
-        __fini_array_end = .;
-
-        /* Alternative Instructions Metadata Table */
-        . = ALIGN(8);
-        __start_altinstructions = .;
-        *(.altinstructions)
-        __stop_altinstructions = .;
-
-        /* Static Keys Metadata Table */
-        . = ALIGN(8);
-        __start_static_keys = .;
-        *(.static_keys)
-        __stop_static_keys = .;
+        *(SORT_BY_ALIGNMENT(.rodata .rodata.*))
+        *(SORT_BY_ALIGNMENT(.srodata .srodata.*))
 
         /* Exception Fixup Table */
         . = ALIGN(8);
@@ -96,48 +56,91 @@ SECTIONS
         __rodata_end = .;
     } :rodata
 
-    /* Keep dynamic relocations for KASLR/PIE loading. */
-    .dynamic : ALIGN(CONSTANT(MAXPAGESIZE)) {
+    . = ALIGN(CONSTANT(COMMONPAGESIZE));
+
+    .dynamic : {
         __dynamic_start = .;
         KEEP(*(.dynamic))
         __dynamic_end = .;
     } :rodata :dynamic
 
-    .rela.dyn : ALIGN(CONSTANT(MAXPAGESIZE)) {
+    .rela.dyn : {
         __rela_dyn_start = .;
-        KEEP(*(.rela.dyn))
-        KEEP(*(.rela.*))
+        KEEP(*(.rela.dyn .rela.*))
         __rela_dyn_end = .;
     } :rodata
 
-    .rel.dyn : ALIGN(CONSTANT(MAXPAGESIZE)) {
+    .rel.dyn : {
         __rel_dyn_start = .;
-        KEEP(*(.rel.dyn))
-        KEEP(*(.rel.*))
+        KEEP(*(.rel.dyn .rel.*))
         __rel_dyn_end = .;
     } :rodata
 
-    /* Align to page boundary. */
+    .data.rel.ro : {
+        __data_rel_ro_start = .;
+        *(.data.rel.ro .data.rel.ro.*)
+        __data_rel_ro_end = .;
+    } :rodata
+
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
-    .data : ALIGN(CONSTANT(MAXPAGESIZE)) {
+    .data : {
         __data_start = .;
-        *(.data .data.*)
-        *(.sdata .sdata.*)
-        *(.data.rel.ro .data.rel.ro.*)
+        *(SORT_BY_ALIGNMENT(.data .data.*))
+        *(SORT_BY_ALIGNMENT(.sdata .sdata.*))
         *(.got .got.*)
         *(.got.plt)
         __data_end = .;
     } :data
 
     .bss : ALIGN(CONSTANT(MAXPAGESIZE)) {
-        . = ALIGN(16);
+        . = ALIGN(64);
         __bss_start = .;
-        *(.bss .bss.*)
-        *(.sbss .sbss.*)
+        *(SORT_BY_ALIGNMENT(.bss .bss.*))
+        *(SORT_BY_ALIGNMENT(.sbss .sbss.*))
         *(COMMON)
         __bss_end = .;
     } :data
+
+    . = ALIGN(CONSTANT(MAXPAGESIZE));
+
+    .init : {
+        __init_start = .;
+
+        /* Boot Code */
+        *(.init.text .init.text.*)
+        *(.init .init.*)
+        *(.fini .fini.*)
+
+        /* Static Keys & Alternative Instructions Metadata */
+        . = ALIGN(8);
+        __start_altinstructions = .;
+        *(.init.altinstructions)
+        __stop_altinstructions = .;
+
+        . = ALIGN(8);
+        __start_static_keys = .;
+        *(.init.static_keys)
+        __stop_static_keys = .;
+
+            /* C++ Constructors */
+        . = ALIGN(8);
+        __preinit_array_start = .;
+        KEEP(*(.preinit_array))
+        __preinit_array_end = .;
+
+        . = ALIGN(8);
+        __init_array_start = .;
+        KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*)))
+        KEEP(*(.init_array))
+        KEEP(*(SORT_BY_INIT_PRIORITY(.ctors.*)))
+        KEEP(*(.ctors))
+        __init_array_end = .;
+
+        /* Ensure the init block end is page-aligned */
+        . = ALIGN(CONSTANT(COMMONPAGESIZE));
+        __init_end = .;
+    } :init
 
     __image_end = .;
 
@@ -146,5 +149,6 @@ SECTIONS
         *(.note .note.*)
         *(.comment)
         *(.eh_frame*)
+        *(.interp)
     }
 }

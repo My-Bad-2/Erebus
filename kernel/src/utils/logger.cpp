@@ -26,7 +26,7 @@ drivers::uart::SerialPort &get_debug_console(const void *spcr_raw) noexcept {
   if (!s_console.has_value()) [[unlikely]] {
     drivers::uart::SerialPort early_port(hw::IoResource(hw::IoType::PMIO, 0x3f8, 1));
 
-    early_port.initialize(115200);
+    [[maybe_unused]] auto _ = early_port.initialize(115200);
     s_console.emplace(early_port);
   }
 

@@ -6,6 +6,7 @@
 #include "hal/cpu_info.hpp"
 #include "hal/hal.hpp"
 #include "hal/patcher.hpp"
+#include "hal/percpu.hpp"
 
 namespace kernel {
 namespace {
@@ -18,7 +19,9 @@ extern "C" void _start() noexcept {
 
   utils::logger::info("Hello, World!\n");
 
-  auto cpu_info = hw::profile_manager.register_cpu();
+  hw::percpu::early_initialize();
+
+  const auto cpu_info = hw::profile_manager.register_cpu();
   hw::initialize();
   hw::patcher::apply_all_boot_patches();
 

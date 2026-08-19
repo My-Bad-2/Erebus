@@ -1,6 +1,6 @@
 #include "utils/lock.hpp"
 
-#include <xmmintrin.h>
+#include "hal/percpu.hpp"
 
 namespace kernel::utils {
 namespace {
@@ -9,18 +9,20 @@ constexpr std::uint32_t QLOCK_PENDING = 1 << 1;
 constexpr std::uint32_t QLOCK_QUEUED = 1 << 2;
 } // namespace
 
-void CLHQueue::wait_in_queue(CLHNode *my_node, CLHNode *&my_pred) noexcept {
+void CLHQueue::wait_in_queue() noexcept {
+  CLHNode *my_node = hw::percpu::get_curr_node();
   my_node->locked.store(1, std::memory_order_relaxed);
-  my_pred = m_tail.exchange(my_node, std::memory_order_acq_rel);
+
+  CLHNode *my_pred = m_tail.exchange(my_node, std::memory_order_acq_rel);
+  hw::percpu::set_prev_node(my_pred);
 
   if (my_pred->locked.load(std::memory_order_acquire) == 1) {
     detail::wait_monitor(&my_pred->locked, 1);
   }
 }
 
-void CLHQueue::release(CLHNode *my_node) noexcept {
-  // Prefetches cache line into L1 cache in exclusive state
-  _mm_prefetch(reinterpret_cast<char *>(&my_node), _MM_HINT_T0);
+void CLHQueue::release() noexcept {
+  CLHNode *my_node = hw::percpu::get_curr_node();
   my_node->locked.store(0, std::memory_order_release);
 }
 
@@ -54,18 +56,18 @@ void QSpinlock::unlock() noexcept {
   const std::uint32_t prev = m_val.fetch_and(~QLOCK_LOCKED, std::memory_order_release);
 
   if (prev & QLOCK_QUEUED) {
-    // PerCPUState will have: CLHNode* curr_node and CLHNode* prev_node. Release curr_node from the queue, and swap
-    // curr_node with prev_node.
+    m_clh_queue.release();
+    hw::percpu::set_curr_node(hw::percpu::get_prev_node());
   }
 }
 
 void QSpinlock::slow_path_lock() noexcept {
   // Again fetch the per-cpu state
   m_val.fetch_or(QLOCK_QUEUED, std::memory_order_relaxed);
-  // m_clh_queue.wait_in_queue(curr_node, prev_node);
+  m_clh_queue.wait_in_queue();
 
   while (true) {
-    std::uint32_t curr = m_val.load(std::memory_order_acquire);
+    const std::uint32_t curr = m_val.load(std::memory_order_acquire);
 
     if ((curr & (QLOCK_LOCKED | QLOCK_PENDING)) == 0) {
       m_val.fetch_or(QLOCK_LOCKED, std::memory_order_acquire);
