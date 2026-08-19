@@ -8,6 +8,7 @@
     <option name="/Default/Housekeeping/FeatureSuggestion/FeatureSuggestionManager/DisabledSuggesters/=SwitchToGoToActionSuggester/@EntryIndexedValue" value="true" type="bool" />
     <option name="/Default/Housekeeping/LiveTemplatesHousekeeping/HotspotSessionHintIsShown/@EntryValue" value="true" type="bool" />
     <option name="/Default/Housekeeping/OptionsDialog/SelectedPageId/@EntryValue" value="RiderCppLiveTemplatesSettings" type="string" />
+    <option name="/Default/Housekeeping/RefactoringsMru/CppRenameRefactoring/DoRenameRelatedFiles/@EntryValue" value="false" type="bool" />
   </component>
   <component name="CMakePresetLoader">{
   &quot;useNewFormat&quot;: true
@@ -36,19 +37,18 @@
   </component>
   <component name="CMakeSettings">
     <configurations>
-      <configuration PROFILE_NAME="Debug" ENABLED="true" CONFIG_NAME="Debug" GENERATION_OPTIONS="-DCMAKE_TOOLCHAIN_FILE=$CMakeProjectDir$/cmake/ToolchainClang.cmake -DOS_ARCH_LEVEL:STRING=znver4" />
+      <configuration PROFILE_NAME="Debug" ENABLED="true" CONFIG_NAME="Debug" GENERATION_OPTIONS="-DCMAKE_TOOLCHAIN_FILE=$CMakeProjectDir$/cmake/ToolchainClang.cmake -DOS_ARCH_LEVEL:STRING=x86-64-v4" />
     </configurations>
   </component>
   <component name="ChangeListManager">
     <list default="true" id="88f3297f-a857-4315-a795-de78c49ea4e5" name="Changes" comment="">
+      <change afterPath="$PROJECT_DIR$/kernel/src/utils/locks/ticket-spinlock.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cmake/QemuEmulator.cmake" beforeDir="false" afterPath="$PROJECT_DIR$/cmake/QemuEmulator.cmake" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/include/hal/cpu_info.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/hal/cpu_info.hpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/include/hal/io.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/hal/io.hpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/include/hal/patch.h" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/hal/patch.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/src/drivers/uart.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/drivers/uart.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/src/hal/patcher.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/hal/patcher.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/hal/hal.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/hal/hal.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/utils/lock.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/utils/lock.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/hal/hal.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/hal/hal.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/kernel/src/main.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/main.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/utils/lock.cpp" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -165,19 +165,14 @@
 }</component>
   <component name="RecentsManager">
     <key name="MoveFile.RECENT_KEYS">
+      <recent name="$PROJECT_DIR$/kernel/src/utils/locks" />
+      <recent name="$PROJECT_DIR$/kernel/src/utils/ticket-spinlock" />
       <recent name="$PROJECT_DIR$/kernel/include/boot" />
       <recent name="$PROJECT_DIR$/klib/include/internal" />
       <recent name="$PROJECT_DIR$/klib/include" />
-      <recent name="$PROJECT_DIR$/klib/include/sys" />
-      <recent name="$PROJECT_DIR$/klibc/docs" />
     </key>
   </component>
   <component name="RunManager" selected="CTest Application.All CTest">
-    <configuration default="true" type="CLionExternalRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true">
-      <method v="2">
-        <option name="CLION.EXTERNAL.BUILD" enabled="true" />
-      </method>
-    </configuration>
     <configuration name="klib_tests" type="CMakeGoogleTestRunConfigurationType" factoryName="Google Test" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="klib_tests" CONFIG_NAME="Debug" RUN_TARGET_PROJECT_NAME="Erebus" RUN_TARGET_NAME="klib_tests" TEST_MODE="SUITE_TEST">
       <method v="2">
         <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
@@ -327,14 +322,16 @@
       </method>
     </configuration>
     <list>
-      <item itemvalue="CMake Application.gmock" />
-      <item itemvalue="CMake Application.gmock_main" />
-      <item itemvalue="CMake Application.gtest" />
-      <item itemvalue="CMake Application.gtest_main" />
+      <item itemvalue="CMake Application.Zycore" />
+      <item itemvalue="CMake Application.Zydis" />
       <item itemvalue="CMake Application.docs" />
       <item itemvalue="CMake Application.format" />
       <item itemvalue="CMake Application.format_kernel" />
       <item itemvalue="CMake Application.format_klib" />
+      <item itemvalue="CMake Application.gmock" />
+      <item itemvalue="CMake Application.gmock_main" />
+      <item itemvalue="CMake Application.gtest" />
+      <item itemvalue="CMake Application.gtest_main" />
       <item itemvalue="CMake Application.kernel" />
       <item itemvalue="CMake Application.klib" />
       <item itemvalue="CMake Application.os_iso" />
@@ -342,8 +339,6 @@
       <item itemvalue="CMake Application.qemu_run" />
       <item itemvalue="CMake Application.qemu_vars" />
       <item itemvalue="CMake Application.uacpi" />
-      <item itemvalue="CMake Application.Zydis" />
-      <item itemvalue="CMake Application.Zycore" />
       <item itemvalue="CTest Application.All CTest" />
       <item itemvalue="Google Test.klib_tests" />
     </list>
