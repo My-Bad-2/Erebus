@@ -69,14 +69,6 @@ class alignas(std::hardware_destructive_interference_size) RWLock {
   alignas(std::hardware_destructive_interference_size) TicketSpinlock m_write_queue;
   alignas(std::hardware_destructive_interference_size) std::atomic<std::uint32_t> m_rw_state{0};
 
-  static constexpr uint32_t WRITER_LOCKED = 1 << 0;
-  static constexpr uint32_t WRITER_WAITING = 1 << 1;
-  static constexpr uint32_t READER_INC = 1 << 8;
-  static constexpr uint32_t READER_MASK = 0xFFFFFF00;
-
-  static constexpr uint8_t PHASE_READ = 0;
-  static constexpr uint8_t PHASE_WRITE = 1;
-
 public:
   constexpr RWLock() noexcept = default;
   RWLock(const RWLock &) = delete;
@@ -101,12 +93,8 @@ public:
   constexpr CLHQueue() noexcept : m_tail(&m_dummy_node) {}
 
   void wait_in_queue(CLHNode *my_node, CLHNode *&my_pred) noexcept;
-  void release(CLHNode *my_node) noexcept;
+  static void release(CLHNode *my_node) noexcept;
 };
-
-static constexpr std::uint32_t QLOCK_LOCKED = 1 << 0;
-static constexpr std::uint32_t QLOCK_PENDING = 1 << 1;
-static constexpr std::uint32_t QLOCK_QUEUED = 1 << 2;
 
 class alignas(std::hardware_destructive_interference_size) QSpinlock {
   std::atomic<std::uint32_t> m_val{0};

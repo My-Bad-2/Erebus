@@ -3,6 +3,12 @@
 #include <xmmintrin.h>
 
 namespace kernel::utils {
+namespace {
+constexpr std::uint32_t QLOCK_LOCKED = 1 << 0;
+constexpr std::uint32_t QLOCK_PENDING = 1 << 1;
+constexpr std::uint32_t QLOCK_QUEUED = 1 << 2;
+} // namespace
+
 void CLHQueue::wait_in_queue(CLHNode *my_node, CLHNode *&my_pred) noexcept {
   my_node->locked.store(1, std::memory_order_relaxed);
   my_pred = m_tail.exchange(my_node, std::memory_order_acq_rel);

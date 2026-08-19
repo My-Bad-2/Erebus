@@ -153,11 +153,13 @@ enum class Feature : std::uint32_t {
   LM = make_feat(0x80000001, 0, Reg::EDX, 29)
 };
 
-class CpuInfo {
+class alignas(std::hardware_destructive_interference_size) CpuInfo {
   friend class CpuProfileManager;
   struct Registers {
     std::uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
   };
+
+  alignas(64) std::array<std::array<std::uint32_t, 4>, 5> m_leaves{};
 
   Vendor m_vendor = Vendor::Unknown;
   Hypervisor m_hypervisor = Hypervisor::None;
@@ -167,6 +169,11 @@ class CpuInfo {
 
   std::uint32_t m_apic_id{0};
   std::uint32_t m_clflush_size{0};
+
+  std::uint32_t m_max_leaf{0};
+  std::uint32_t m_max_ext_leaf{0};
+  std::uint8_t m_apic_id_core_id_size{0};
+
   std::uint32_t m_phys_addr_bits{0};
   std::uint32_t m_virt_addr_bits{0};
 
@@ -190,8 +197,6 @@ class CpuInfo {
   std::size_t m_num_topology{0};
   std::array<TopologyInfo, 8> m_topology{};
 
-  alignas(64) std::array<std::array<std::uint32_t, 4>, 5> m_leaves{};
-
   static Registers query(const std::uint32_t leaf, const std::uint32_t subleaf = 0) noexcept {
     Registers r;
     __cpuid_count(leaf, subleaf, r.eax, r.ebx, r.ecx, r.edx);
@@ -199,11 +204,11 @@ class CpuInfo {
   }
 
   void parse_fms(std::uint32_t eax) noexcept;
-  void parse_frequencies(std::uint32_t max_leaf) noexcept;
-  void parse_brand(std::uint32_t max_ext_leaf) noexcept;
-  void parse_caches(std::uint32_t max_leaf, std::uint32_t max_ext_leaf) noexcept;
-  void parse_tlb(std::uint32_t max_leaf, std::uint32_t max_ext_leaf) noexcept;
-  void parse_topology(std::uint32_t max_leaf, std::uint32_t max_ext_leaf) noexcept;
+  void parse_frequencies() noexcept;
+  void parse_brand() noexcept;
+  void parse_caches() noexcept;
+  void parse_tlb() noexcept;
+  void parse_topology() noexcept;
   void parse_hypervisor() noexcept;
 
 public:
@@ -231,6 +236,10 @@ public:
   [[nodiscard]] std::span<const TlbInfo> tlbs() const noexcept { return {m_tlbs.data(), m_num_tlbs}; }
   [[nodiscard]] std::span<const TopologyInfo> topology() const noexcept { return {m_topology.data(), m_num_topology}; }
 
+  [[nodiscard]] std::uint32_t max_leaf() const noexcept { return m_max_leaf; }
+  [[nodiscard]] std::uint32_t max_ext_leaf() const noexcept { return m_max_ext_leaf; }
+  [[nodiscard]] std::uint8_t apic_id_core_id_size() const noexcept { return m_apic_id_core_id_size; }
+
   template <Feature F> [[nodiscard]] constexpr bool has() const noexcept {
     constexpr auto val = static_cast<std::uint32_t>(F);
     constexpr std::uint32_t leaf_base = (val >> 15) & 0xFF;
@@ -245,16 +254,25 @@ public:
     if constexpr (cache_idx != 0xFFFFFFFF) {
       return (m_leaves[cache_idx][reg] & (1u << bit)) != 0;
     } else {
-      auto r = query(leaf, subleaf);
-
-      if constexpr (reg == static_cast<uint32_t>(Reg::EAX)) {
-        return (r.eax & (1u << bit)) != 0;
-      } else if constexpr (reg == static_cast<uint32_t>(Reg::EBX)) {
-        return (r.ebx & (1u << bit)) != 0;
-      } else if constexpr (reg == static_cast<uint32_t>(Reg::ECX)) {
-        return (r.ecx & (1u << bit)) != 0;
+      if (is_ext) {
+        if (leaf > m_max_ext_leaf) {
+          return false;
+        }
       } else {
-        return (r.edx & (1u << bit)) != 0;
+        if (leaf > m_max_leaf) {
+          return false;
+        }
+      }
+
+      const auto [eax, ebx, ecx, edx] = query(leaf, subleaf);
+      if constexpr (reg == static_cast<std::uint32_t>(Reg::EAX)) {
+        return (eax & (1u << bit)) != 0;
+      } else if constexpr (reg == static_cast<std::uint32_t>(Reg::EBX)) {
+        return (ebx & (1u << bit)) != 0;
+      } else if constexpr (reg == static_cast<std::uint32_t>(Reg::ECX)) {
+        return (ecx & (1u << bit)) != 0;
+      } else {
+        return (edx & (1u << bit)) != 0;
       }
     }
   }
@@ -274,33 +292,44 @@ public:
       return (m_leaves[cache_idx][reg] & (1u << bit)) != 0;
     }
 
-    const auto r = query(leaf, subleaf);
-
-    if (reg == static_cast<uint32_t>(Reg::EAX)) {
-      return (r.eax & (1u << bit)) != 0;
+    if (is_ext) {
+      if (leaf > m_max_ext_leaf) {
+        return false;
+      }
+    } else {
+      if (leaf > m_max_leaf) {
+        return false;
+      }
     }
 
-    if (reg == static_cast<uint32_t>(Reg::EBX)) {
-      return (r.ebx & (1u << bit)) != 0;
+    const auto [eax, ebx, ecx, edx] = query(leaf, subleaf);
+
+    if (reg == static_cast<std::uint32_t>(Reg::EAX)) {
+      return (eax & (1u << bit)) != 0;
     }
 
-    if (reg == static_cast<uint32_t>(Reg::ECX)) {
-      return (r.ecx & (1u << bit)) != 0;
+    if (reg == static_cast<std::uint32_t>(Reg::EBX)) {
+      return (ebx & (1u << bit)) != 0;
     }
 
-    return (r.edx & (1u << bit)) != 0;
+    if (reg == static_cast<std::uint32_t>(Reg::ECX)) {
+      return (ecx & (1u << bit)) != 0;
+    }
+
+    return (edx & (1u << bit)) != 0;
   }
 
   void initialize() noexcept;
 };
 
-// Hybrid systems have 2 architectures (P- and E- cores)
-inline constexpr std::size_t MAX_ARCH_PROFILES = 2;
 class CpuProfileManager {
   struct ProfileEntry {
     std::atomic<std::uint64_t> fingerprint{0};
     CpuInfo info;
   };
+
+  // Hybrid systems have 2 architectures (P- and E- cores)
+  static constexpr std::size_t MAX_ARCH_PROFILES = 2;
 
   std::array<ProfileEntry, MAX_ARCH_PROFILES> m_profiles;
   std::atomic<std::size_t> m_active_profiles{0};

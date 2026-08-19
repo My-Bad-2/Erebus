@@ -42,13 +42,13 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="88f3297f-a857-4315-a795-de78c49ea4e5" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/kernel/src/utils/locks/ticket-spinlock.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/hal/cpu_info.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/hal/cpu_info.hpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/kernel/include/hal/hal.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/hal/hal.hpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/kernel/include/utils/lock.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/utils/lock.hpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/src/hal/hal.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/hal/hal.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/src/main.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/main.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/src/utils/lock.cpp" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/hal/cpu_info.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/hal/cpu_info.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/utils/locks/clhlock.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/utils/locks/clhlock.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/utils/locks/rwlock.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/utils/locks/rwlock.cpp" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

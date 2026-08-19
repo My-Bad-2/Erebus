@@ -1,5 +1,7 @@
 #include "hal/cpu_info.hpp"
 
+#include "utils/lock.hpp"
+
 namespace kernel::hw {
 namespace {
 constexpr std::uint32_t decode_amd_l2_assoc(std::uint32_t encoded) noexcept {
@@ -34,8 +36,8 @@ constexpr std::uint32_t decode_amd_l2_assoc(std::uint32_t encoded) noexcept {
 }
 } // namespace
 
-void CpuInfo::parse_brand(const std::uint32_t max_ext_leaf) noexcept {
-  if (max_ext_leaf >= 0x80000004) {
+void CpuInfo::parse_brand() noexcept {
+  if (m_max_ext_leaf >= 0x80000004) {
     for (std::uint32_t i = 0; i < 3; ++i) {
       auto r = query(0x80000002 + i);
       __builtin_memcpy(m_brand_string.data() + (i * 16), &r, 16);
@@ -43,11 +45,11 @@ void CpuInfo::parse_brand(const std::uint32_t max_ext_leaf) noexcept {
   }
 }
 
-void CpuInfo::parse_caches(const std::uint32_t max_leaf, const std::uint32_t max_ext_leaf) noexcept {
+void CpuInfo::parse_caches() noexcept {
   const std::uint32_t cache_leaf = (m_vendor == Vendor::Amd) ? 0x8000001D : 0x04;
 
-  if ((m_vendor == Vendor::Amd && max_ext_leaf >= cache_leaf) ||
-      (m_vendor == Vendor::Intel && max_leaf >= cache_leaf)) {
+  if ((m_vendor == Vendor::Amd && m_max_ext_leaf >= cache_leaf) ||
+      (m_vendor == Vendor::Intel && m_max_leaf >= cache_leaf)) {
     for (std::uint32_t i = 0; i < m_caches.size(); ++i) {
       const auto [eax, ebx, ecx, edx] = query(cache_leaf, i);
       const std::uint32_t type = eax & 0x1F;
@@ -69,8 +71,8 @@ void CpuInfo::parse_caches(const std::uint32_t max_leaf, const std::uint32_t max
   }
 }
 
-void CpuInfo::parse_tlb(const std::uint32_t max_leaf, const std::uint32_t max_ext_leaf) noexcept {
-  if (m_vendor == Vendor::Intel && max_leaf >= 0x18) {
+void CpuInfo::parse_tlb() noexcept {
+  if (m_vendor == Vendor::Intel && m_max_leaf >= 0x18) {
     for (uint32_t i = 0; i < m_tlbs.size(); ++i) {
       const auto r = query(0x18, i);
       if ((r.edx & 0x1F) == 0) {
@@ -127,22 +129,23 @@ void CpuInfo::parse_tlb(const std::uint32_t max_leaf, const std::uint32_t max_ex
         }
       }
     };
+
     // Leaf 0x80000005: L1 TLBs
-    if (max_ext_leaf >= 0x80000005) {
+    if (m_max_ext_leaf >= 0x80000005) {
       const auto r = query(0x80000005);
       push(r.ebx, PageSize::Size4K, false);
       push(r.eax, PageSize::Size2M, false);
     }
 
     // Leaf 0x80000006: L2 TLBs
-    if (max_ext_leaf >= 0x80000006) {
+    if (m_max_ext_leaf >= 0x80000006) {
       const auto r = query(0x80000006);
       push(r.ebx, PageSize::Size4K, true);
       push(r.eax, PageSize::Size2M, true);
     }
 
     // Leaf 0x80000019: 1GB Page TLBs (L1 and L2)
-    if (max_ext_leaf >= 0x80000019) {
+    if (m_max_ext_leaf >= 0x80000019) {
       const auto r = query(0x80000019);
       push(r.eax, PageSize::Size1G, false);
       push(r.ebx, PageSize::Size1G, true);
@@ -150,8 +153,8 @@ void CpuInfo::parse_tlb(const std::uint32_t max_leaf, const std::uint32_t max_ex
   }
 }
 
-void CpuInfo::parse_topology(const std::uint32_t max_leaf, const std::uint32_t max_ext_leaf) noexcept {
-  const std::uint32_t topo_leaf = (max_leaf >= 0x1F) ? 0x1F : ((max_leaf >= 0xB) ? 0xB : 0);
+void CpuInfo::parse_topology() noexcept {
+  const std::uint32_t topo_leaf = (m_max_leaf >= 0x1F) ? 0x1F : ((m_max_leaf >= 0xB) ? 0xB : 0);
 
   if (topo_leaf != 0) {
     for (std::uint32_t i = 0; i < m_topology.size(); ++i) {
@@ -168,7 +171,7 @@ void CpuInfo::parse_topology(const std::uint32_t max_leaf, const std::uint32_t m
 
       m_topology[m_num_topology++] = t;
     }
-  } else if (m_vendor == Vendor::Amd && max_ext_leaf >= 0x8000001E) {
+  } else if (m_vendor == Vendor::Amd && m_max_ext_leaf >= 0x8000001E) {
     if (m_num_topology < m_topology.size()) {
       const auto r = query(0x8000001E);
 
@@ -225,8 +228,8 @@ void CpuInfo::parse_fms(const std::uint32_t eax) noexcept {
   }
 }
 
-void CpuInfo::parse_frequencies(const std::uint32_t max_leaf) noexcept {
-  if (max_leaf >= 0x16) {
+void CpuInfo::parse_frequencies() noexcept {
+  if (m_max_leaf >= 0x16) {
     const auto [eax, ebx, ecx, edx] = query(0x16);
     m_base_mhz = eax & 0xFFFF;
     m_max_mhz = ebx & 0xFFFF;
@@ -236,7 +239,7 @@ void CpuInfo::parse_frequencies(const std::uint32_t max_leaf) noexcept {
 
 void CpuInfo::initialize() noexcept {
   const auto r0 = query(0);
-  const std::uint32_t max_leaf = r0.eax;
+  m_max_leaf = r0.eax;
 
   __builtin_memcpy(m_vendor_string.data(), &r0.ebx, 4);
   __builtin_memcpy(m_vendor_string.data() + 4, &r0.edx, 4);
@@ -250,9 +253,9 @@ void CpuInfo::initialize() noexcept {
   }
 
   const auto rx = query(0x80000000);
-  const std::uint32_t max_ext_leaf = rx.eax;
+  m_max_ext_leaf = rx.eax;
 
-  if (max_leaf >= 1) {
+  if (m_max_leaf >= 1) {
     const auto r = query(1);
     m_leaves[0] = {r.eax, r.ebx, r.ecx, r.edx};
     m_is_virtualized = (r.ecx & (1u << 31)) != 0;
@@ -261,31 +264,45 @@ void CpuInfo::initialize() noexcept {
     parse_fms(r.eax);
   }
 
-  if (max_leaf >= 7) {
+  if (m_max_leaf >= 7) {
     auto r = query(7, 0);
     m_leaves[1] = {r.eax, r.ebx, r.ecx, r.edx};
     r = query(7, 1);
     m_leaves[2] = {r.eax, r.ebx, r.ecx, r.edx};
   }
 
-  if (max_ext_leaf >= 0x80000001) {
-    const auto r = query(0x80000001);
-    m_leaves[3] = {r.eax, r.ebx, r.ecx, r.edx};
+  if (m_max_ext_leaf >= 0x80000001) {
+    const auto [eax, ebx, ecx, edx] = query(0x80000001);
+    m_leaves[3] = {eax, ebx, ecx, edx};
   }
 
-  if (max_ext_leaf >= 0x80000008) {
-    const auto r = query(0x80000008);
-    m_leaves[4] = {r.eax, r.ebx, r.ecx, r.edx};
-    m_phys_addr_bits = r.eax & 0xFF;
-    m_virt_addr_bits = (r.eax >> 8) & 0xFF;
+  if (m_max_ext_leaf >= 0x80000008) {
+    const auto [eax, ebx, ecx, edx] = query(0x80000008);
+    m_leaves[4] = {eax, ebx, ecx, edx};
+    m_phys_addr_bits = eax & 0xFF;
+    m_virt_addr_bits = (eax >> 8) & 0xFF;
+
+    if (m_vendor == Vendor::Amd) {
+      m_apic_id_core_id_size = (ecx >> 12) & 0xF;
+    }
   }
 
-  parse_brand(max_ext_leaf);
-  parse_frequencies(max_leaf);
-  parse_caches(max_leaf, max_ext_leaf);
-  parse_tlb(max_leaf, max_ext_leaf);
-  parse_topology(max_leaf, max_ext_leaf);
+  if (m_vendor == Vendor::Intel && m_max_leaf >= 0xB) {
+    std::uint32_t topo_leaf = (m_max_leaf >= 0x1F) ? 0x1F : 0xB;
+    auto [_, _, _, edx] = query(topo_leaf, 0);
+    m_apic_id = edx;
+  }
+
+  parse_brand();
+  parse_frequencies();
+  parse_caches();
+  parse_tlb();
+  parse_topology();
   parse_hypervisor();
+}
+
+namespace {
+utils::TicketSpinlock cpu_profile_lock;
 }
 
 std::uint64_t CpuProfileManager::generate_fingerprint() noexcept {
@@ -313,16 +330,19 @@ const CpuInfo *CpuProfileManager::register_cpu() noexcept {
     }
   }
 
-  // TODO: Check if another cpu might've registered this fingerprint (implement locks)
-  const std::size_t curr_active = m_active_profiles.load(std::memory_order_relaxed);
+  {
+    utils::IrqSaveGuard guard(cpu_profile_lock);
 
-  const std::size_t new_idx = curr_active;
-  if (new_idx < MAX_ARCH_PROFILES) {
-    m_profiles[new_idx].info.initialize();
-    m_profiles[new_idx].fingerprint.store(fingerprint, std::memory_order_relaxed);
-    m_active_profiles.store(new_idx + 1, std::memory_order_release);
+    const std::size_t curr_active = m_active_profiles.load(std::memory_order_relaxed);
 
-    return &m_profiles[new_idx].info;
+    const std::size_t new_idx = curr_active;
+    if (new_idx < MAX_ARCH_PROFILES) {
+      m_profiles[new_idx].info.initialize();
+      m_profiles[new_idx].fingerprint.store(fingerprint, std::memory_order_relaxed);
+      m_active_profiles.store(new_idx + 1, std::memory_order_release);
+
+      return &m_profiles[new_idx].info;
+    }
   }
 
   return &m_profiles[0].info;

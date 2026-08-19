@@ -62,7 +62,7 @@ namespace irq {
 }
 
 [[gnu::always_inline]] inline void write_flags(const std::uint64_t flags) noexcept {
-  asm volatile("pushfq %0\n\t"
+  asm volatile("pushq %0\n\t"
                "popfq"
                : /* No Output */
                : "r"(flags)

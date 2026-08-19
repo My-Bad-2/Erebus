@@ -1,6 +1,13 @@
 #include "utils/lock.hpp"
 
 namespace kernel::utils {
+namespace {
+constexpr uint32_t WRITER_LOCKED = 1 << 0;
+constexpr uint32_t WRITER_WAITING = 1 << 1;
+constexpr uint32_t READER_INC = 1 << 8;
+constexpr uint32_t READER_MASK = 0xFFFFFF00;
+} // namespace
+
 void RWLock::read_lock() noexcept {
   while (true) {
     std::uint32_t state = m_rw_state.fetch_add(READER_INC, std::memory_order_acquire);
