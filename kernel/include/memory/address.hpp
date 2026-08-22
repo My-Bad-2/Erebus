@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <optional>
 
-#include "memory.hpp"
 #include "utils/maths.hpp"
 
 #include <kformat/formatter.hpp>
@@ -21,16 +20,11 @@ private:
 public:
   // Initializes to 0
   constexpr PhysicalAddress() noexcept : m_address{0} {}
-
-  constexpr explicit PhysicalAddress(const ValueType address) noexcept
-      : m_address{utils::maths::align_down(address, PAGE_SIZE)} {}
-
+  constexpr explicit PhysicalAddress(const ValueType address) noexcept : m_address{address} {}
   explicit PhysicalAddress(std::nullptr_t) = delete;
-
   template <typename T> explicit PhysicalAddress(T *) = delete;
 
   [[nodiscard]] constexpr ValueType value() const noexcept { return m_address; }
-
   [[nodiscard]] friend constexpr auto operator<=>(PhysicalAddress, PhysicalAddress) noexcept = default;
 
   // Address + Offset = Address
@@ -95,27 +89,17 @@ private:
 public:
   constexpr VirtualAddress() noexcept : m_address{0} {}
   constexpr explicit VirtualAddress(const ValueType address) noexcept : m_address{address} {}
-
   template <typename T> explicit VirtualAddress(T *ptr) noexcept : m_address{reinterpret_cast<ValueType>(ptr)} {}
-
   constexpr explicit VirtualAddress(std::nullptr_t) noexcept : m_address{0} {}
 
   template <typename T> [[nodiscard]] T *as() const noexcept { return reinterpret_cast<T *>(m_address); }
-
   [[nodiscard]] constexpr ValueType value() const noexcept { return m_address; }
-
   [[nodiscard]] constexpr ValueType page_offset() const noexcept { return m_address & 0xFFF; }
-
   [[nodiscard]] constexpr ValueType pml1_index() const noexcept { return (m_address >> 12) & 0x1FF; }
-
   [[nodiscard]] constexpr ValueType pml2_index() const noexcept { return (m_address >> 21) & 0x1FF; }
-
   [[nodiscard]] constexpr ValueType pml3_index() const noexcept { return (m_address >> 30) & 0x1FF; }
-
   [[nodiscard]] constexpr ValueType pml4_index() const noexcept { return (m_address >> 39) & 0x1FF; }
-
   [[nodiscard]] constexpr ValueType pml5_index() const noexcept { return (m_address >> 48) & 0x1FF; }
-
   [[nodiscard]] friend constexpr auto operator<=>(VirtualAddress, VirtualAddress) noexcept = default;
 
   [[nodiscard]] friend constexpr VirtualAddress operator+(const VirtualAddress addr, const OffsetType offset) noexcept {

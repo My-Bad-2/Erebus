@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "gs.hpp"
+#include "memory/pmm/pcp_cache.hpp"
 #include "utils/locks/locks.hpp"
 
 namespace kernel::hw {

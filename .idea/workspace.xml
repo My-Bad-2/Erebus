@@ -43,16 +43,21 @@
   <component name="ChangeListManager">
     <list default="true" id="88f3297f-a857-4315-a795-de78c49ea4e5" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/include/hal/hal.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/hal/hal.hpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/include/hal/patch.h" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/hal/patch.h" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/include/utils/lock.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/utils/lock.hpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/linker/linker.ld" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/linker/linker.ld" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/src/hal/hal.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/hal/hal.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/src/hal/patcher.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/hal/patcher.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/CMakeLists.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cmake/CompilerFlags.cmake" beforeDir="false" afterPath="$PROJECT_DIR$/cmake/CompilerFlags.cmake" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/cmake/QemuEmulator.cmake" beforeDir="false" afterPath="$PROJECT_DIR$/cmake/QemuEmulator.cmake" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/boot/boot.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/boot/boot.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/drivers/acpi/table.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/drivers/acpi/table.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/hal/percpu.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/hal/percpu.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/memory/address.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/memory/address.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/memory/pmm/page.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/memory/pmm/page.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/utils/locks/guards.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/utils/locks/guards.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/utils/maths.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/utils/maths.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/boot/limine.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/boot/limine.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/hal/cpu_info.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/hal/cpu_info.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/kernel/src/main.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/main.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/src/utils/locks/clhlock.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/utils/locks/clhlock.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/src/utils/logger.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/utils/logger.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/third_party/limine/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/third_party/limine/CMakeLists.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/memory/memory.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/memory/memory.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/third_party/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/third_party/CMakeLists.txt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/third_party/zydis" beforeDir="false" afterPath="$PROJECT_DIR$/third_party/zydis" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/third_party/zydis/dependencies/zycore" beforeDir="false" afterPath="$PROJECT_DIR$/third_party/zydis/dependencies/zycore" afterDir="false" />
     </list>
@@ -140,35 +145,35 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;ASKED_MARK_IGNORED_FILES_AS_EXCLUDED&quot;: &quot;true&quot;,
-    &quot;ASKED_SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
-    &quot;CidrDebugProfileConversion&quot;: &quot;true&quot;,
-    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.RadMigrateCodeStyle&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.cidr.known.project.marker&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.readMode.enableVisualFormatting&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.west.config.association.type.startup.service&quot;: &quot;true&quot;,
-    &quot;SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
-    &quot;bazel.project.detector.is.bazel.project&quot;: &quot;true&quot;,
-    &quot;cf.advertisement.text.overridden&quot;: &quot;true&quot;,
-    &quot;cf.first.check.clang-format&quot;: &quot;false&quot;,
-    &quot;cidr.known.project.marker&quot;: &quot;true&quot;,
-    &quot;codeWithMe.voiceChat.enabledByDefault&quot;: &quot;false&quot;,
-    &quot;ctest.advertisement.all.test.configuration.is.created&quot;: &quot;true&quot;,
-    &quot;git-widget-placeholder&quot;: &quot;main&quot;,
-    &quot;last_opened_file_path&quot;: &quot;/bin/clang-format&quot;,
-    &quot;node.js.detected.package.jshint&quot;: &quot;true&quot;,
-    &quot;node.js.selected.package.jshint&quot;: &quot;&quot;,
-    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
-    &quot;org.rust.first.attach.projects&quot;: &quot;true&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;CMakeSettings&quot;,
-    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "ASKED_MARK_IGNORED_FILES_AS_EXCLUDED": "true",
+    "ASKED_SHARE_PROJECT_CONFIGURATION_FILES": "true",
+    "CidrDebugProfileConversion": "true",
+    "ModuleVcsDetector.initialDetectionPerformed": "true",
+    "RunOnceActivity.RadMigrateCodeStyle": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "RunOnceActivity.cidr.known.project.marker": "true",
+    "RunOnceActivity.readMode.enableVisualFormatting": "true",
+    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "RunOnceActivity.west.config.association.type.startup.service": "true",
+    "SHARE_PROJECT_CONFIGURATION_FILES": "true",
+    "bazel.project.detector.is.bazel.project": "true",
+    "cf.advertisement.text.overridden": "true",
+    "cf.first.check.clang-format": "false",
+    "cidr.known.project.marker": "true",
+    "codeWithMe.voiceChat.enabledByDefault": "false",
+    "ctest.advertisement.all.test.configuration.is.created": "true",
+    "git-widget-placeholder": "main",
+    "last_opened_file_path": "/home/ice/CLionProjects/Erebus",
+    "node.js.detected.package.jshint": "true",
+    "node.js.selected.package.jshint": "",
+    "nodejs_package_manager_path": "npm",
+    "org.rust.first.attach.projects": "true",
+    "settings.editor.selected.configurable": "preferences.pluginManager",
+    "vue.rearranger.settings.migration": "true"
   }
-}</component>
+}]]></component>
   <component name="RecentsManager">
     <key name="MoveFile.RECENT_KEYS">
       <recent name="$PROJECT_DIR$/kernel/include/utils/locks" />
@@ -191,11 +196,6 @@
       </method>
     </configuration>
     <configuration name="Zydis" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true" PROJECT_NAME="Erebus" TARGET_NAME="Zydis" CONFIG_NAME="Debug">
-      <method v="2">
-        <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
-      </method>
-    </configuration>
-    <configuration default="true" type="CMakeRunConfiguration" factoryName="Application" REDIRECT_INPUT="false" ELEVATE="false" USE_EXTERNAL_CONSOLE="false" EMULATE_TERMINAL="false" PASS_PARENT_ENVS_2="true">
       <method v="2">
         <option name="com.jetbrains.cidr.execution.CidrBuildBeforeRunTaskProvider$BuildBeforeRunTask" enabled="true" />
       </method>
@@ -333,6 +333,7 @@
       </method>
     </configuration>
     <list>
+      <item itemvalue="Google Test.klib_tests" />
       <item itemvalue="CMake Application.Zycore" />
       <item itemvalue="CMake Application.Zydis" />
       <item itemvalue="CMake Application.docs" />
@@ -351,7 +352,6 @@
       <item itemvalue="CMake Application.qemu_vars" />
       <item itemvalue="CMake Application.uacpi" />
       <item itemvalue="CTest Application.All CTest" />
-      <item itemvalue="Google Test.klib_tests" />
     </list>
   </component>
   <component name="SelectedDebugProfileService">{

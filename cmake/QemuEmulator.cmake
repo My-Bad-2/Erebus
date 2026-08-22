@@ -87,7 +87,7 @@ function(add_qemu_targets TARGET_PREFIX)
             -drive if=pflash,format=raw,readonly=on,file=${ARG_OVMF_CODE}
             -drive if=pflash,format=raw,readonly=off,file=${LOCAL_OVMF_VARS}
 
-            -serial stdio        # Routes COM1 serial output directly to the host terminal
+            -serial mon:stdio    # Routes COM1 serial output directly to the host terminal
             -d guest_errors      # Dumps invalid memory accesses and I/O to the console
             -no-reboot           # Halts on triple fault instead of looping endlessly
             -no-shutdown         # Keeps the monitor alive after guest shutdown

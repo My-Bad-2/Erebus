@@ -169,4 +169,23 @@ public:
   ExclusiveIrqSaveGuard(const ExclusiveIrqSaveGuard &) = delete;
   ExclusiveIrqSaveGuard &operator=(const ExclusiveIrqSaveGuard &) = delete;
 };
+
+class [[nodiscard]] IrqDisableGuard {
+  std::uint64_t m_saved_flags;
+
+public:
+  explicit IrqDisableGuard() noexcept {
+    m_saved_flags = hw::irq::read_flags();
+    hw::irq::disable();
+    hw::percpu::preempt_disable();
+  }
+
+  ~IrqDisableGuard() noexcept {
+    hw::percpu::preempt_enable();
+    hw::irq::write_flags(m_saved_flags);
+  }
+
+  IrqDisableGuard(const IrqDisableGuard &) = delete;
+  IrqDisableGuard &operator=(const IrqDisableGuard &) = delete;
+};
 } // namespace kernel::utils

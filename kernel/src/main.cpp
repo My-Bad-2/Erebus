@@ -7,6 +7,7 @@
 #include "hal/hal.hpp"
 #include "hal/patcher.hpp"
 #include "hal/percpu.hpp"
+#include "memory/memory.hpp"
 
 namespace kernel {
 namespace {
@@ -26,6 +27,7 @@ extern "C" void _start() noexcept {
   hw::patcher::apply_all_boot_patches();
 
   drivers::acpi::early_initialize();
+  memory::initialize();
 
   utils::logger::info("{} by {}\n", cpu_info->brand_string(), cpu_info->vendor_string());
 

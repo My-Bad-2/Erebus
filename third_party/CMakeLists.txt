@@ -37,14 +37,17 @@ add_subdirectory(ovmf)
 add_subdirectory(uacpi-wrapper)
 
 set(ZYDIS_FEATURE_FORMATTER OFF FORCE)
+set(ZYAN_WHOLE_PROGRAM_OPTIMIZATION ON FORCE)
+set(ZYAN_NO_LIBC ON FORCE)
 
-add_subdirectory(zydis)
+add_subdirectory(zydis EXCLUDE_FROM_ALL)
+
 target_compile_options(Zydis PRIVATE
-        -fno-stack-protector
-        -mcmodel=kernel
-        -mno-red-zone
-        -mgeneral-regs-only
-        -mno-80387
+        $<TARGET_PROPERTY:os_base_flags,INTERFACE_COMPILE_OPTIONS>
+)
+
+target_compile_options(Zycore PRIVATE
+        $<TARGET_PROPERTY:os_base_flags,INTERFACE_COMPILE_OPTIONS>
 )
 
 if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/freestanding-cxx-hdrs-gnu/README")
