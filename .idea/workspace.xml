@@ -43,23 +43,11 @@
   <component name="ChangeListManager">
     <list default="true" id="88f3297f-a857-4315-a795-de78c49ea4e5" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/CMakeLists.txt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cmake/CompilerFlags.cmake" beforeDir="false" afterPath="$PROJECT_DIR$/cmake/CompilerFlags.cmake" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/cmake/QemuEmulator.cmake" beforeDir="false" afterPath="$PROJECT_DIR$/cmake/QemuEmulator.cmake" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/include/boot/boot.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/boot/boot.hpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/include/drivers/acpi/table.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/drivers/acpi/table.hpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/include/hal/percpu.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/hal/percpu.hpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/include/memory/address.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/memory/address.hpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/include/memory/pmm/bootstrap.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/memory/pmm/bootstrap.hpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/kernel/include/memory/pmm/page.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/memory/pmm/page.hpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/include/utils/locks/guards.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/utils/locks/guards.hpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/include/utils/maths.hpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/include/utils/maths.hpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/src/boot/limine.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/boot/limine.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/src/hal/cpu_info.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/hal/cpu_info.cpp" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/kernel/src/main.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/main.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/kernel/src/memory/memory.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/memory/memory.cpp" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/kernel/src/memory/pmm.cpp" beforeDir="false" afterPath="$PROJECT_DIR$/kernel/src/memory/pmm.cpp" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/third_party/CMakeLists.txt" beforeDir="false" afterPath="$PROJECT_DIR$/third_party/CMakeLists.txt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/third_party/zydis" beforeDir="false" afterPath="$PROJECT_DIR$/third_party/zydis" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/third_party/zydis/dependencies/zycore" beforeDir="false" afterPath="$PROJECT_DIR$/third_party/zydis/dependencies/zycore" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -110,8 +98,8 @@
   </component>
   <component name="GithubPullRequestsUISettings">{
   &quot;selectedUrlAndAccountId&quot;: {
-    &quot;url&quot;: &quot;https://github.com/osdev0/freestanding-cxx-hdrs-gnu.git&quot;,
-    &quot;accountId&quot;: &quot;9de9ada0-5c14-4c1e-b794-fafbad4f4f5c&quot;
+    &quot;url&quot;: &quot;https://github.com/My-Bad-2/Erebus.git&quot;,
+    &quot;accountId&quot;: &quot;740da2de-f51e-4c31-a833-5b08ea69ab55&quot;
   }
 }</component>
   <component name="HighlightingSettingsPerFile">
@@ -154,6 +142,7 @@
     "RunOnceActivity.RadMigrateCodeStyle": "true",
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "RunOnceActivity.cidr.known.project.marker": "true",
+    "RunOnceActivity.git.unshallow": "true",
     "RunOnceActivity.readMode.enableVisualFormatting": "true",
     "RunOnceActivity.typescript.service.memoryLimit.init": "true",
     "RunOnceActivity.west.config.association.type.startup.service": "true",

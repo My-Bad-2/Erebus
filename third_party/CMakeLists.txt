@@ -12,8 +12,8 @@ if (GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
     # --depth 1 : Instructs Git to fetch only the exact commit referenced by the
     #             subproject, stripping away the entire repository history.
     execute_process(
-            COMMAND ${GIT_EXECUTABLE} submodule update --init --depth 1
-            WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+            COMMAND ${GIT_EXECUTABLE} submodule update --init --recursive --depth 1
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             RESULT_VARIABLE GIT_SUBMOD_RESULT
             OUTPUT_VARIABLE GIT_SUBMOD_OUTPUT
             ERROR_VARIABLE GIT_SUBMOD_ERROR

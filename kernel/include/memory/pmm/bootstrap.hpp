@@ -55,4 +55,6 @@ public:
 
   void parse(EarlyAllocFn &&alloc) noexcept;
 };
+
+inline TopologyParser g_topology;
 } // namespace kernel::memory::pmm

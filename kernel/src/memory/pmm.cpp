@@ -233,10 +233,9 @@ void initialize(std::span<limine_memmap_entry *> memmap, const std::uint32_t tot
   g_vmemmap_base = vmemmap_virt.as<Page>();
 
   // Parse ACPI topology
-  TopologyParser topology;
-  topology.parse(early_alloc_top_down);
+  g_topology.parse(early_alloc_top_down);
 
-  const std::uint32_t active_nodes = topology.active_nodes();
+  const std::uint32_t active_nodes = g_topology.active_nodes();
   auto **nodes = early_alloc_top_down(sizeof(NumaNode *) * active_nodes, alignof(NumaNode *)).as<NumaNode *>();
   auto *fallbacks =
       early_alloc_top_down(sizeof(Router::FallbackRoute) * active_nodes * active_nodes, 8).as<Router::FallbackRoute>();
@@ -248,7 +247,7 @@ void initialize(std::span<limine_memmap_entry *> memmap, const std::uint32_t tot
 
   for (std::uint32_t i = 0; i < active_nodes; ++i) {
     VirtualAddress node_mem = early_alloc_top_down(sizeof(NumaNode), alignof(NumaNode));
-    const auto &[tier, bandwidth_mbps, base_latency_ns] = topology.get_node_metrics(i);
+    const auto &[tier, bandwidth_mbps, base_latency_ns] = g_topology.get_node_metrics(i);
     nodes[i] = new (node_mem.as<void>()) NumaNode(i, tier, bandwidth_mbps, base_latency_ns);
 
     // Allocate PCP caches for all 3 zones
@@ -262,7 +261,7 @@ void initialize(std::span<limine_memmap_entry *> memmap, const std::uint32_t tot
   auto *slit_matrix = early_alloc_top_down(sizeof(std::uint32_t) * active_nodes * active_nodes, 4).as<std::uint32_t>();
   for (std::uint32_t src = 0; src < active_nodes; ++src) {
     for (std::uint32_t tgt = 0; tgt < active_nodes; ++tgt) {
-      slit_matrix[src * active_nodes + tgt] = topology.get_latency(src, tgt);
+      slit_matrix[src * active_nodes + tgt] = g_topology.get_latency(src, tgt);
     }
   }
 
@@ -331,7 +330,7 @@ void initialize(std::span<limine_memmap_entry *> memmap, const std::uint32_t tot
       PhysicalAddress boundary_end = end_phys;
       bool found_domain = false;
 
-      for (const auto &[base, end, node_id] : topology.domains()) {
+      for (const auto &[base, end, node_id] : g_topology.domains()) {
         if (curr_phys >= base && curr_phys < end) {
           target_node_id = node_id;
           PhysicalAddress domain_end_aligned{utils::maths::align_down(end.value(), PAGE_SIZE)};
@@ -343,7 +342,7 @@ void initialize(std::span<limine_memmap_entry *> memmap, const std::uint32_t tot
 
       // If we're in a gap between SRAT domains, clamp the boundary to the start of the next domain.
       if (!found_domain) {
-        for (const auto &[base, end, node_id] : topology.domains()) {
+        for (const auto &[base, end, node_id] : g_topology.domains()) {
           if (base > curr_phys) {
             PhysicalAddress domain_base_aligned{utils::maths::align_down(base.value(), PAGE_SIZE)};
             boundary_end = std::min(end_phys, domain_base_aligned);
