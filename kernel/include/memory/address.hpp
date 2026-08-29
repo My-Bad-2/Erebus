@@ -5,7 +5,6 @@
 #include <optional>
 
 #include "utils/maths.hpp"
-
 #include <kformat/formatter.hpp>
 
 namespace kernel::memory {
@@ -18,39 +17,34 @@ private:
   ValueType m_address;
 
 public:
-  // Initializes to 0
   constexpr PhysicalAddress() noexcept : m_address{0} {}
   constexpr explicit PhysicalAddress(const ValueType address) noexcept : m_address{address} {}
   explicit PhysicalAddress(std::nullptr_t) = delete;
   template <typename T> explicit PhysicalAddress(T *) = delete;
 
   [[nodiscard]] constexpr ValueType value() const noexcept { return m_address; }
+
   [[nodiscard]] friend constexpr auto operator<=>(PhysicalAddress, PhysicalAddress) noexcept = default;
 
-  // Address + Offset = Address
   [[nodiscard]] friend constexpr PhysicalAddress operator+(const PhysicalAddress addr,
                                                            const OffsetType offset) noexcept {
     return PhysicalAddress{addr.m_address + offset};
   }
 
-  // Offset + Address = Address
   [[nodiscard]] friend constexpr PhysicalAddress operator+(const OffsetType offset,
                                                            const PhysicalAddress addr) noexcept {
     return PhysicalAddress{addr.m_address + offset};
   }
 
-  // Address - Offset = Address
   [[nodiscard]] friend constexpr PhysicalAddress operator-(const PhysicalAddress addr,
                                                            const OffsetType offset) noexcept {
     return PhysicalAddress{addr.m_address - offset};
   }
 
-  // Address - Address = Offset (Distance between two physical addresses)
   [[nodiscard]] friend constexpr OffsetType operator-(const PhysicalAddress lhs, const PhysicalAddress rhs) noexcept {
     return lhs.m_address - rhs.m_address;
   }
 
-  // Compound assignments
   constexpr PhysicalAddress &operator+=(const OffsetType offset) noexcept {
     m_address += offset;
     return *this;
@@ -89,21 +83,39 @@ private:
 public:
   constexpr VirtualAddress() noexcept : m_address{0} {}
   constexpr explicit VirtualAddress(const ValueType address) noexcept : m_address{address} {}
+
   template <typename T> explicit VirtualAddress(T *ptr) noexcept : m_address{reinterpret_cast<ValueType>(ptr)} {}
   constexpr explicit VirtualAddress(std::nullptr_t) noexcept : m_address{0} {}
 
   template <typename T> [[nodiscard]] T *as() const noexcept { return reinterpret_cast<T *>(m_address); }
   [[nodiscard]] constexpr ValueType value() const noexcept { return m_address; }
-  [[nodiscard]] constexpr ValueType page_offset() const noexcept { return m_address & 0xFFF; }
+
+  [[nodiscard]] constexpr explicit operator bool() const noexcept { return m_address != 0; }
+
+  [[nodiscard]] constexpr VirtualAddress canonicalize() const noexcept {
+    const auto signed_addr = static_cast<std::int64_t>(m_address << 16) >> 16;
+    return VirtualAddress{static_cast<ValueType>(signed_addr)};
+  }
+
+  [[nodiscard]] constexpr ValueType page_offset(const std::size_t align = 0x1000) const noexcept {
+    return m_address & (align - 1);
+  }
+
   [[nodiscard]] constexpr ValueType pml1_index() const noexcept { return (m_address >> 12) & 0x1FF; }
   [[nodiscard]] constexpr ValueType pml2_index() const noexcept { return (m_address >> 21) & 0x1FF; }
   [[nodiscard]] constexpr ValueType pml3_index() const noexcept { return (m_address >> 30) & 0x1FF; }
   [[nodiscard]] constexpr ValueType pml4_index() const noexcept { return (m_address >> 39) & 0x1FF; }
   [[nodiscard]] constexpr ValueType pml5_index() const noexcept { return (m_address >> 48) & 0x1FF; }
+
   [[nodiscard]] friend constexpr auto operator<=>(VirtualAddress, VirtualAddress) noexcept = default;
 
   [[nodiscard]] friend constexpr VirtualAddress operator+(const VirtualAddress addr, const OffsetType offset) noexcept {
     return VirtualAddress{addr.m_address + offset};
+  }
+
+  // FIXED: Added missing subtraction operator for offsets
+  [[nodiscard]] friend constexpr VirtualAddress operator-(const VirtualAddress addr, const OffsetType offset) noexcept {
+    return VirtualAddress{addr.m_address - offset};
   }
 
   [[nodiscard]] friend constexpr OffsetType operator-(const VirtualAddress lhs, const VirtualAddress rhs) noexcept {
@@ -121,24 +133,33 @@ public:
   [[nodiscard]] constexpr bool is_aligned(const ValueType alignment) const noexcept {
     return utils::maths::is_aligned(m_address, alignment);
   }
+
+  constexpr VirtualAddress &operator+=(const OffsetType size) noexcept {
+    this->m_address += size;
+    return *this;
+  }
+
+  constexpr VirtualAddress &operator-=(const OffsetType size) noexcept {
+    this->m_address -= size;
+    return *this;
+  }
 };
 
 class DirectMap {
-  inline static std::ptrdiff_t s_hhdm_offset;
-
 public:
-  static void initialize(const std::ptrdiff_t offset) noexcept { s_hhdm_offset = offset; }
+  inline static std::uintptr_t s_hhdm_base{0};
 
-  static constexpr VirtualAddress phys_to_virt(const PhysicalAddress addr) noexcept {
-    return VirtualAddress{addr.value() + s_hhdm_offset};
+  static void initialize(const std::uintptr_t base) noexcept { s_hhdm_base = base; }
+
+  static VirtualAddress phys_to_virt(const PhysicalAddress addr) noexcept {
+    return VirtualAddress{addr.value() + s_hhdm_base};
   }
 
-  static constexpr std::optional<PhysicalAddress> virt_to_phys(const VirtualAddress addr) noexcept {
-    if (addr.value() < static_cast<std::uintptr_t>(s_hhdm_offset)) {
+  static std::optional<PhysicalAddress> virt_to_phys(const VirtualAddress addr) noexcept {
+    if (addr.value() < s_hhdm_base) {
       return std::nullopt;
     }
-
-    return PhysicalAddress{addr.value() - s_hhdm_offset};
+    return PhysicalAddress{addr.value() - s_hhdm_base};
   }
 };
 } // namespace kernel::memory
@@ -148,7 +169,10 @@ template <> struct formatter<kernel::memory::PhysicalAddress> {
   template <typename Sink>
   static constexpr void format(Sink &buf, const kernel::memory::PhysicalAddress &address,
                                const FormatSpec &spec) noexcept {
-    formatter<void *>::format(buf, reinterpret_cast<void *>(address.value()), spec);
+    FormatSpec hex_spec = spec;
+    hex_spec.base = 16;
+    hex_spec.alt_form = true;
+    formatter<std::uintptr_t>::format(buf, address.value(), hex_spec);
   }
 };
 
@@ -156,7 +180,10 @@ template <> struct formatter<kernel::memory::VirtualAddress> {
   template <typename Sink>
   static constexpr void format(Sink &buf, const kernel::memory::VirtualAddress &address,
                                const FormatSpec &spec) noexcept {
-    formatter<void *>::format(buf, reinterpret_cast<void *>(address.value()), spec);
+    FormatSpec hex_spec = spec;
+    hex_spec.base = 16;
+    hex_spec.alt_form = true;
+    formatter<std::uintptr_t>::format(buf, address.value(), hex_spec);
   }
 };
 } // namespace klib

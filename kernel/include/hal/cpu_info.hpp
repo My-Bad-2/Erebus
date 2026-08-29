@@ -135,6 +135,7 @@ enum class Feature : std::uint32_t {
   CET_IBT = make_feat(7, 0, Reg::EDX, 20),
   AMX_BF16 = make_feat(7, 0, Reg::EDX, 22),
   AMX_TILE = make_feat(7, 0, Reg::EDX, 24),
+  CORE_CAPABILITIES = make_feat(7, 0, Reg::EDX, 30),
 
   // Extended Features: Leaf 7, Subleaf 1
   LAM = make_feat(7, 1, Reg::EAX, 26),
@@ -145,12 +146,16 @@ enum class Feature : std::uint32_t {
   SVM = make_feat(0x80000001, 0, Reg::ECX, 2),
   LZCNT = make_feat(0x80000001, 0, Reg::ECX, 5),
   MONITORX = make_feat(0x80000001, 0, Reg::ECX, 29),
+  TCE = make_feat(0x80000001, 0, Reg::ECX, 17),
 
   SYSCALL = make_feat(0x80000001, 0, Reg::EDX, 11),
   NX = make_feat(0x80000001, 0, Reg::EDX, 20),
   GIB = make_feat(0x80000001, 0, Reg::EDX, 26),
   RDTSCP = make_feat(0x80000001, 0, Reg::EDX, 27),
-  LM = make_feat(0x80000001, 0, Reg::EDX, 29)
+  LM = make_feat(0x80000001, 0, Reg::EDX, 29),
+
+  // Leaf 0x80000008
+  INVLPGB = make_feat(0x80000008, 0, Reg::EBX, 3),
 };
 
 class alignas(std::hardware_destructive_interference_size) CpuInfo {

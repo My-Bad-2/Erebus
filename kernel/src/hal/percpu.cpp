@@ -9,5 +9,8 @@ PerCpu bsp;
 void early_initialize() noexcept {
   new (&bsp) PerCpu();
   write::gs_base(reinterpret_cast<std::uintptr_t>(&bsp));
+
+  [[maybe_unused]] auto _ = profile_manager.register_cpu();
+  memory::vmm::early_initialize_hw();
 }
 } // namespace kernel::hw::percpu

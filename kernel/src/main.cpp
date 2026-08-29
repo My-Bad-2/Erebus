@@ -1,6 +1,7 @@
 #include "drivers/acpi.hpp"
 #include "drivers/uart.hpp"
 
+#include "utils/hashmap.hpp"
 #include "utils/logger.hpp"
 
 #include "hal/cpu_info.hpp"
@@ -21,15 +22,11 @@ extern "C" void _start() noexcept {
   utils::logger::info("Hello, World!\n");
 
   hw::percpu::early_initialize();
-
-  const auto cpu_info = hw::profile_manager.register_cpu();
   hw::initialize();
   hw::patcher::apply_all_boot_patches();
 
   drivers::acpi::early_initialize();
   memory::initialize();
-
-  utils::logger::info("{} by {}\n", cpu_info->brand_string(), cpu_info->vendor_string());
 
   utils::logger::info("Hello, World!\n");
   hw::cpu_idle_loop(&runqueue_count);

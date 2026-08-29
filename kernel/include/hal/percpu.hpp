@@ -6,6 +6,7 @@
 
 #include "gs.hpp"
 #include "memory/pmm/pcp_cache.hpp"
+#include "memory/vmm/tlb.hpp"
 #include "utils/locks/locks.hpp"
 
 namespace kernel::hw {
@@ -31,6 +32,8 @@ struct alignas(std::hardware_destructive_interference_size) PerCpu {
   std::array<utils::CLHNode, 2> node;
   utils::CLHNode *curr_node{&node[0]};
   utils::CLHNode *prev_node{&node[1]};
+
+  memory::vmm::tlb::PcidManager pcid_manager;
 
   constexpr explicit PerCpu() noexcept = default;
 };
@@ -112,6 +115,8 @@ inline constexpr std::size_t NMI_MCE_BYTE = CTX_BASE + 4; // Nibble-split
   const auto combined_state = gs::read<PREEMPT_BYTE, std::uint32_t>();
   return combined_state == 0;
 }
+
+[[nodiscard]] inline memory::vmm::tlb::PcidManager &pcid_manager() noexcept { return self()->pcid_manager; }
 
 void early_initialize() noexcept;
 } // namespace percpu

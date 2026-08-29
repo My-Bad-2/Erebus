@@ -31,7 +31,7 @@ SECTIONS {
 
     .text : {
         __text_start = .;
-
+        *(.text .text.*)
         *(.text.hot .text.hot.*)
         *(.text.unlikely .text.unlikely.*)
         . = ALIGN(64);
@@ -123,7 +123,7 @@ SECTIONS {
         *(.init.static_keys)
         __stop_static_keys = .;
 
-            /* C++ Constructors */
+        /* C++ Constructors */
         . = ALIGN(8);
         __preinit_array_start = .;
         KEEP(*(.preinit_array))

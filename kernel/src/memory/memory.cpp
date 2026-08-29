@@ -3,6 +3,7 @@
 #include "memory/address.hpp"
 #include "memory/heap.hpp"
 #include "memory/pmm.hpp"
+#include "memory/vmm.hpp"
 #include "utils/logger.hpp"
 
 #include <span>
@@ -15,5 +16,6 @@ void initialize() {
   DirectMap::initialize(boot::hhdm_request.response->offset);
   pmm::initialize(memmap, total_cpus);
   heap::initialize();
+  vmm::initialize(memmap);
 }
 } // namespace kernel::memory

@@ -8,32 +8,31 @@
 namespace kernel::utils::maths {
 template <std::unsigned_integral T, std::unsigned_integral U>
 [[nodiscard, gnu::always_inline]] constexpr T align_down(T n, U a) noexcept {
-  [[assume(std::has_single_bit(a))]];
+  [[assume(a > 0)]];
   return n & ~static_cast<T>(a - 1);
 }
 
 template <std::unsigned_integral T, std::unsigned_integral U>
 [[nodiscard, gnu::always_inline]] constexpr T align_up(T n, U a) noexcept {
-  [[assume(std::has_single_bit(a))]];
+  [[assume(a > 0)]];
   return n + static_cast<T>(a) - 1 & ~static_cast<T>(a - 1);
 }
 
 template <std::unsigned_integral T, std::unsigned_integral U>
 [[nodiscard, gnu::always_inline]] constexpr T div_round_up(T n, U a) noexcept {
-  [[assume(std::has_single_bit(a))]];
+  [[assume(a > 0)]];
   return (n + static_cast<T>(a) - 1) >> std::countr_zero(a);
 }
 
 template <std::unsigned_integral T, std::unsigned_integral U>
 [[nodiscard, gnu::always_inline]] constexpr T div_round_down(T n, U a) noexcept {
-  [[assume(std::has_single_bit(a))]];
-
+  [[assume(a > 0)]];
   return n >> std::countr_zero(a);
 }
 
 template <std::unsigned_integral T, std::unsigned_integral U>
 [[nodiscard, gnu::always_inline]] constexpr bool is_aligned(T n, U a) noexcept {
-  [[assume(std::has_single_bit(a))]];
+  [[assume(a > 0)]];
   return (n & static_cast<T>(a - 1)) == 0;
 }
 

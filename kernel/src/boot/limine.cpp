@@ -33,4 +33,18 @@ volatile limine_mp_request mp_request = {
     .response = nullptr,
     .flags = LIMINE_MP_REQUEST_X86_64_X2APIC,
 };
+
+[[gnu::section(".limine_requests")]]
+volatile limine_executable_address_request executable_address_request = {
+  .id = LIMINE_EXECUTABLE_ADDRESS_REQUEST_ID,
+  .revision = 0,
+  .response = nullptr,
+};
+
+[[gnu::section(".limine_requests")]]
+volatile limine_executable_file_request executable_file_request = {
+  .id = LIMINE_EXECUTABLE_FILE_REQUEST_ID,
+  .revision = 0,
+  .response = nullptr,
+};
 } // namespace kernel::boot

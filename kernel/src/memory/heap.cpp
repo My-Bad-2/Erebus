@@ -4,11 +4,23 @@
 #include "memory/address.hpp"
 #include "memory/pmm.hpp"
 #include "memory/pmm/bootstrap.hpp"
+#include "string.h"
 #include "utils/logger.hpp"
+#include <new>
 
 namespace kernel::memory::heap {
 namespace {
 constexpr std::uint16_t SLUB_NO_IDX = 0xFFFF;
+
+constexpr std::uint32_t KMALLOC_MIN_SHIFT = 3;  // 2^3 = 8 bytes
+constexpr std::uint32_t KMALLOC_MAX_SHIFT = 15; // 2^15 = 32KB
+constexpr std::uint32_t NUM_KMALLOC_CACHES = KMALLOC_MAX_SHIFT - KMALLOC_MIN_SHIFT + 1;
+
+KmemCache *g_meta_cache = nullptr;
+KmemCache *g_meta_cpu_array = nullptr;
+KmemCache *g_meta_node_array = nullptr;
+
+KmemCache *g_kmalloc_caches[NUM_KMALLOC_CACHES] = {nullptr};
 
 char *page_to_virt(const pmm::Page *page) noexcept {
   return DirectMap::phys_to_virt(pmm::page_to_phys(page)).as<char>();
@@ -23,9 +35,11 @@ pmm::Page *virt_to_page(void *ptr) noexcept {
   return pmm::phys_to_page(*phys);
 }
 
-KmemCache *g_meta_cache = nullptr;
-KmemCache *g_meta_cpu_array = nullptr;
-KmemCache *g_meta_node_array = nullptr;
+[[nodiscard]] std::uint32_t size_to_index(const std::size_t size) noexcept {
+  const std::size_t aligned_size = std::bit_ceil(std::max<std::size_t>(size, 1 << KMALLOC_MIN_SHIFT));
+  const std::uint32_t shift = std::countr_zero(aligned_size);
+  return shift - KMALLOC_MIN_SHIFT;
+}
 } // namespace
 
 void initialize() noexcept {
@@ -87,6 +101,17 @@ void initialize() noexcept {
   g_meta_cache = carve_mother_cache("kmem_meta_cache", sizeof(KmemCache));
   g_meta_cpu_array = carve_mother_cache("kmem_meta_cpu", sizeof(CpuCache) * total_numa_nodes);
   g_meta_node_array = carve_mother_cache("kmem_meta_node_array", sizeof(NodeCache) * total_numa_nodes);
+
+  for (std::uint32_t i = 0; i < NUM_KMALLOC_CACHES; ++i) {
+    const std::uint32_t size = 1 << (i + KMALLOC_MIN_SHIFT);
+
+    const auto cache = KmemCache::create("generic-kmem-cache", size, sizeof(void *));
+    if (cache) {
+      g_kmalloc_caches[i] = *cache;
+    } else {
+      utils::logger::fatal("Failed to allocate generic caches for Kmalloc!");
+    }
+  }
 }
 
 std::expected<KmemCache *, Error> KmemCache::create(const std::string_view name, const std::uint32_t obj_size,
@@ -436,4 +461,150 @@ pmm::Page *KmemCache::pop_from_node_partial(std::uint32_t node_id) noexcept {
 
   return page;
 }
+
+void *kmalloc(const std::size_t size, const std::size_t alignment) noexcept {
+  if (size == 0) [[unlikely]] {
+    return nullptr;
+  }
+
+  const std::size_t required_size = std::max(size, alignment);
+  const std::uint32_t index = size_to_index(required_size);
+
+  if (index < NUM_KMALLOC_CACHES) [[likely]] {
+    KmemCache *cache = g_kmalloc_caches[index];
+    const auto res = cache->alloc();
+    return res ? *res : nullptr;
+  }
+
+  // The request is > 32 kb. Directly ask the PMM
+  std::uint8_t order = 0;
+  while ((PAGE_SIZE << order) < required_size) {
+    order++;
+  }
+
+  auto raw_page = pmm::alloc_pages(pmm::PageMobility::Movable, order);
+  if (!raw_page) {
+    return nullptr;
+  }
+
+  pmm::Page *page = pmm::phys_to_page(*raw_page);
+  page->set_mobility(pmm::PageMobility::Unmovable);
+  page->set_state(pmm::PageState::Active);
+
+  page->slub.cache = nullptr;
+  return page_to_virt(page);
+}
+
+void kfree(void *ptr) noexcept {
+  if (!ptr) [[unlikely]] {
+    return;
+  }
+
+  const pmm::Page *page = virt_to_page(ptr);
+  KmemCache *cache = page->slub.cache;
+
+  if (cache) [[likely]] {
+    cache->free(ptr);
+  } else {
+    const std::uint8_t order = page->get_order();
+    pmm::free_pages(pmm::page_to_phys(page), order);
+  }
+}
+
+void *krealloc(void *ptr, const std::size_t new_size, const std::size_t align) noexcept {
+  if (new_size == 0) {
+    kfree(ptr);
+    return nullptr;
+  }
+
+  if (ptr == nullptr) {
+    return kmalloc(new_size, align);
+  }
+
+  const pmm::Page *page = virt_to_page(ptr);
+  const KmemCache *old_cache = page->slub.cache;
+
+  std::size_t old_size;
+  if (old_cache != nullptr) {
+    old_size = old_cache->size();
+  } else {
+    old_size = PAGE_SIZE << page->get_order();
+  }
+
+  const std::size_t required_size = std::max(new_size, align);
+  if (old_size >= required_size) {
+    if (utils::maths::is_aligned(reinterpret_cast<std::uintptr_t>(ptr), align)) {
+      return ptr;
+    }
+  }
+
+  void *new_ptr = kmalloc(new_size, align);
+  if (!new_ptr) {
+    return nullptr;
+  }
+
+  klib::memcpy(new_ptr, ptr, std::min(old_size, new_size));
+  kfree(ptr);
+  return new_ptr;
+}
 } // namespace kernel::memory::heap
+
+using namespace kernel::memory::heap;
+[[nodiscard]] void *operator new(const std::size_t size) {
+  void *ptr = kmalloc(size);
+  if (!ptr) [[unlikely]] {
+    kernel::utils::logger::fatal("Out of memory in operator new");
+  }
+
+  return ptr;
+}
+
+[[nodiscard]] void *operator new[](const std::size_t size) {
+  void *ptr = kmalloc(size);
+  if (!ptr) [[unlikely]] {
+    kernel::utils::logger::fatal("Out of memory in operator new[]");
+  }
+
+  return ptr;
+}
+
+[[nodiscard]] void *operator new(const std::size_t size, const std::nothrow_t &) noexcept { return kmalloc(size); }
+[[nodiscard]] void *operator new[](const std::size_t size, const std::nothrow_t &) noexcept { return kmalloc(size); }
+
+[[nodiscard]] void *operator new(std::size_t size, std::align_val_t alignment) {
+  void *ptr = kmalloc(size, static_cast<std::size_t>(alignment));
+  if (!ptr) [[unlikely]] {
+    kernel::utils::logger::fatal("Out of memory in aligne doperator new");
+  }
+
+  return ptr;
+}
+
+[[nodiscard]] void *operator new[](const std::size_t size, std::align_val_t alignment) {
+  void *ptr = kmalloc(size, static_cast<std::size_t>(alignment));
+  if (!ptr) [[unlikely]] {
+    kernel::utils::logger::fatal("Out of memory in aligned operator new[]");
+  }
+
+  return ptr;
+}
+
+[[nodiscard]] void *operator new(std::size_t size, std::align_val_t alignment, const std::nothrow_t &) noexcept {
+  return kmalloc(size, static_cast<std::size_t>(alignment));
+}
+
+[[nodiscard]] void *operator new[](std::size_t size, std::align_val_t alignment, const std::nothrow_t &) noexcept {
+  return kmalloc(size, static_cast<std::size_t>(alignment));
+}
+
+void operator delete(void *ptr) noexcept { kfree(ptr); }
+void operator delete[](void *ptr) noexcept { kfree(ptr); }
+
+void operator delete(void *ptr, std::size_t /* size */) noexcept { kfree(ptr); }
+void operator delete[](void *ptr, std::size_t /* size */) noexcept { kfree(ptr); }
+
+void operator delete(void *ptr, std::align_val_t /* alignment */) noexcept { kfree(ptr); }
+void operator delete[](void *ptr, std::align_val_t /* alignment */) noexcept { kfree(ptr); }
+
+void operator delete(void *ptr, std::size_t /* size */, std::align_val_t /* alignment */) noexcept { kfree(ptr); }
+void operator delete[](void *ptr, std::size_t /* size */, std::align_val_t /* alignment */) noexcept { kfree(ptr); }

@@ -59,6 +59,8 @@ public:
   KmemCache(const KmemCache &) = delete;
   KmemCache &operator=(const KmemCache &) = delete;
 
+  [[nodiscard]] std::uint32_t size() const noexcept { return m_size; }
+
   [[nodiscard]] static std::expected<KmemCache *, Error> create(std::string_view name, std::uint32_t obj_size,
                                                                 std::uint32_t alignment) noexcept;
 
@@ -67,4 +69,8 @@ public:
 };
 
 void initialize() noexcept;
+
+[[nodiscard]] void *kmalloc(std::size_t size, std::size_t alignment = sizeof(void *)) noexcept;
+void kfree(void *obj) noexcept;
+[[nodiscard]] void *krealloc(void *ptr, std::size_t new_size, std::size_t align = sizeof(void *)) noexcept;
 } // namespace kernel::memory::heap
