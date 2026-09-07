@@ -114,6 +114,59 @@ void initialize() noexcept {
   }
 }
 
+void KmemCache::destroy() noexcept {
+  for (auto &cpu : m_cpu_caches) {
+    if (cpu.page) {
+      cpu.page->set_state(pmm::PageState::Free);
+      cpu.page->set_mobility(pmm::PageMobility::Movable);
+      pmm::free_pages(pmm::page_to_phys(cpu.page), m_order);
+
+      cpu.page = nullptr;
+    }
+
+    pmm::Page *current_partial = cpu.cpu_partial;
+    while (current_partial) {
+      pmm::Page *next = current_partial->next_partial;
+
+      current_partial->set_state(pmm::PageState::Free);
+      current_partial->set_mobility(pmm::PageMobility::Movable);
+      pmm::free_pages(pmm::page_to_phys(current_partial), m_order);
+
+      current_partial = next;
+    }
+
+    cpu.cpu_partial = nullptr;
+    cpu.partial_count = 0;
+  }
+
+  for (auto &[lock, num_partial, partial_head, partial_tail] : m_node_caches) {
+    utils::IrqSaveGuard guard(lock);
+
+    pmm::Page *current = partial_head;
+    while (current) {
+      pmm::Page *next = current->next_partial;
+
+      current->set_state(pmm::PageState::Free);
+      current->set_mobility(pmm::PageMobility::Movable);
+      pmm::free_pages(pmm::page_to_phys(current), m_order);
+
+      current = next;
+    }
+
+    partial_head = nullptr;
+    partial_tail = nullptr;
+    num_partial = 0;
+  }
+
+  void *cpu_array_ptr = m_cpu_caches.data();
+  void *node_array_ptr = m_node_caches.data();
+
+  g_meta_cpu_array->free(cpu_array_ptr);
+  g_meta_node_array->free(node_array_ptr);
+
+  g_meta_cache->free(this);
+}
+
 std::expected<KmemCache *, Error> KmemCache::create(const std::string_view name, const std::uint32_t obj_size,
                                                     const std::uint32_t alignment) noexcept {
   const std::uint32_t total_cpus = boot::mp_request.response->cpu_count;

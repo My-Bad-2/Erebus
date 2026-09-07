@@ -1,6 +1,6 @@
 #pragma once
 
-#include "memory/vmm/pagemap.hpp"
+#include "pagemap.hpp"
 
 #include "hal/hal.hpp"
 #include "hal/patcher.hpp"

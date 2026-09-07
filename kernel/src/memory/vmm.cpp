@@ -1,6 +1,7 @@
 #include "memory/vmm.hpp"
 
 #include "hal/percpu.hpp"
+#include "memory/vmm/vma/vma.hpp"
 #include "utils/logger.hpp"
 
 extern "C" {
@@ -18,7 +19,8 @@ extern std::uint8_t __init_end[];
 
 namespace kernel::memory::vmm {
 namespace {
-PageMap *kernel_pagemap = nullptr;
+AddressSpace *g_kernel_space{nullptr};
+constexpr std::uintptr_t KERNEL_VMA_HEAP_ADDR{0xFFFFC00000000000};
 
 [[nodiscard]] constexpr CacheMode determine_cache_mode(std::uint64_t limine_type) noexcept {
   switch (limine_type) {
@@ -38,17 +40,14 @@ PageMap *kernel_pagemap = nullptr;
 }
 } // namespace
 
-const PageMap *get_kernel_pagemap() noexcept { return kernel_pagemap; }
+const AddressSpace *kernel_space() noexcept { return g_kernel_space; }
 
 void initialize(std::span<limine_memmap_entry *> memmap) noexcept {
   initialize_hw();
+  AddressSpace::initialize();
 
-  auto pagemap_res = PageMap::create();
-  if (!pagemap_res) {
-    utils::logger::fatal("Unable to create pagemap! error: {}\n", std::to_underlying(pagemap_res.error()));
-  }
-
-  kernel_pagemap = *pagemap_res;
+  g_kernel_space = new AddressSpace(VirtualAddress{KERNEL_VMA_HEAP_ADDR});
+  PageMap *kernel_pagemap = &g_kernel_space->pagemap();
 
   constexpr AccessFlags hhdm_flags = AccessFlags::Read | AccessFlags::Write | AccessFlags::Global;
   for (const limine_memmap_entry *entry : memmap) {

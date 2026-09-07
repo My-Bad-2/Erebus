@@ -1,5 +1,5 @@
 #include "memory/pmm.hpp"
-#include "memory/vmm/pagemap.hpp"
+#include "memory/vmm/pagemap/pagemap.hpp"
 
 namespace kernel::memory::vmm {
 std::expected<PhysicalAddress, Error> PageMap::unmap_1gb_as_2mb(const VirtualAddress virt) noexcept {

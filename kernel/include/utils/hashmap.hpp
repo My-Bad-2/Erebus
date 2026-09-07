@@ -22,7 +22,7 @@ constexpr std::uint8_t CTRL_DELETED = 0xC0;
 
 [[nodiscard]] inline std::uint64_t hash_key(const std::uint64_t key) noexcept {
   std::uint64_t hash = 0x9e3779b97f4a7c15ul;
-  hash = _mm_crc32_u64(hash, key);
+  asm volatile("crc32q %1, %0" : "+r"(hash) : "rm"(key));
   return hash ^ (hash >> 32);
 }
 
@@ -45,46 +45,30 @@ template <KernelKey K, typename V> struct alignas(std::hardware_destructive_inte
   std::uint8_t *ctrl;
   K *keys;
   V **values;
-
-  QSpinlock *group_locks; // 1 lock per 64 slots
 };
 
-template <KernelKey K, typename V> class FastHashMap {
-  alignas(std::hardware_destructive_interference_size) RWLock m_global_lock;
+template <KernelKey K, typename V, std::size_t NumShards = 64> class FastHashMap {
+  static_assert(std::has_single_bit(NumShards), "NumShards must be a power of 2");
 
-  MapTable<K, V> *m_table{nullptr};
-  memory::heap::KmemCache *m_value_cache{nullptr};
-  std::atomic<std::size_t> m_size{0};
+  struct alignas(std::hardware_destructive_interference_size) Shard {
+    mutable RWLock lock;
+    MapTable<K, V> *table{nullptr};
+    std::size_t size{0};
+  };
+
+  Shard m_shards[NumShards];
 
   [[nodiscard]] MapTable<K, V> *allocate_table(std::uint32_t capacity) noexcept {
     auto *tbl = new MapTable<K, V>();
-    if (!tbl) [[unlikely]] {
-      return nullptr;
-    }
 
     tbl->capacity = capacity;
     tbl->mask = capacity - 1;
 
     tbl->ctrl = new std::uint8_t[capacity + 8];
-    if (tbl->ctrl) {
-      klib::memset(tbl->ctrl, CTRL_EMPTY, capacity + 8);
-    }
+    tbl->keys = new K[capacity];
+    tbl->values = new V *[capacity];
 
-    tbl->keys = new (std::nothrow) K[capacity];
-    tbl->values = new (std::nothrow) V *[capacity];
-
-    const std::uint32_t num_groups = capacity / 64;
-    tbl->group_locks = new (std::nothrow) QSpinlock[num_groups];
-
-    if (!tbl->ctrl || !tbl->keys || !tbl->values || !tbl->group_locks) {
-      delete[] tbl->group_locks;
-      delete[] tbl->values;
-      delete[] tbl->keys;
-      delete[] tbl->ctrl;
-      delete tbl;
-      return nullptr;
-    }
-
+    klib::memset(tbl->ctrl, CTRL_EMPTY, capacity + 8);
     return tbl;
   }
 
@@ -93,7 +77,6 @@ template <KernelKey K, typename V> class FastHashMap {
       return;
     }
 
-    delete[] tbl->group_locks;
     delete[] tbl->values;
     delete[] tbl->keys;
     delete[] tbl->ctrl;
@@ -102,11 +85,13 @@ template <KernelKey K, typename V> class FastHashMap {
 
   void insert_no_lock(MapTable<K, V> *tbl, K key, V *val, std::uint8_t sig) noexcept {
     std::uint32_t idx = (hash_key(key) & tbl->mask) & ~7u;
+
     while (true) {
-      const auto ctrl_word = *reinterpret_cast<const std::uint64_t *>(&tbl->ctrl[idx]);
+      const auto ctrl_word = *reinterpret_cast<std::uint64_t *>(&tbl->ctrl[idx]);
       const std::uint64_t usable = swar_match_usable(ctrl_word);
 
       if (usable) {
+        // Bit pos it offset by max 7 slots. target max is (capacity - 8) + 7 = capacity - 1
         std::uint32_t target = idx + (std::countr_zero(usable) >> 3);
         tbl->keys[target] = key;
         tbl->values[target] = val;
@@ -118,40 +103,33 @@ template <KernelKey K, typename V> class FastHashMap {
     }
   }
 
-  [[gnu::cold]] void rehash() noexcept {
-    ExclusivePreemptGuard guard(m_global_lock);
+  [[gnu::cold]] bool rehash(Shard &shard) noexcept {
+    MapTable<K, V> *old_tbl = shard.table;
+    MapTable<K, V> *new_tbl = allocate_table(old_tbl->capacity * 2);
 
-    if (m_size.load(std::memory_order_relaxed) * 8 <= m_table->capacity * 7) {
-      return;
-    }
-
-    MapTable<K, V> *new_tbl = allocate_table(m_table->capacity * 2);
-    if (!new_tbl) [[unlikely]] {
-      return;
-    }
-
-    for (std::uint32_t i = 0; i < m_table->capacity; ++i) {
-      if ((m_table->ctrl[i] & CTRL_EMPTY) == 0) {
-        insert_no_lock(new_tbl, m_table->keys[i], m_table->values[i], m_table->ctrl[i]);
+    for (std::uint32_t i = 0; i < old_tbl->capacity; ++i) {
+      if ((old_tbl->ctrl[i] & CTRL_EMPTY) == 0) {
+        insert_no_lock(new_tbl, old_tbl->keys[i], old_tbl->values[i], old_tbl->ctrl[i]);
       }
     }
 
     free_table(new_tbl);
-    m_table = new_tbl;
+    shard.table = new_tbl;
+    return true;
   }
 
 public:
-  explicit FastHashMap() noexcept { m_table = allocate_table(128); }
+  explicit FastHashMap() noexcept {
+    for (std::size_t i = 0; i < NumShards; ++i) {
+      // 16 is the minimum capacity required for safe SWAR reads
+      m_shards[i].table = allocate_table(16);
+    }
+  }
 
   ~FastHashMap() noexcept {
-    if (m_table) {
-      for (std::uint32_t i = 0; i < m_table->capacity; ++i) {
-        if ((m_table->ctrl[i] & CTRL_EMPTY) == 0) {
-          delete m_table->values[i];
-        }
-      }
-
-      free_table(m_table);
+    for (std::size_t i = 0; i < NumShards; ++i) {
+      // We do not assume ownership of V* objects, that is left to the caller
+      free_table(m_shards[i].table);
     }
   }
 
@@ -159,189 +137,149 @@ public:
     const std::uint64_t hash = hash_key(key);
     const std::uint8_t sig = static_cast<std::uint8_t>(hash >> 57) & 0x7F;
 
-    SharedPreemptGuard guard(m_global_lock);
-    MapTable<K, V> *tbl = m_table;
+    const std::size_t shard_idx = hash & (NumShards - 1);
+    Shard &shard = m_shards[shard_idx];
 
-    [[assume(tbl->capacity >= 64 && (tbl->capacity & tbl->mask) == 0)]];
+    SharedPreemptGuard guard(shard.lock);
+    MapTable<K, V> *tbl = shard.table;
+
+    [[assume(tbl->capacity >= 16 && (tbl->capacity & tbl->mask) == 0)]];
 
     std::uint32_t idx = (hash & tbl->mask) & ~7u;
-    std::uint32_t curr_group = idx / 64;
 
     while (true) {
-      bool cross_group = false;
-      {
-        NakedGuard group_guard(tbl->group_locks[curr_group]);
+      const std::uint64_t ctrl_word = *reinterpret_cast<const std::uint64_t *>(&tbl->ctrl[idx]);
+      std::uint64_t match_mask = swar_match_sig(ctrl_word, sig);
 
-        while (true) {
-          const std::uint64_t ctrl_word = *reinterpret_cast<const std::uint64_t *>(&tbl->ctrl[idx]);
-          std::uint64_t match_mask = swar_match_sig(ctrl_word, sig);
+      while (match_mask) {
+        const int bit_pos = std::countr_zero(match_mask);
+        std::uint32_t target_idx = idx + (bit_pos >> 3);
 
-          while (match_mask) {
-            const int bit_pos = std::countr_zero(match_mask);
-            std::uint32_t target_idx = idx + (bit_pos >> 3);
-
-            if (tbl->keys[target_idx] == key) [[likely]] {
-              return tbl->values[target_idx];
-            }
-
-            match_mask &= ~(0xFFul << bit_pos);
-          }
-
-          if (swar_match_sig(ctrl_word, CTRL_EMPTY)) {
-            return nullptr;
-          }
-
-          idx = (idx + 8) & tbl->mask;
-          if ((idx / 64) != curr_group) {
-            curr_group = idx / 64;
-            cross_group = true;
-            break;
-          }
+        if (tbl->keys[target_idx] == key) [[likely]] {
+          return tbl->values[target_idx];
         }
+
+        match_mask &= ~(0xFFul << bit_pos);
       }
 
-      if (!cross_group) {
-        break;
+      if (swar_match_sig(ctrl_word, CTRL_EMPTY)) {
+        return nullptr;
       }
+
+      idx = (idx + 8) & tbl->mask;
     }
-
-    return nullptr;
   }
 
   bool insert(K key, V *value) noexcept {
-    if (m_size.load(std::memory_order_relaxed) * 8 > m_table->capacity * 7) {
-      rehash();
-    }
-
-    const std::uint64_t hash = hash_key_x86(key);
+    const std::uint64_t hash = hash_key(key);
     const std::uint8_t sig = static_cast<std::uint8_t>(hash >> 57) & 0x7F;
 
-  retry:
-    SharedPreemptGuard global_guard(m_global_lock);
-    MapTable<K, V> *tbl = m_table;
+    const std::size_t shard_idx = hash & (NumShards - 1);
+    Shard &shard = m_shards[shard_idx];
 
-    std::uint32_t idx = (hash & tbl->mask) & ~7U;
-    std::uint32_t curr_group = idx / 64;
+    ExclusivePreemptGuard guard(shard.lock);
 
-    std::uint32_t target_slot = 0xFFFFFFFF;
-    std::uint32_t target_group = 0;
+    if (shard.size * 8 > shard.table->capacity * 7) {
+      if (!rehash(shard) && shard.size >= shard.table->capacity * 7 / 8) {
+        return false;
+      }
+    }
+
+    MapTable<K, V> *tbl = shard.table;
+    std::uint32_t idx = (hash & tbl->mask) & ~7u;
+    std::uint32_t target_slot = std::numeric_limits<std::uint32_t>::max();
 
     while (true) {
-      bool cross_group = false;
-      {
-        NakedGuard group_guard(tbl->group_locks[curr_group]);
+      const std::uint64_t ctrl_word = *reinterpret_cast<std::uint64_t *>(&tbl->ctrl[idx]);
+      std::uint64_t match_mask = swar_match_sig(ctrl_word, sig);
 
-        while (true) {
-          std::uint64_t ctrl_word = *reinterpret_cast<const std::uint64_t *>(&tbl->ctrl[idx]);
-          std::uint64_t match_mask = swar_match_sig(ctrl_word, sig);
+      while (match_mask) {
+        const int bit_pos = std::countr_zero(match_mask);
+        std::uint32_t chk_idx = idx + (bit_pos >> 3);
+        if (tbl->keys[chk_idx] == key) {
+          // Duplicate
+          return false;
+        }
 
-          while (match_mask) {
-            const int bit_pos = std::countr_zero(match_mask);
-            std::uint32_t chk_idx = idx + (bit_pos >> 3);
-            if (tbl->keys[chk_idx] == key) {
-              return false;
-            }
+        match_mask &= ~(0xFFul << bit_pos);
+      }
 
-            match_mask &= ~(0xFFul << bit_pos);
-          }
-
-          if (target_slot == 0xFFFFFFFF) {
-            const std::uint64_t usable = swar_match_usable(ctrl_word);
-            if (usable) {
-              target_slot = idx + (std::countr_zero(usable) >> 3);
-              target_group = curr_group;
-            }
-          }
-
-          if (swar_match_sig(ctrl_word, CTRL_EMPTY)) {
-            goto perform_write;
-          }
-
-          idx = (idx + 8) & tbl->mask;
-          if ((idx / 64) != curr_group) {
-            curr_group = idx / 64;
-            cross_group = true;
-            break;
-          }
+      if (target_slot == std::numeric_limits<std::uint32_t>::max()) {
+        const std::uint64_t usable = swar_match_usable(ctrl_word);
+        if (usable) {
+          target_slot = idx + (std::countr_zero(usable) >> 3);
         }
       }
 
-      if (!cross_group) {
+      if (swar_match_sig(ctrl_word, CTRL_EMPTY)) {
         break;
       }
+
+      idx = (idx + 8) & tbl->mask;
     }
 
-  perform_write: {
-    NakedGuard write_guard(tbl->group_locks[target_group]);
-
-    if ((tbl->ctrl[target_slot] & 0x80) != 0) [[likely]] {
+    if (target_slot != std::numeric_limits<std::uint32_t>::max()) {
       tbl->keys[target_slot] = key;
       tbl->values[target_slot] = value;
       tbl->ctrl[target_slot] = sig;
 
-      m_size.fetch_add(1, std::memory_order_relaxed);
+      ++shard.size;
       return true;
-    }
-  }
-
-    goto retry;
-  }
-
-  bool erase(K key) noexcept {
-    const std::uint64_t hash = hash_key_x86(key);
-    const std::uint8_t sig = static_cast<std::uint8_t>(hash >> 57) & 0x7F;
-
-    SharedPreemptGuard global_guard(m_global_lock);
-    MapTable<K, V> *tbl = m_table;
-
-    std::uint32_t idx = (hash & tbl->mask) & ~7u;
-    std::uint32_t curr_group = idx / 64;
-
-    while (true) {
-      bool cross_group = false;
-      {
-        NakedGuard group_guard(tbl->group_locks[curr_group]);
-
-        while (true) {
-          const std::uint64_t ctrl_word = *reinterpret_cast<const std::uint64_t *>(&tbl->ctrl[idx]);
-          std::uint64_t match_mask = swar_match_sig(ctrl_word, sig);
-
-          while (match_mask) {
-            const int bit_pos = std::countr_zero(match_mask);
-            std::uint32_t target_idx = idx + (bit_pos >> 3);
-
-            if (tbl->keys[target_idx] == key) [[likely]] {
-              const V *val = tbl->values[target_idx];
-
-              tbl->ctrl[target_idx] = CTRL_DELETED;
-              m_size.fetch_sub(1, std::memory_order_relaxed);
-
-              delete val;
-              return true;
-            }
-
-            match_mask &= ~(0xFFul << bit_pos);
-          }
-
-          if (swar_match_sig(ctrl_word, CTRL_EMPTY)) {
-            return false;
-          }
-
-          idx = (idx + 8) & tbl->mask;
-          if ((idx / 64) != curr_group) {
-            curr_group = idx / 64;
-            cross_group = true;
-            break;
-          }
-        }
-      }
-
-      if (!cross_group) {
-        break;
-      }
     }
 
     return false;
+  }
+
+  [[nodiscard]] V *erase(K key) noexcept {
+    const std::uint64_t hash = hash_key(key);
+    const std::uint8_t sig = static_cast<std::uint8_t>(hash >> 57) & 0x7F;
+
+    const std::size_t shard_idx = hash & (NumShards - 1);
+    Shard &shard = m_shards[shard_idx];
+
+    ExclusivePreemptGuard guard(shard.lock);
+    MapTable<K, V> *tbl = shard.table;
+
+    std::uint32_t idx = (hash & tbl->mask) & ~7u;
+
+    while (true) {
+      const std::uint64_t ctrl_word = *reinterpret_cast<std::uint64_t *>(&tbl->ctrl[idx]);
+      std::uint64_t match_mask = swar_match_sig(ctrl_word, sig);
+
+      while (match_mask) {
+        const int bit_pos = std::countr_zero(match_mask);
+        std::uint32_t target_idx = idx + (bit_pos >> 3);
+
+        if (tbl->keys[target_idx] == key) {
+          V *val = tbl->values[target_idx];
+          tbl->ctrl[target_idx] = CTRL_DELETED;
+          --shard.size;
+          return val;
+        }
+
+        match_mask &= ~(0xFFul << bit_pos);
+      }
+
+      if (swar_match_sig(ctrl_word, CTRL_EMPTY)) {
+        return nullptr;
+      }
+
+      idx = (idx + 8) & tbl->mask;
+    }
+  }
+
+  template <typename Func> void for_each(Func &&callback) noexcept {
+    for (std::size_t i = 0; i < NumShards; ++i) {
+      Shard &shard = m_shards[i];
+      SharedPreemptGuard guard(shard.lock);
+
+      MapTable<K, V> *tbl = shard.table;
+      for (std::uint32_t j = 0; j < tbl->capacity; ++j) {
+        if ((tbl->ctrl[j] & CTRL_EMPTY) == 0 && tbl->ctrl[j] != CTRL_DELETED) {
+          callback(tbl->keys[j], tbl->values[j]);
+        }
+      }
+    }
   }
 };
 } // namespace kernel::utils

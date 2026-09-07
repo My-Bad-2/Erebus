@@ -2,6 +2,7 @@
 
 #include <bitfield.hpp>
 #include <cstdint>
+#include <utility>
 
 namespace kernel::memory::vmm {
 enum class Error {
@@ -13,6 +14,10 @@ enum class Error {
   InvalidFlags,
   CasFailed,
   SecurityViolation,
+  OutOfBounds,
+  NotImplemented,
+  StackOverflow,
+  InvalidState,
 };
 
 enum class PageSize : std::uint8_t {
@@ -33,7 +38,8 @@ enum class AccessFlags : std::uint32_t {
   Swapped = 1 << 7, // Page is evicted
   Accessed = 1 << 8,
   Dirty = 1 << 9,
-  Mmio = 1 << 10 // Memory Mapped IO (Forces Uncacheable)
+  Mmio = 1 << 10, // Memory Mapped IO (Forces Uncacheable)
+  Stack = 1 << 11,
 };
 
 constexpr AccessFlags operator|(const AccessFlags a, const AccessFlags b) noexcept {
@@ -79,21 +85,22 @@ enum class ArchFlags : std::uint64_t {
 };
 
 using PteLeafSchema = klib::BitfieldSchema<klib::Bit<"present", 0>,        // present
-                                            klib::Bit<"rw", 1>,             // write
-                                            klib::Bit<"user", 2>,           // user-supervisor
-                                            klib::Bit<"pwt", 3>,            // write through
-                                            klib::Bit<"pcd", 4>,            // cache disable
-                                            klib::Bit<"accessed", 5>,       // accessed
-                                            klib::Bit<"dirty", 6>,          // is dirty
-                                            klib::Bit<"pat", 7>,            // pat
-                                            klib::Bit<"global", 8>,         // global pages
-                                            klib::Bit<"cow", 9>,            // Triggers Copy-on-Write in the #PF handler
-                                            klib::Bit<"shared", 10>,        // Mapped in multiple address spaces
-                                            klib::Bit<"swapped", 11>,       // Evicted to disk. PFN is a swap index.
-                                            klib::Field<"pfn", 12, 40>,     // pfn
-                                            klib::Field<"avl_high", 52, 7>, // available to used
-                                            klib::Field<"pkey", 59, 4>,     // pkru
-                                            klib::Bit<"nx", 63>>;
+                                           klib::Bit<"rw", 1>,             // write
+                                           klib::Bit<"user", 2>,           // user-supervisor
+                                           klib::Bit<"pwt", 3>,            // write through
+                                           klib::Bit<"pcd", 4>,            // cache disable
+                                           klib::Bit<"accessed", 5>,       // accessed
+                                           klib::Bit<"dirty", 6>,          // is dirty
+                                           klib::Bit<"pat", 7>,            // pat
+                                           klib::Bit<"global", 8>,         // global pages
+                                           klib::Bit<"cow", 9>,            // Triggers Copy-on-Write in the #PF handler
+                                           klib::Bit<"shared", 10>,        // Mapped in multiple address spaces
+                                           klib::Bit<"swapped", 11>,       // Evicted to disk. PFN is a swap index.
+                                           klib::Field<"pfn", 12, 40>,     // pfn
+                                           klib::Field<"avl_high", 52, 6>, // available to used
+                                           klib::Bit<"stack", 58>,         // is stack
+                                           klib::Field<"pkey", 59, 4>,     // pkru
+                                           klib::Bit<"nx", 63>>;
 
 using PteHugeSchema = klib::BitfieldSchema<klib::Bit<"present", 0>,        // present
                                            klib::Bit<"rw", 1>,             // write
@@ -109,7 +116,8 @@ using PteHugeSchema = klib::BitfieldSchema<klib::Bit<"present", 0>,        // pr
                                            klib::Bit<"swapped", 11>,       // Evicted to disk. PFN is a swap index.
                                            klib::Bit<"pat", 12>,           // pat bit
                                            klib::Field<"pfn", 21, 31>,     // pfn
-                                           klib::Field<"avl_high", 52, 7>, // available to used
+                                           klib::Field<"avl_high", 52, 6>, // available to used
+                                           klib::Bit<"stack", 58>,         // is stack
                                            klib::Field<"pkey", 59, 4>,     // pkru
                                            klib::Bit<"nx", 63>>;
 
@@ -127,7 +135,8 @@ using Pte1gSchema = klib::BitfieldSchema<klib::Bit<"present", 0>,        // pres
                                          klib::Bit<"swapped", 11>,       // Evicted to disk. PFN is a swap index.
                                          klib::Bit<"pat", 12>,           // pat bit
                                          klib::Field<"pfn", 30, 22>,     // pfn
-                                         klib::Field<"avl_high", 52, 7>, // available to used
+                                         klib::Field<"avl_high", 52, 6>, // available to used
+                                         klib::Bit<"stack", 58>,         // is stack
                                          klib::Field<"pkey", 59, 4>,     // pkru
                                          klib::Bit<"nx", 63>>;
 

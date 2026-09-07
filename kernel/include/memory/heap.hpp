@@ -59,6 +59,8 @@ public:
   KmemCache(const KmemCache &) = delete;
   KmemCache &operator=(const KmemCache &) = delete;
 
+  void destroy() noexcept;
+
   [[nodiscard]] std::uint32_t size() const noexcept { return m_size; }
 
   [[nodiscard]] static std::expected<KmemCache *, Error> create(std::string_view name, std::uint32_t obj_size,

@@ -1,16 +1,11 @@
-#include "memory/vmm/pagemap.hpp"
+#include "memory/vmm/pagemap/pagemap.hpp"
 
-#include "memory/heap.hpp"
 #include "memory/pmm.hpp"
-#include "string.h"
-
-#include "memory/memory.hpp"
-#include "memory/vmm/tlb.hpp"
+#include "memory/vmm/pagemap/tlb.hpp"
 #include "utils/logger.hpp"
 
 namespace kernel::memory::vmm {
 namespace {
-heap::KmemCache *pmap_cache = nullptr;
 std::uint8_t max_lvls = 0;
 
 bool nxe_supported = false;
@@ -80,6 +75,10 @@ AccessFlags PageMap::extract_flags(const PteSchema &schema) noexcept {
     flags = flags | AccessFlags::Shared;
   }
 
+  if (s.get<"stack">()) {
+    flags = flags | AccessFlags::Stack;
+  }
+
   return flags | AccessFlags::Read;
 }
 
@@ -113,47 +112,31 @@ CacheMode PageMap::extract_cache(const PteSchema &schema, const bool is_huge) no
   return CacheMode::WriteBack;
 }
 
-std::expected<PageMap *, Error> PageMap::create() noexcept {
-  auto pmap_res = pmap_cache->alloc();
-  if (!pmap_res) {
-    return std::unexpected(Error::OutOfMemory);
-  }
-
-  auto *pmap = static_cast<PageMap *>(*pmap_res);
-
+PageMap::PageMap() noexcept : m_lvls{max_lvls} {
   const auto root_res = pmm::alloc_pages_zeroed(pmm::PageMobility::Movable, 0);
   if (!root_res) {
-    pmap_cache->free(pmap);
-    return std::unexpected(Error::OutOfMemory);
+    utils::logger::fatal("Unable to allocate page for top pml table!\n");
   }
 
   const PhysicalAddress root_phys{*root_res};
   pmm::phys_to_page(root_phys)->set_mobility(pmm::PageMobility::Unmovable);
 
-  new (pmap) PageMap{root_phys, max_lvls};
+  m_root_phys = root_phys;
 
-  const PageMap *kmap = get_kernel_pagemap();
-  if (kmap) {
+  if (s_kernel_root) [[likely]] {
     auto *new_root_table = DirectMap::phys_to_virt(root_phys).as<PageTableEntry>();
-    auto *kernel_root_table = DirectMap::phys_to_virt(kmap->m_root_phys).as<PageTableEntry>();
+    auto *kernel_root_table = s_kernel_root.as<PageTableEntry>();
 
     for (std::size_t i = MAX_PAGE_ENTRIES / 2; i < MAX_PAGE_ENTRIES; ++i) {
       PteSchema k_entry = kernel_root_table[i].load(std::memory_order_relaxed);
       new_root_table[i].store(k_entry, std::memory_order_relaxed);
     }
+  } else {
+    s_kernel_root = DirectMap::phys_to_virt(root_phys);
   }
-  return pmap;
 }
 
-void PageMap::destroy(PageMap *map) noexcept {
-  if (!map) {
-    return;
-  }
-
-  free_table_recursive(map->m_root_phys, map->m_lvls);
-  map->~PageMap();
-  pmap_cache->free(map);
-}
+PageMap::~PageMap() noexcept { free_table_recursive(m_root_phys, m_lvls); }
 
 void early_initialize_hw() noexcept {
   const hw::CpuInfo *info = hw::profile_manager.get_current();
@@ -176,15 +159,6 @@ void early_initialize_hw() noexcept {
 }
 
 void initialize_hw() noexcept {
-  if (!pmap_cache) {
-    const auto res = heap::KmemCache::create("pagemap", sizeof(PageMap), alignof(PageMap));
-    if (!res) {
-      utils::logger::fatal("Unable to create cache for pagemap!\n");
-    }
-
-    pmap_cache = *res;
-  }
-
   hw::EferSchema efer = hw::read::efer();
   efer.set_mut<"nxe">(nxe_supported ? 1 : 0);
   efer.set_mut<"tce">(tce_supported ? 1 : 0);

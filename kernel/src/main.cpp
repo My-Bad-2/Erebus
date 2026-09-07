@@ -4,7 +4,6 @@
 #include "utils/hashmap.hpp"
 #include "utils/logger.hpp"
 
-#include "hal/cpu_info.hpp"
 #include "hal/hal.hpp"
 #include "hal/patcher.hpp"
 #include "hal/percpu.hpp"

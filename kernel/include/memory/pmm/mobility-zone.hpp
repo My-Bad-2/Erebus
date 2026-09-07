@@ -125,5 +125,5 @@ public:
   [[nodiscard]] std::uint32_t calculate_fragmentation_index() const noexcept;
 };
 
-inline std::atomic<bool> g_daemons_active{false};
+inline std::atomic g_daemons_active{false};
 } // namespace kernel::memory::pmm

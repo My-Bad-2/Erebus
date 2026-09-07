@@ -1,10 +1,8 @@
 #include "memory/memory.hpp"
 #include "memory/pmm.hpp"
-#include "memory/vmm/pagemap.hpp"
-#include "memory/vmm/tlb.hpp"
+#include "memory/vmm/pagemap/pagemap.hpp"
+#include "memory/vmm/pagemap/tlb.hpp"
 #include "utils/logger.hpp"
-
-#include <string.h>
 
 namespace kernel::memory::vmm {
 std::expected<void, Error> PageMap::shatter_huge_page(PageTableEntry *pte, VirtualAddress virt,
@@ -79,7 +77,7 @@ std::expected<PageTableEntry *, Error> PageMap::walk(const VirtualAddress virt, 
   };
 
   auto *curr_table = DirectMap::phys_to_virt(m_root_phys).as<PageTableEntry>();
-  const std::uint8_t target_lvl = size_to_level(target_size);
+  const std::uint8_t target_lvl = std::to_underlying(target_size);
 
   for (int lvl = m_lvls; lvl > target_lvl; --lvl) {
     PageTableEntry *pte = &curr_table[indices[lvl]];
@@ -178,6 +176,7 @@ std::optional<TranslationResult> PageMap::translate(const VirtualAddress virt) c
       result.phys_address = base_phys + virt.page_offset(page_size_bytes);
       result.flags = extract_flags(schema);
       result.cache = extract_cache(schema, is_huge);
+      result.pkey = schema.small().get<"pkey">();
 
       return result;
     }

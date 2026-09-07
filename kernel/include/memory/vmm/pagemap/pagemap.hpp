@@ -3,7 +3,6 @@
 #include <atomic>
 #include <cstdint>
 #include <expected>
-#include <type_traits>
 
 #include "active_pcid.hpp"
 #include "memory/memory.hpp"
@@ -17,39 +16,20 @@ struct TranslationResult {
   AccessFlags flags;
   CacheMode cache;
   PageSize mapped_size;
+  std::uint8_t pkey;
 };
 
 class PageMap {
+  friend struct RollbackGuard;
   PhysicalAddress m_root_phys;
   hw::ActivePcidTracker m_cpu_tracker;
   std::uint8_t m_lvls{0}; // 4 or 5
 
+  static inline VirtualAddress s_kernel_root{};
   static constexpr std::uint32_t MAX_PAGE_ENTRIES = 512;
 
-  explicit PageMap(const PhysicalAddress root, const std::uint8_t lvls) noexcept : m_root_phys{root}, m_lvls{lvls} {}
-
-  static constexpr int size_to_level(const PageSize size) noexcept {
-    switch (size) {
-    case PageSize::Size1G:
-      return 3; // PDPT
-    case PageSize::Size2M:
-      return 2; // PD
-    case PageSize::Size4K:
-    default:
-      return 1; // PT
-    }
-  }
-
   static constexpr std::size_t size_to_bytes(const PageSize size) noexcept {
-    switch (size) {
-    case PageSize::Size1G:
-      return PAGE_SIZE_1GB;
-    case PageSize::Size2M:
-      return PAGE_SIZE_2MB;
-    default:
-    case PageSize::Size4K:
-      return PAGE_SIZE;
-    }
+    return PAGE_SIZE << ((std::to_underlying(size) - 1) * 9);
   }
 
   static AccessFlags extract_flags(const PteSchema &schema) noexcept;
@@ -73,8 +53,8 @@ public:
 
   [[nodiscard]] hw::ActivePcidTracker &cpu_tracker() noexcept { return m_cpu_tracker; }
 
-  [[nodiscard]] static std::expected<PageMap *, Error> create() noexcept;
-  static void destroy(PageMap *map) noexcept;
+  explicit PageMap() noexcept;
+  ~PageMap() noexcept;
 
   [[nodiscard]] std::expected<void, Error> map(VirtualAddress virt, PhysicalAddress phys, AccessFlags flags,
                                                CacheMode cache = CacheMode::WriteBack, std::uint8_t pkey = 0,
@@ -95,9 +75,14 @@ public:
                                                        std::size_t size_bytes, AccessFlags flags,
                                                        CacheMode cache = CacheMode::WriteBack,
                                                        std::uint8_t pkey = 0) noexcept;
+  [[nodiscard]] std::expected<void, Error> protect_virtual_range(VirtualAddress start_virt, std::size_t size_bytes,
+                                                                 AccessFlags flags) noexcept;
+  [[nodiscard]] std::expected<void, Error> alias_virtual_range(VirtualAddress src_virt, VirtualAddress dest_virt,
+                                                               std::size_t size_bytes) noexcept;
+  [[nodiscard]] std::expected<void, Error> move_virtual_range(VirtualAddress src_virt, VirtualAddress dest_virt,
+                                                              std::size_t size_bytes) noexcept;
 };
 
-const PageMap *get_kernel_pagemap() noexcept;
 void early_initialize_hw() noexcept;
 void initialize_hw() noexcept;
 } // namespace kernel::memory::vmm

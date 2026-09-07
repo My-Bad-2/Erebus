@@ -4,9 +4,10 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "../memory/vmm/pagemap/tlb.hpp"
+#include "crypto/blake2b_prng.hpp"
 #include "gs.hpp"
 #include "memory/pmm/pcp_cache.hpp"
-#include "memory/vmm/tlb.hpp"
 #include "utils/locks/locks.hpp"
 
 namespace kernel::hw {
@@ -27,21 +28,24 @@ struct alignas(std::hardware_destructive_interference_size) PerCpu {
   CpuTopology topology{0};
   CpuContext context{0};
 
-  const CpuInfo *info;
+  const CpuInfo *info{nullptr};
 
   std::array<utils::CLHNode, 2> node;
   utils::CLHNode *curr_node{&node[0]};
   utils::CLHNode *prev_node{&node[1]};
 
   memory::vmm::tlb::PcidManager pcid_manager;
+  crypto::Blake2bPrng rng;
 
-  constexpr explicit PerCpu() noexcept = default;
+  constexpr explicit PerCpu() noexcept : rng(crypto::Blake2bPrng::create()) {}
 };
 
 namespace percpu {
 [[gnu::always_inline]] inline std::uint32_t id() noexcept { return READ_PCP(topology).get<"cpu-id">(); }
 [[gnu::always_inline]] inline std::uint32_t numa_node() noexcept { return READ_PCP(topology).get<"numa-node">(); }
 [[gnu::always_inline]] inline PerCpu *self() noexcept { return READ_PCP(self); }
+[[gnu::always_inline]] inline crypto::Blake2bPrng &rng() noexcept { return self()->rng; }
+[[nodiscard]] inline memory::vmm::tlb::PcidManager &pcid_manager() noexcept { return self()->pcid_manager; }
 
 // Used by QSpinlock
 [[nodiscard, gnu::always_inline]] inline utils::CLHNode *get_curr_node() noexcept { return READ_PCP(curr_node); }
@@ -115,8 +119,6 @@ inline constexpr std::size_t NMI_MCE_BYTE = CTX_BASE + 4; // Nibble-split
   const auto combined_state = gs::read<PREEMPT_BYTE, std::uint32_t>();
   return combined_state == 0;
 }
-
-[[nodiscard]] inline memory::vmm::tlb::PcidManager &pcid_manager() noexcept { return self()->pcid_manager; }
 
 void early_initialize() noexcept;
 } // namespace percpu

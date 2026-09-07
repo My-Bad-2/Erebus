@@ -2,7 +2,6 @@
 
 #include <atomic>
 #include <cstdint>
-#include <type_traits>
 
 #include "flags.hpp"
 #include "memory/address.hpp"

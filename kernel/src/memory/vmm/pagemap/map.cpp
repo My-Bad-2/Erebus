@@ -1,6 +1,6 @@
 #include "memory/memory.hpp"
 #include "memory/pmm.hpp"
-#include "memory/vmm/pagemap.hpp"
+#include "memory/vmm/pagemap/pagemap.hpp"
 #include "utils/logger.hpp"
 
 namespace kernel::memory::vmm {
@@ -185,7 +185,6 @@ std::expected<void, Error> PageMap::map(const VirtualAddress virt, const Physica
 
         const PhysicalAddress offset_phys = curr_phys + (i * PAGE_SIZE);
         const PteSchema desired = PageTableEntry::build_schema(offset_phys, flags, cache, PageSize::Size4K, pkey);
-
         if (pte[i].cas(expected, desired, std::memory_order_release, std::memory_order_acquire)) [[likely]] {
           break;
         }

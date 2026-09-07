@@ -1,6 +1,6 @@
-#include "memory/vmm/tlb.hpp"
-#include "../../../include/memory/vmm/active_pcid.hpp"
+#include "memory/vmm/pagemap/tlb.hpp"
 #include "hal/percpu.hpp"
+#include "memory/vmm/pagemap/active_pcid.hpp"
 #include "utils/logger.hpp"
 
 namespace kernel::memory::vmm::tlb {

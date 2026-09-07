@@ -1,6 +1,6 @@
 #pragma once
 
-#include "vmm/pagemap.hpp"
+#include "vmm/pagemap/pagemap.hpp"
 #include <span>
 
 namespace kernel::memory::vmm {
