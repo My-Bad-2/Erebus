@@ -83,7 +83,7 @@ std::expected<VMArea *, Error> AddressSpace::split_vma(VMArea *vma, const Virtua
   new_vma->start = split_point;
   vma->end = split_point;
 
-  const PageSize page_size = static_cast<PageSize>(vma->flags.get<"page_size">());
+  const PageSize page_size = static_cast<PageSize>(vma->flags.get_page_size());
   const std::size_t bytes_per_page = get_page_bytes(page_size);
 
   new_vma->object_offset += (split_point.value() - vma->start.value()) / bytes_per_page;
@@ -176,7 +176,7 @@ void AddressSpace::merge_vma(VMArea *vma) noexcept {
       return false;
     }
 
-    if (left->flags.data != right->flags.data) {
+    if (left->flags.raw() != right->flags.raw()) {
       return false;
     }
 
@@ -188,7 +188,7 @@ void AddressSpace::merge_vma(VMArea *vma) noexcept {
       return false;
     }
 
-    const PageSize page_size = left->flags.get<"page_size", PageSize>();
+    const PageSize page_size = static_cast<PageSize>(left->flags.get_page_size());
     const std::size_t bytes_per_page = get_page_bytes(page_size);
     const std::size_t pages_in_left = left->size_bytes() / bytes_per_page;
 
@@ -240,11 +240,11 @@ std::expected<void, Error> AddressSpace::clone_into(AddressSpace &child) noexcep
 
     VMArea *parent_curr = m_vma_list_head;
     while (parent_curr != stop_point) {
-      const AccessFlags access = parent_curr->flags.get<"access", AccessFlags>();
+      const AccessFlags access = parent_curr->flags.get_access();
 
       if (has_flag(access, AccessFlags::CopyOnWrite) && parent_curr->vm_object) {
         const AccessFlags orig = access & ~AccessFlags::CopyOnWrite;
-        parent_curr->flags.set_mut<"access">(std::to_underlying(orig));
+        parent_curr->flags.set_access(orig);
 
         VMObject *shadow = parent_curr->vm_object;
         if (VMObject *orig_obj = shadow->shadow_parent()) {
@@ -281,7 +281,7 @@ std::expected<void, Error> AddressSpace::clone_into(AddressSpace &child) noexcep
     child_vma->prev_vma = child_vma->next_vma = nullptr;
     child_vma->fault_count = 0;
 
-    const AccessFlags access = curr->flags.get<"access", AccessFlags>();
+    const AccessFlags access = curr->flags.get_access();
     const bool is_shared = has_flag(access, AccessFlags::Shared) || has_flag(access, AccessFlags::Mmio);
 
     if (!is_shared && curr->vm_object) {
@@ -318,8 +318,8 @@ std::expected<void, Error> AddressSpace::clone_into(AddressSpace &child) noexcep
         }
       }
 
-      curr->flags.set_mut<"access">(std::to_underlying(cow_access));
-      child_vma->flags.set_mut<"access">(std::to_underlying(cow_access));
+      curr->flags.set_access(cow_access);
+      child_vma->flags.set_access(cow_access);
 
       curr->vm_object = parent_shadow;
       child_vma->vm_object = child_shadow;

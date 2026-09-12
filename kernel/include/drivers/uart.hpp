@@ -12,58 +12,135 @@ enum class ReceiveError : std::uint8_t {
   BreakInterrupt, // Remote device intentionally held the line low
 };
 
-using LcrSchema = klib::BitfieldSchema<klib::Field<"word_length", 0, 2>, klib::Bit<"stop_bits", 2>,
-                                       klib::Field<"parity", 3, 3>, klib::Bit<"break_enable", 6>, klib::Bit<"dlab", 7>>;
+class LCR {
+  std::uint8_t m_data;
 
-using FcrSchema = klib::BitfieldSchema<klib::Bit<"fifo_enable", 0>, klib::Bit<"clear_rx", 1>, klib::Bit<"clear_tx", 2>,
-                                       klib::Bit<"dma_mode", 3>, klib::Reserved<4>, klib::Bit<"enable_64byte_fifo", 5>,
-                                       klib::Field<"trigger_level", 6, 2>>;
+public:
+  constexpr explicit LCR(std::uint8_t val = 0) : m_data(val) {}
+  [[nodiscard]] std::uint8_t raw() const noexcept { return m_data; }
 
-using IirSchema = klib::BitfieldSchema<klib::ReadOnly<"interrupt_pending", 0, 1>, klib::ReadOnly<"interrupt_id", 1, 3>,
-                                       klib::Reserved<4, 1>, klib::ReadOnly<"fifo_64byte_enabled", 5, 1>,
-                                       klib::ReadOnly<"fifo_status", 6, 2>>;
-using LsrSchema = klib::BitfieldSchema<klib::ReadOnly<"data_ready", 0, 1>, klib::ReadOnly<"overrun_error", 1, 1>,
-                                       klib::ReadOnly<"parity_error", 2, 1>, klib::ReadOnly<"framing_error", 3, 1>,
-                                       klib::ReadOnly<"break_interrupt", 4, 1>, klib::ReadOnly<"thr_empty", 5, 1>,
-                                       klib::ReadOnly<"transmitter_empty", 6, 1>, klib::ReadOnly<"fifo_error", 7, 1>>;
+  BF_RW(std::uint8_t, word_length, 0, 2)
+  BF_BIT_RW(stop_bits, 2)
+  BF_RW(std::uint8_t, parity, 3, 3)
+  BF_BIT_RW(break_enable, 6)
+  BF_BIT_RW(dlab, 7) // Divisor Latch Access Bit
+};
 
-using IerSchema = klib::BitfieldSchema<klib::Bit<"rx_available", 0>, klib::Bit<"tx_empty", 1>,
-                                       klib::Bit<"line_status", 2>, klib::Bit<"modem_status", 3>, klib::Reserved<4, 4>>;
+class FCR {
+  std::uint8_t m_data;
 
-using McrSchema = klib::BitfieldSchema<klib::Bit<"dtr", 0>, klib::Bit<"rts", 1>, klib::Bit<"out1", 2>,
-                                       klib::Bit<"out2", 3>, klib::Bit<"loopback", 4>, klib::Reserved<5, 3>>;
+public:
+  constexpr explicit FCR(std::uint8_t val = 0) : m_data(val) {}
+  [[nodiscard]] std::uint8_t raw() const noexcept { return m_data; }
 
-struct Registers {
-  // DLAB = 0
-  using THR = klib::Register<0, std::uint8_t, klib::Access::WO>;
-  using RBR = klib::Register<0, std::uint8_t, klib::Access::RO>;
+  BF_BIT_WO(fifo_enable, 0)
+  BF_BIT_WO(clear_rx, 1)
+  BF_BIT_WO(clear_tx, 2)
+  BF_BIT_WO(dma_mode, 3)
+  BF_BIT_WO(enable_64byte_fifo, 5)
+  BF_WO(std::uint8_t, trigger_level, 6, 2)
+};
 
-  // DLAB = 1
-  using DLL = klib::Register<0, std::uint8_t, klib::Access::RW>;
-  using DLM = klib::Register<1, std::uint8_t, klib::Access::RW>;
+class IIR {
+  std::uint8_t m_data;
 
-  // Standard
-  using IER = klib::Register<1, IerSchema, klib::Access::RW>;
-  using IIR = klib::Register<2, IirSchema, klib::Access::RO>;
-  using FCR = klib::Register<2, FcrSchema, klib::Access::WO>;
-  using LCR = klib::Register<3, LcrSchema, klib::Access::RW>;
-  using MCR = klib::Register<4, McrSchema, klib::Access::RW>;
-  using LSR = klib::Register<5, LsrSchema, klib::Access::RO>;
+public:
+  constexpr explicit IIR(std::uint8_t val = 0) : m_data(val) {}
+  [[nodiscard]] std::uint8_t raw() const noexcept { return m_data; }
+
+  BF_BIT_RO(interrupt_pending, 0)
+  BF_RO(std::uint8_t, interrupt_id, 1, 3)
+  BF_BIT_RO(fifo_64byte_enabled, 5)
+  BF_RO(std::uint8_t, fifo_status, 6, 2)
+};
+
+class LSR {
+  std::uint8_t m_data;
+
+public:
+  constexpr explicit LSR(std::uint8_t val = 0) : m_data(val) {}
+  [[nodiscard]] std::uint8_t raw() const noexcept { return m_data; }
+
+  BF_BIT_RO(data_ready, 0)
+  BF_BIT_RO(overrun_error, 1)
+  BF_BIT_RO(parity_error, 2)
+  BF_BIT_RO(framing_error, 3)
+  BF_BIT_RO(break_interrupt, 4)
+  BF_BIT_RO(thr_empty, 5)
+  BF_BIT_RO(transmitter_empty, 6)
+  BF_BIT_RO(fifo_error, 7)
+};
+
+class IER {
+  std::uint8_t m_data;
+
+public:
+  constexpr explicit IER(std::uint8_t val = 0) : m_data(val) {}
+  [[nodiscard]] std::uint8_t raw() const noexcept { return m_data; }
+
+  BF_BIT_RW(rx_available, 0)
+  BF_BIT_RW(tx_empty, 1)
+  BF_BIT_RW(line_status, 2)
+  BF_BIT_RW(modem_status, 3)
+};
+
+class MCR {
+  std::uint8_t m_data;
+
+public:
+  constexpr explicit MCR(std::uint8_t val = 0) : m_data(val) {}
+  [[nodiscard]] std::uint8_t raw() const noexcept { return m_data; }
+
+  BF_BIT_RW(dtr, 0)
+  BF_BIT_RW(rts, 1)
+  BF_BIT_RW(out1, 2)
+  BF_BIT_RW(out2, 3)
+  BF_BIT_RW(loopback, 4)
 };
 
 class SerialPort {
   hw::IoResource m_io;
   std::uint8_t m_fifo_depth{1};
 
-  template <typename Reg> [[gnu::always_inline]] void write(Reg::ValueType val) const noexcept {
-    static_assert(Reg::access != klib::Access::RO, "Attempting to write a Read-Only register!");
-    m_io.write<typename Reg::HwType>(Reg::offset, static_cast<Reg::HwType>(val));
+  REG_WO(THR, 0, std::uint8_t) // Transmit Holding
+  REG_RO(RBR, 0, std::uint8_t) // Receive Buffer
+
+  // DLAB = 1
+  REG_RW(Dll, 0, std::uint8_t) // Divisor Latch Low
+  REG_RW(Dlm, 1, std::uint8_t) // Divisor Latch High
+
+  REG_RW(Ier, 1, IER)
+  REG_RO(Iir, 2, IIR)
+  REG_WO(Fcr, 2, FCR)
+  REG_RW(Lcr, 3, LCR)
+  REG_RW(Mcr, 4, MCR)
+  REG_RO(Lsr, 5, LSR)
+
+  template <typename Reg>
+    requires klib::bitfield::WritableReg<Reg>
+  void write(Reg::Type val) const noexcept {
+    static_assert(Reg::access != klib::bitfield::Access::RO, "Attempting to write a Read-Only register!");
+
+    if constexpr (std::is_integral_v<typename Reg::Type>) {
+      m_io.write<typename Reg::Type>(Reg::offset, val);
+    } else {
+      using BackingType = decltype(val.raw());
+      m_io.write<BackingType>(Reg::offset, val.raw());
+    }
   }
 
-  template <typename Reg> [[nodiscard, gnu::always_inline]] Reg::ValueType read() const noexcept {
-    static_assert(Reg::access != klib::Access::RW, "Attempting to write a Write-Only register!");
-    auto val = m_io.read<typename Reg::HwType>(Reg::offset);
-    return static_cast<Reg::ValueType>(val);
+  template <typename Reg>
+    requires klib::bitfield::ReadableReg<Reg>
+  [[nodiscard, gnu::always_inline]] Reg::Type read() const noexcept {
+    static_assert(Reg::access != klib::bitfield::Access::WO, "Attempting to read a Write-Only register!");
+
+    if constexpr (std::is_integral_v<typename Reg::Type>) {
+      return m_io.read<typename Reg::Type>(Reg::offset);
+    } else {
+      using BackingType = decltype(std::declval<typename Reg::Type>().raw());
+      auto val = m_io.read<BackingType>(Reg::offset);
+      return typename Reg::Type(val);
+    }
   }
 
 public:
@@ -72,9 +149,8 @@ public:
   [[nodiscard]] std::expected<void, std::string_view> initialize(std::uint32_t baud_rate = 115200,
                                                                  std::uint32_t base_clock_hz = 1843200) noexcept;
 
-  [[nodiscard]] bool is_transmit_fifo_empty() const noexcept { return read<Registers::LSR>().get<"thr_empty">() != 0; }
-
-  [[nodiscard]] bool has_data() const noexcept { return read<Registers::LSR>().get<"data_ready">() != 0; }
+  [[nodiscard]] bool is_transmit_fifo_empty() const noexcept { return read<Lsr>().get_thr_empty() != 0; }
+  [[nodiscard]] bool has_data() const noexcept { return read<Lsr>().get_data_ready() != 0; }
 
   void append(std::string_view str) const noexcept;
   void push(char c) const noexcept;

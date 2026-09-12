@@ -18,10 +18,10 @@ std::expected<void, Error> PageMap::map_1gb_as_2mb(const VirtualAddress virt, co
 
   PageTableEntry *pdpte = *pdpte_res;
   while (true) {
-    PteSchema pdpte_schema = pdpte->load(std::memory_order_acquire);
+    PTEntry pdpte_entry = pdpte->load(std::memory_order_acquire);
 
     // Case 1: The entire 1GB region's directory is unmapped. We create the Page Directory.
-    if (pdpte_schema.small().get<"present">() == 0) [[likely]] {
+    if (!pdpte_entry.get_present()) [[likely]] {
       const auto new_page_res = pmm::alloc_pages_zeroed(pmm::PageMobility::Movable, 0);
       if (!new_page_res) [[unlikely]] {
         return std::unexpected(Error::OutOfMemory);
@@ -33,52 +33,49 @@ std::expected<void, Error> PageMap::map_1gb_as_2mb(const VirtualAddress virt, co
 
       for (std::uint32_t i = 0; i < MAX_PAGE_ENTRIES; ++i) {
         const PhysicalAddress offset_phys = phys + (i * PAGE_SIZE_2MB);
-
-        PteSchema child_schema = PageTableEntry::build_schema(offset_phys, flags, cache, PageSize::Size2M, pkey);
+        const PTEntry child_schema = PageTableEntry::build_schema(offset_phys, flags, cache, PageSize::Size2M, pkey);
         pd_table[i].store(child_schema, std::memory_order_relaxed);
       }
 
-      PteLeafSchema dir_leaf{};
-      dir_leaf.set_mut<"present">(1);
-      dir_leaf.set_mut<"pfn">(new_phys.value() >> 12);
-      dir_leaf.set_mut<"rw">(1);
-      dir_leaf.set_mut<"user">(1);
-
-      const PteSchema dir_schema{static_cast<std::uint64_t>(dir_leaf)};
-      if (pdpte->cas(pdpte_schema, dir_schema, std::memory_order_release, std::memory_order_acquire)) [[likely]] {
+      const PTEntry dir_schema = PageTableEntry::build_directory(new_phys);
+      if (pdpte->cas(pdpte_entry, dir_schema, std::memory_order_release, std::memory_order_acquire)) [[likely]] {
         return {};
       }
 
+      // CAS failed: Another thread mapped this directory concurrently. Clean up and try again.
       pmm::free_pages(new_phys, 0);
       continue;
     }
 
     // Case 2: The region is already mapped as a single 1GB Huge Page
-    if ((pdpte_schema.raw & (1ull << 7)) != 0) [[unlikely]] {
+    if (pdpte_entry.get_huge()) [[unlikely]] {
       return std::unexpected(Error::AlreadyMapped);
     }
 
     // Case 3: The directory already exists. We must populate its 512 entries.
-    const PhysicalAddress pd_phys{pdpte_schema.small().get<"pfn">() << 12};
+    const PhysicalAddress pd_phys{pdpte_entry.get_pfn_4k() << PAGE_SHIFT_4KB};
     auto *pd_table = DirectMap::phys_to_virt(pd_phys).as<PageTableEntry>();
 
     for (std::uint32_t i = 0; i < MAX_PAGE_ENTRIES; ++i) {
-      PteSchema expected = pd_table[i].load(std::memory_order_acquire);
-      bool success = false;
+      while (true) {
+        PTEntry expected = pd_table[i].load(std::memory_order_acquire);
 
-      if (expected.small().get<"present">() == 0) [[likely]] {
-        const PhysicalAddress offset_phys = phys + (i * PAGE_SIZE_2MB);
-        PteSchema desired = PageTableEntry::build_schema(offset_phys, flags, cache, PageSize::Size2M, pkey);
-        success = pd_table[i].cas(expected, desired, std::memory_order_release, std::memory_order_acquire);
-      }
+        if (expected.get_present()) [[unlikely]] {
+          // Rollback previously mapped entries in this batch
+          for (std::uint32_t j = 0; j < i; ++j) {
+            const VirtualAddress rollback_virt = virt + (j * PAGE_SIZE_2MB);
+            [[maybe_unused]] auto _ = unmap(rollback_virt, PageSize::Size2M);
+          }
 
-      if (!success) [[unlikely]] {
-        for (std::uint32_t j = 0; j < i; ++j) {
-          const VirtualAddress rollback_virt = virt + (j * PAGE_SIZE_2MB);
-          [[maybe_unused]] auto _ = unmap(rollback_virt, PageSize::Size2M);
+          return std::unexpected(Error::AlreadyMapped);
         }
 
-        return std::unexpected(Error::AlreadyMapped);
+        const PhysicalAddress offset_phys = phys + (i * PAGE_SIZE_2MB);
+        const PTEntry desired = PageTableEntry::build_schema(offset_phys, flags, cache, PageSize::Size2M, pkey);
+
+        if (pd_table[i].cas(expected, desired, std::memory_order_release, std::memory_order_acquire)) [[likely]] {
+          break; // Successfully mapped this 2MB chunk, move to next
+        }
       }
     }
 
@@ -110,12 +107,12 @@ std::expected<void, Error> PageMap::map(const VirtualAddress virt, const Physica
   PageTableEntry *pte = *pte_res;
 
   while (true) {
-    PteSchema expected = pte->load(std::memory_order_acquire);
-    if (expected.small().get<"present">() == 1) [[unlikely]] {
+    PTEntry expected = pte->load(std::memory_order_acquire);
+    if (expected.get_present()) [[unlikely]] {
       return std::unexpected(Error::AlreadyMapped);
     }
 
-    const PteSchema desired = PageTableEntry::build_schema(phys, flags, cache, size, pkey);
+    const PTEntry desired = PageTableEntry::build_schema(phys, flags, cache, size, pkey);
     if (pte->cas(expected, desired, std::memory_order_release, std::memory_order_acquire)) [[likely]] {
       return {}; // Successfully mapped
     }
@@ -175,16 +172,15 @@ std::expected<void, Error> PageMap::map(const VirtualAddress virt, const Physica
     PageTableEntry *pte = *pt_res;
     for (std::size_t i = 0; i < pages_in_batch; ++i) {
       while (true) {
-        PteSchema expected = pte[i].load(std::memory_order_acquire);
-
-        if (expected.small().get<"present">() == 1) [[unlikely]] {
+        PTEntry expected = pte[i].load(std::memory_order_acquire);
+        if (expected.get_present()) [[unlikely]] {
           const std::size_t mapped_so_far = (size_bytes - remaining) + (i * PAGE_SIZE);
           [[maybe_unused]] auto _ = unmap_range(start_virt, mapped_so_far);
           return std::unexpected(Error::AlreadyMapped);
         }
 
         const PhysicalAddress offset_phys = curr_phys + (i * PAGE_SIZE);
-        const PteSchema desired = PageTableEntry::build_schema(offset_phys, flags, cache, PageSize::Size4K, pkey);
+        const PTEntry desired = PageTableEntry::build_schema(offset_phys, flags, cache, PageSize::Size4K, pkey);
         if (pte[i].cas(expected, desired, std::memory_order_release, std::memory_order_acquire)) [[likely]] {
           break;
         }

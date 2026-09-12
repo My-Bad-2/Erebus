@@ -1,224 +1,110 @@
 #pragma once
 
-#include <algorithm>
-
-#include "internal/kstring.hpp"
-#include "kformat/formatter.hpp"
-
-namespace klib {
-enum class Access : std::uint8_t { RW, RO, WO };
-
-template <internal::kstring Name, std::size_t Offset, std::size_t Width = 1, Access acc = Access::RW> struct Field {
-  static constexpr internal::kstring name = Name;
-  static constexpr std::size_t offset = Offset;
-  static constexpr std::size_t width = Width;
-  static constexpr std::size_t max_bit = Offset + Width - 1;
-  static constexpr Access access = acc;
-  static constexpr bool is_reserved = false;
-
-  static_assert(Width > 0, "Field width must be greater than 0");
-};
-
-template <internal::kstring Name, std::size_t Offset, std::size_t Width = 1>
-using ReadOnly = Field<Name, Offset, Width, Access::RO>;
-
-template <internal::kstring Name, std::size_t Offset, std::size_t Width = 1>
-using WriteOnly = Field<Name, Offset, Width, Access::WO>;
-
-template <internal::kstring Name, std::size_t Offset> using Bit = Field<Name, Offset, 1>;
-
-template <std::size_t Offset, std::size_t Width = 1> struct Reserved {
-  static constexpr auto name = internal::kstring<1>{""};
-
-  static constexpr std::size_t offset = Offset;
-  static constexpr std::size_t width = Width;
-  static constexpr std::size_t max_bit = Offset + Width - 1;
-  static constexpr bool is_reserved = true;
-
-  static constexpr auto access = Access::RO;
-};
-
-namespace detail {
-template <internal::kstring Target, typename F, typename... Rest> consteval auto find_field() {
-  if constexpr (F::is_reserved) {
-    if constexpr (sizeof...(Rest) > 0) {
-      return find_field<Target, Rest...>();
-    } else {
-      static_assert(false, "Field name not found in the Schema!");
-    }
+// Field macros (multi-bit values)
+#define BF_RO(Type, Name, Offset, Width)                                                                               \
+  [[nodiscard]] constexpr Type get_##Name() const noexcept {                                                           \
+    using BT = decltype(m_data);                                                                                       \
+    static_assert(Offset + Width <= sizeof(BT) * 8, "Bitfield [" #Name "] exceeds storage width");                     \
+    constexpr BT mask = klib::bitfield::make_mask<Width, BT>();                                                        \
+    return static_cast<Type>((m_data >> Offset) & mask);                                                               \
   }
 
-  if constexpr (F::name == Target) {
-    return F{};
-  } else if constexpr (sizeof...(Rest) > 0) {
-    return find_field<Target, Rest...>();
-  } else {
-    static_assert(false, "Field name not found in the Schema!");
+#define BF_WO(Type, Name, Offset, Width)                                                                               \
+  constexpr void set_##Name(Type value) noexcept {                                                                     \
+    using BT = decltype(m_data);                                                                                       \
+    static_assert(Offset + Width <= sizeof(BT) * 8, "Bitfield [" #Name "] exceeds storage width");                     \
+    constexpr BT mask = klib::bitfield::make_mask<Width, BT>();                                                        \
+    BT raw_val = static_cast<BT>(value);                                                                               \
+    m_data = (m_data & ~(mask << Offset)) | ((raw_val & mask) << Offset);                                              \
+  }                                                                                                                    \
+  [[nodiscard]] constexpr auto with_##Name(Type value) const noexcept {                                                \
+    auto copy = *this;                                                                                                 \
+    copy.set_##Name(value);                                                                                            \
+    return copy;                                                                                                       \
   }
-}
 
-template <typename... Fields> consteval std::size_t get_max_bit() {
-  if constexpr (sizeof...(Fields) == 0) {
-    return 0;
-  } else {
-    return std::max({Fields::max_bit...});
+// Bit Macros (single-bit booleans)
+#define BF_BIT_RO(Name, Offset)                                                                                        \
+  [[nodiscard]] constexpr bool get_##Name() const noexcept {                                                           \
+    using BT = decltype(m_data);                                                                                       \
+    static_assert(Offset < sizeof(BT) * 8, "Bit [" #Name "] exceeds storage width");                                   \
+    return (m_data >> Offset) & BT{1};                                                                                 \
   }
-}
 
-template <typename... Fields> consteval bool validate_no_overlap() {
-  bool used[64] = {false};
-  bool valid = true;
+#define BF_BIT_WO(Name, Offset)                                                                                        \
+  constexpr void set_##Name(bool value) noexcept {                                                                     \
+    using BT = decltype(m_data);                                                                                       \
+    static_assert(Offset < sizeof(BT) * 8, "Bit [" #Name "] exceeds storage width");                                   \
+    m_data = (m_data & ~(BT{1} << Offset)) | (static_cast<BT>(value) << Offset);                                       \
+  }                                                                                                                    \
+  constexpr void set_##Name() noexcept { set_##Name(true); }                                                           \
+  constexpr void clear_##Name() noexcept { set_##Name(false); }                                                        \
+  constexpr void toggle_##Name() noexcept { m_data ^= (decltype(m_data){1} << Offset); }                               \
+  [[nodiscard]] constexpr auto with_##Name(bool value) const noexcept {                                                \
+    auto copy = *this;                                                                                                 \
+    copy.set_##Name(value);                                                                                            \
+    return copy;                                                                                                       \
+  }                                                                                                                    \
+  [[nodiscard]] constexpr auto with_##Name() const noexcept { return with_##Name(true); }                              \
+  [[nodiscard]] constexpr auto without_##Name() const noexcept { return with_##Name(false); }
 
-  auto check = [&]<typename F>(F) {
-    for (std::size_t i = F::offset; i <= F::max_bit; ++i) {
-      if (i >= 64) {
-        valid = false;
-        continue;
-      }
+#define BF_BIT_RW(Name, Offset)                                                                                        \
+  BF_BIT_RO(Name, Offset)                                                                                              \
+  BF_BIT_WO(Name, Offset)
 
-      if (used[i]) {
-        // overlap detected!
-        valid = false;
-      }
+// Write 1 to clear
+#define BF_BIT_W1C(Name, Offset)                                                                                       \
+  BF_BIT_RO(Name, Offset)                                                                                              \
+  constexpr void mark_clear_##Name() noexcept {                                                                        \
+    using BT = decltype(m_data);                                                                                       \
+    static_assert(Offset < sizeof(BT) * 8, "Bit [" #Name "] exceeds storage width");                                   \
+    m_data |= (BT{1} << Offset);                                                                                       \
+  }                                                                                                                    \
+  [[nodiscard]] constexpr auto with_mark_clear_##Name() const noexcept {                                               \
+    auto copy = *this;                                                                                                 \
+    copy.mark_clear_##Name();                                                                                          \
+    return copy;                                                                                                       \
+  }
 
-      used[i] = true;
-    }
+#define BF_RW(Type, Name, Offset, Width)                                                                               \
+  BF_RO(Type, Name, Offset, Width)                                                                                     \
+  BF_WO(Type, Name, Offset, Width)
+
+#define REG_RW(Name, Offset, Schema)                                                                                   \
+  struct Name {                                                                                                        \
+    static constexpr std::size_t offset = Offset;                                                                      \
+    using Type = Schema;                                                                                               \
+    static constexpr klib::bitfield::Access access = klib::bitfield::Access::RW;                                       \
   };
 
-  (check(Fields{}), ...);
-  return valid;
+#define REG_RO(Name, Offset, Schema)                                                                                   \
+  struct Name {                                                                                                        \
+    static constexpr std::size_t offset = Offset;                                                                      \
+    using Type = Schema;                                                                                               \
+    static constexpr klib::bitfield::Access access = klib::bitfield::Access::RO;                                       \
+  };
+
+#define REG_WO(Name, Offset, Schema)                                                                                   \
+  struct Name {                                                                                                        \
+    static constexpr std::size_t offset = Offset;                                                                      \
+    using Type = Schema;                                                                                               \
+    static constexpr klib::bitfield::Access access = klib::bitfield::Access::WO;                                       \
+  };
+
+namespace klib::bitfield {
+template <std::size_t Width, std::unsigned_integral T> consteval T make_mask() {
+  if constexpr (Width >= sizeof(T) * 8) {
+    return std::numeric_limits<T>::max();
+  } else {
+    return static_cast<T>((T{1} << Width) - 1);
+  }
 }
 
-template <std::size_t MaxBit>
-using hw_type_t = decltype([]<std::size_t M = MaxBit> {
-  if constexpr (M < 8) {
-    return std::uint8_t{};
-  } else if constexpr (M < 16) {
-    return std::uint16_t{};
-  } else if constexpr (M < 32) {
-    return std::uint32_t{};
-  } else {
-    return std::uint64_t{};
-  }
-}());
-} // namespace detail
+enum class Access { RW, RO, WO };
 
-template <std::size_t Offset, typename T, Access Acc = Access::RW> struct Register {
-  static constexpr std::size_t offset = Offset;
-  static constexpr Access access = Acc;
-  using ValueType = T;
-  using HwType = detail::hw_type_t<(sizeof(T) * 8) - 1>;
-};
+template <typename T>
+concept ReadableReg = (T::access == Access::RW || T::access == Access::RO);
 
-template <std::size_t BaseOffset, std::size_t Stride, typename T, Access Acc = Access::RW> struct RegisterArray {
-  static constexpr std::size_t base_offset = BaseOffset;
-  static constexpr std::size_t stride = Stride;
-  static constexpr Access access = Acc;
-  using ValueType = T;
-  using HwType = detail::hw_type_t<(sizeof(T) * 8) - 1>;
-
-  static constexpr std::size_t offset_for(const std::size_t index) noexcept { return base_offset + (index * stride); }
-};
-
-template <typename... Fields> struct BitfieldSchema {
-  static_assert(detail::validate_no_overlap<Fields...>(), "BitfieldSchema contains overlapping bits!");
-
-  static constexpr std::size_t MAX_BIT = detail::get_max_bit<Fields...>();
-  static_assert(MAX_BIT < 64, "Bitfields exceeding 64 bits are not supported.");
-
-  using Type = detail::hw_type_t<MAX_BIT>;
-  Type data;
-
-  template <typename F> static consteval Type field_mask() {
-    if constexpr (F::width >= sizeof(Type) * 8) {
-      return ~Type{0};
-    } else {
-      return (Type{1} << F::width) - 1;
-    }
-  }
-
-  template <internal::kstring... Names> static consteval Type generate_mask() {
-    Type combined_mask = 0;
-
-    auto apply_mask = [&]<internal::kstring N>() {
-      using F = decltype(detail::find_field<N, Fields...>());
-      constexpr Type m = (F::width == sizeof(Type) * 8) ? ~Type{0} : (Type{1} << F::width) - 1;
-      combined_mask |= m << F::offset;
-    };
-
-    (apply_mask.template operator()<Names>(), ...);
-    return combined_mask;
-  }
-
-  constexpr explicit BitfieldSchema(Type val = 0) noexcept : data(val) {}
-
-  template <internal::kstring Name, typename Ret = Type> [[nodiscard]] constexpr Ret get() const noexcept {
-    using F = decltype(detail::find_field<Name, Fields...>());
-
-    static_assert(F::access != Access::WO, "Attempted to read a Write-Only bitfield!");
-
-    constexpr Type mask = field_mask<F>();
-    return static_cast<Ret>((data >> F::offset) & mask);
-  }
-
-  template <internal::kstring Name, typename V> [[nodiscard]] constexpr BitfieldSchema set(V value) const noexcept {
-    using F = decltype(detail::find_field<Name, Fields...>());
-
-    static_assert(F::access != Access::RO, "Attempted to write to a Read-Only bitfield!");
-
-    Type raw_val = static_cast<Type>(value);
-    constexpr Type mask = field_mask<F>();
-    constexpr Type shifted_mask = mask << F::offset;
-
-    BitfieldSchema copy = *this;
-    copy.data = (copy.data & ~shifted_mask) | ((raw_val << F::offset) & shifted_mask);
-    return copy;
-  }
-
-  template <internal::kstring Name, typename V> constexpr void set_mut(V value) noexcept {
-    *this = this->template set<Name>(value);
-  }
-
-  constexpr explicit operator Type() const noexcept { return data; }
-};
-
-template <typename... Fields> struct formatter<BitfieldSchema<Fields...>> {
-  template <typename Sink>
-  static constexpr void format(Sink &sink, const BitfieldSchema<Fields...> &bf, const FormatSpec &) noexcept {
-    sink.push('[');
-    bool first = true;
-
-    auto print_field = [&]<typename F>(F) {
-      if constexpr (!F::is_reserved) {
-        auto val = bf.template get<F::name>();
-
-        if (val > 0) {
-          if (!first) {
-            sink.append(" | ");
-          }
-
-          sink.append(F::name.view());
-
-          if constexpr (F::width > 1) {
-            sink.push('=');
-            FormatSpec num_spec;
-            num_spec.base = 16;
-            num_spec.alt_form = true;
-            formatter<decltype(val)>::format(sink, val, num_spec);
-          }
-
-          first = false;
-        }
-      }
-    };
-
-    (print_field(Fields{}), ...);
-
-    if (first) {
-      sink.append("NONE");
-    }
-
-    sink.push(']');
-  }
-};
-} // namespace klib
+template <typename T>
+concept WritableReg = (T::access == Access::RW || T::access == Access::WO);
+} // namespace klib::bitfield

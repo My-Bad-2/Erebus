@@ -26,10 +26,22 @@ enum class PatMemoryType : std::uint64_t {
   UncacheableMinus = 0x07
 };
 
-using PatMsrSchema =
-    klib::BitfieldSchema<klib::Field<"pat0", 0, 8>, klib::Field<"pat1", 8, 8>, klib::Field<"pat2", 16, 8>,
-                         klib::Field<"pat3", 24, 8>, klib::Field<"pat4", 32, 8>, klib::Field<"pat5", 40, 8>,
-                         klib::Field<"pat6", 48, 8>, klib::Field<"pat7", 56, 8>>;
+class PatMsr {
+  std::uint64_t m_data;
+
+public:
+  constexpr explicit PatMsr(const std::uint64_t val = 0) : m_data(val) {}
+  [[nodiscard]] std::uint64_t raw() const noexcept { return m_data; }
+
+  BF_RW(std::uint8_t, pat0, 0, 8)
+  BF_RW(std::uint8_t, pat1, 8, 8)
+  BF_RW(std::uint8_t, pat2, 16, 8)
+  BF_RW(std::uint8_t, pat3, 24, 8)
+  BF_RW(std::uint8_t, pat4, 32, 8)
+  BF_RW(std::uint8_t, pat5, 40, 8)
+  BF_RW(std::uint8_t, pat6, 48, 8)
+  BF_RW(std::uint8_t, pat7, 56, 8)
+};
 
 void free_table_recursive(const PhysicalAddress table_phys, const std::uint8_t lvl) noexcept {
   if (lvl > 1) {
@@ -47,47 +59,45 @@ void free_table_recursive(const PhysicalAddress table_phys, const std::uint8_t l
 }
 } // namespace
 
-AccessFlags PageMap::extract_flags(const PteSchema &schema) noexcept {
+AccessFlags PageMap::extract_flags(const PTEntry &s) noexcept {
   auto flags = AccessFlags::None;
-  const auto s = schema.small();
 
-  if (s.get<"rw">()) {
+  if (s.get_rw()) {
     flags = flags | AccessFlags::Write;
   }
 
-  if (s.get<"user">()) {
+  if (s.get_user()) {
     flags = flags | AccessFlags::User;
   }
 
-  if (s.get<"global">()) {
+  if (s.get_global()) {
     flags = flags | AccessFlags::Global;
   }
 
-  if (!s.get<"nx">()) {
+  if (!s.get_nx()) {
     flags = flags | AccessFlags::Execute;
   }
 
-  if (s.get<"cow">()) {
+  if (s.get_cow()) {
     flags = flags | AccessFlags::CopyOnWrite;
   }
 
-  if (s.get<"shared">()) {
+  if (s.get_shared()) {
     flags = flags | AccessFlags::Shared;
   }
 
-  if (s.get<"stack">()) {
+  if (s.get_stack()) {
     flags = flags | AccessFlags::Stack;
   }
 
   return flags | AccessFlags::Read;
 }
 
-CacheMode PageMap::extract_cache(const PteSchema &schema, const bool is_huge) noexcept {
-  const auto s = schema.small();
-  const bool pwt = s.get<"pwt">() == 1;
-  const bool pcd = s.get<"pcd">() == 1;
+CacheMode PageMap::extract_cache(const PTEntry &s, const bool is_huge) noexcept {
+  const bool pwt = s.get_pwt() == 1;
+  const bool pcd = s.get_pcd() == 1;
 
-  const bool pat = is_huge ? (schema.huge().get<"pat">() == 1) : (s.get<"pat">() == 1);
+  const bool pat = is_huge ? s.get_pat_large() : s.get_pat_4k();
 
   if (!pat && !pcd && !pwt) {
     return CacheMode::WriteBack;
@@ -128,7 +138,7 @@ PageMap::PageMap() noexcept : m_lvls{max_lvls} {
     auto *kernel_root_table = s_kernel_root.as<PageTableEntry>();
 
     for (std::size_t i = MAX_PAGE_ENTRIES / 2; i < MAX_PAGE_ENTRIES; ++i) {
-      PteSchema k_entry = kernel_root_table[i].load(std::memory_order_relaxed);
+      PTEntry k_entry = kernel_root_table[i].load(std::memory_order_relaxed);
       new_root_table[i].store(k_entry, std::memory_order_relaxed);
     }
   } else {
@@ -153,47 +163,46 @@ void early_initialize_hw() noexcept {
   pcid_supported = info->has<hw::Feature::PCID>();
   tce_supported = info->has<hw::Feature::TCE>();
 
-  const hw::CR4Schema cr4 = hw::read::cr4();
-  const bool la57_active = cr4.get<"la57">();
+  const hw::CR4 cr4 = hw::read::cr4();
+  const bool la57_active = cr4.get_la57();
   max_lvls = la57_active ? 5 : 4;
 }
 
 void initialize_hw() noexcept {
-  hw::EferSchema efer = hw::read::efer();
-  efer.set_mut<"nxe">(nxe_supported ? 1 : 0);
-  efer.set_mut<"tce">(tce_supported ? 1 : 0);
+  hw::EFER efer = hw::read::efer();
+  efer.set_nxe(nxe_supported);
+  efer.set_tce(tce_supported);
   hw::write::efer(efer);
 
-  hw::CR0Schema cr0 = hw::read::cr0();
-  cr0.set_mut<"em">(0); // emulation off
-  cr0.set_mut<"mp">(1); // monitor co-processor on
-  cr0.set_mut<"ne">(1); // native exceptions on
-  cr0.set_mut<"wp">(1); // kernel write protection on
-  cr0.set_mut<"pg">(1); // paging on
+  hw::CR0 cr0 = hw::read::cr0()
+                    .without_em()   // emulation off
+                    .with_mp(true)  // monitor co-processor on
+                    .with_ne(true)  // native exceptions on
+                    .with_wp(true)  // kernel write protection on
+                    .with_pg(true); // paging on
   hw::write::cr0(cr0);
 
-  hw::CR4Schema cr4 = hw::read::cr4();
-  cr4.set_mut<"pae">(1);
-  cr4.set_mut<"pge">(pge_supported ? 1 : 0);
-  cr4.set_mut<"smep">(smep_supported ? 1 : 0);
-  cr4.set_mut<"smap">(smap_supported ? 1 : 0);
-  cr4.set_mut<"umip">(umip_supported ? 1 : 0);
-  cr4.set_mut<"pke">(pke_supported ? 1 : 0);
-  cr4.set_mut<"pcide">(pcid_supported ? 1 : 0);
+  hw::CR4 cr4 = hw::read::cr4();
+  cr4.set_pae(true);
+  cr4.set_pge(pge_supported);
+  cr4.set_smep(smep_supported);
+  cr4.set_smap(smap_supported);
+  cr4.set_umip(umip_supported);
+  cr4.set_pke(pke_supported);
+  cr4.set_pcide(pcid_supported);
   hw::write::cr4(cr4);
 
   constexpr std::uint32_t MSR_PAT = 0x00000277;
 
-  PatMsrSchema pat{0};
-  pat.set_mut<"pat0">(std::to_underlying(PatMemoryType::WriteBack));
-  pat.set_mut<"pat1">(std::to_underlying(PatMemoryType::WriteThrough));
-  pat.set_mut<"pat2">(std::to_underlying(PatMemoryType::UncacheableMinus));
-  pat.set_mut<"pat3">(std::to_underlying(PatMemoryType::Uncacheable));
-  pat.set_mut<"pat4">(std::to_underlying(PatMemoryType::WriteCombining));
-  pat.set_mut<"pat5">(std::to_underlying(PatMemoryType::WriteProtected));
-  pat.set_mut<"pat6">(std::to_underlying(PatMemoryType::UncacheableMinus));
-  pat.set_mut<"pat7">(std::to_underlying(PatMemoryType::Uncacheable));
-
-  hw::write::msr(MSR_PAT, static_cast<std::uint64_t>(pat));
+  PatMsr pat{0};
+  pat.set_pat0(std::to_underlying(PatMemoryType::WriteBack));
+  pat.set_pat1(std::to_underlying(PatMemoryType::WriteThrough));
+  pat.set_pat2(std::to_underlying(PatMemoryType::UncacheableMinus));
+  pat.set_pat3(std::to_underlying(PatMemoryType::Uncacheable));
+  pat.set_pat4(std::to_underlying(PatMemoryType::WriteCombining));
+  pat.set_pat5(std::to_underlying(PatMemoryType::WriteProtected));
+  pat.set_pat6(std::to_underlying(PatMemoryType::UncacheableMinus));
+  pat.set_pat7(std::to_underlying(PatMemoryType::Uncacheable));
+  hw::write::msr(MSR_PAT, pat.raw());
 }
 } // namespace kernel::memory::vmm

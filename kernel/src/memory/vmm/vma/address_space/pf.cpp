@@ -11,11 +11,11 @@ std::expected<VMArea *, Error> AddressSpace::expand_stack_locked(const VirtualAd
   }
 
   VMArea *next_vma = found ? floor_vma->next_vma : m_vma_list_head;
-  if (!next_vma || !has_flag(next_vma->flags.get<"access", AccessFlags>(), AccessFlags::Stack)) {
+  if (!next_vma || !has_flag(next_vma->flags.get_access(), AccessFlags::Stack)) {
     return std::unexpected(Error::NotMapped);
   }
 
-  const PageSize page_size = next_vma->flags.get<"page_size", PageSize>();
+  const PageSize page_size = next_vma->flags.get_page_size();
   const std::size_t bytes_per_page = get_page_bytes(page_size);
   const VirtualAddress new_start = fault_addr.align_down(bytes_per_page);
 
@@ -41,11 +41,11 @@ std::expected<VMArea *, Error> AddressSpace::expand_stack_locked(const VirtualAd
 
 std::expected<void, Error> AddressSpace::resolve_vma_fault_locked(VMArea *vma, VirtualAddress fault_addr,
                                                                   AccessFlags fault_type) noexcept {
-  const AccessFlags vma_access = static_cast<AccessFlags>(vma->flags.get<"access">());
-  const PageSize page_size = static_cast<PageSize>(vma->flags.get<"page_size">());
-  const CacheMode cache = static_cast<CacheMode>(vma->flags.get<"cache">());
+  const AccessFlags vma_access = vma->flags.get_access();
+  const PageSize page_size = vma->flags.get_page_size();
+  const CacheMode cache = vma->flags.get_cache();
   const std::size_t bytes_per_page = get_page_bytes(page_size);
-  const std::uint8_t pkey = vma->flags.get<"pkey">();
+  const std::uint8_t pkey = vma->flags.get_pkey();
 
   const std::size_t page_idx = vma->object_offset + ((fault_addr.value() - vma->start.value()) / bytes_per_page);
 
@@ -62,7 +62,7 @@ std::expected<void, Error> AddressSpace::resolve_vma_fault_locked(VMArea *vma, V
       return std::unexpected(Error::SecurityViolation);
     }
 
-    if (has_flag(vma->flags.get<"access", AccessFlags>(), AccessFlags::CopyOnWrite)) {
+    if (has_flag(vma->flags.get_access(), AccessFlags::CopyOnWrite)) {
       auto cow_phys = vma->vm_object->resolve_cow_fault(page_idx, page_size);
       if (!cow_phys) {
         return std::unexpected(cow_phys.error());
@@ -85,7 +85,7 @@ std::expected<void, Error> AddressSpace::resolve_vma_fault_locked(VMArea *vma, V
   }
 
   AccessFlags hw_flags = vma_access;
-  if (has_flag(vma->flags.get<"access", AccessFlags>(), AccessFlags::CopyOnWrite)) {
+  if (has_flag(vma->flags.get_access(), AccessFlags::CopyOnWrite)) {
     hw_flags &= ~AccessFlags::Write;
   }
 
@@ -110,7 +110,7 @@ std::expected<void, Error> AddressSpace::handle_page_fault(const VirtualAddress 
       target_vma = floor_vma;
     } else {
       VMArea *next_vma = found ? floor_vma->next_vma : m_vma_list_head;
-      if (!next_vma || !has_flag(next_vma->flags.get<"access", AccessFlags>(), AccessFlags::Stack)) {
+      if (!next_vma || !has_flag(next_vma->flags.get_access(), AccessFlags::Stack)) {
         return std::unexpected(Error::NotMapped);
       }
 

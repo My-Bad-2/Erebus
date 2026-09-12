@@ -19,15 +19,26 @@ enum class NUMAPolicy : std::uint8_t {
   FirstTouch = 2,
 };
 
-using VMAFlagsSchema = klib::BitfieldSchema<klib::Field<"access", 0, 16>,    // AccessFlags
-                                            klib::Field<"cache", 16, 3>,     // CacheMode
-                                            klib::Field<"page_size", 19, 2>, // PageSize
-                                            klib::Field<"type", 21, 4>,      // VMAType
-                                            klib::Field<"numa", 25, 3>,      // NUMAPolicy
-                                            klib::Bit<"is_locked", 28>,      // Excluded from swap
-                                            klib::Bit<"is_wired", 29>,       // Pinned in memory
-                                            klib::Field<"pkey", 30, 4>,      // Protection key
-                                            klib::Reserved<34, 30>>;
+class VMAFlags {
+  std::uint64_t m_data;
+
+public:
+  constexpr explicit VMAFlags(const std::uint64_t val = 0) : m_data(val) {}
+  [[nodiscard]] std::uint64_t raw() const noexcept { return m_data; }
+
+  void clear() noexcept { m_data = 0; }
+
+  BF_RW(AccessFlags, access, 0, 16) // AccessFlags
+  BF_RW(CacheMode, cache, 16, 3)    // CacheMode
+  BF_RW(PageSize, page_size, 19, 2) // PageSize
+  BF_RW(VMAType, type, 21, 4)       // VMAType
+  BF_RW(NUMAPolicy, numa, 25, 3)    // NUMAPolicy
+
+  BF_BIT_RW(is_locked, 28) // Excluded from swap
+  BF_BIT_RW(is_wired, 29)  // Pinned in memory
+
+  BF_RW(std::uint8_t, pkey, 30, 4) // Protection key
+};
 
 struct alignas(std::hardware_destructive_interference_size) VMArea {
   VirtualAddress start;
@@ -35,7 +46,7 @@ struct alignas(std::hardware_destructive_interference_size) VMArea {
 
   VMObject *vm_object;
   std::size_t object_offset;
-  VMAFlagsSchema flags;
+  VMAFlags flags;
 
   VMArea *next_vma;
   VMArea *prev_vma;

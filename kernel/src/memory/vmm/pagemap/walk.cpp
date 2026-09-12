@@ -6,31 +6,32 @@
 
 namespace kernel::memory::vmm {
 std::expected<void, Error> PageMap::shatter_huge_page(PageTableEntry *pte, VirtualAddress virt,
-                                                      const std::uint8_t curr_lvl) const noexcept {
-  PteSchema old_schema = pte->load(std::memory_order_acquire);
-  if (!pte->is_present() || !pte->is_huge()) {
-    return {}; // Shattered or not mapped
+                                                      const std::uint8_t curr_lvl) noexcept {
+  PTEntry old_schema = pte->load(std::memory_order_acquire);
+  if (!old_schema.get_present() || !old_schema.get_huge()) {
+    return {}; // Already shattered or not mapped, nothing to do
   }
 
-  // Only shatter 1gb or 2mb pages
+  // Only shatter 1gb (lvl 3) or 2mb (lvl 2) pages
   if (curr_lvl != 3 && curr_lvl != 2) [[unlikely]] {
     return std::unexpected(Error::InvalidFlags);
   }
 
   const PageSize curr_size = (curr_lvl == 3) ? PageSize::Size1G : PageSize::Size2M;
   const PageSize next_size = (curr_lvl == 3) ? PageSize::Size2M : PageSize::Size4K;
-
   const std::size_t step_bytes = (curr_lvl == 3) ? PAGE_SIZE_2MB : PAGE_SIZE;
 
-  const auto base_phys_res = pte->extract_address(curr_size);
+  const PageTableEntry old_pte{old_schema.raw()};
+  const auto base_phys_res = old_pte.extract_address(curr_size);
   if (!base_phys_res) {
     return std::unexpected(Error::NotMapped);
   }
 
   const PhysicalAddress base_phys = *base_phys_res;
+
   const AccessFlags flags = extract_flags(old_schema);
   const CacheMode cache = extract_cache(old_schema, true);
-  const std::uint8_t pkey = static_cast<std::uint8_t>(old_schema.small().get<"pkey">());
+  const std::uint8_t pkey = old_schema.get_pkey();
 
   const auto new_page_res = pmm::alloc_pages_zeroed(pmm::PageMobility::Movable, 0);
   if (!new_page_res) {
@@ -43,24 +44,18 @@ std::expected<void, Error> PageMap::shatter_huge_page(PageTableEntry *pte, Virtu
 
   for (std::uint32_t i = 0; i < MAX_PAGE_ENTRIES; ++i) {
     const PhysicalAddress offset_phys = base_phys + (i * step_bytes);
-    const PteSchema child_schema = PageTableEntry::build_schema(offset_phys, flags, cache, next_size, pkey);
+    const PTEntry child_schema = PageTableEntry::build_schema(offset_phys, flags, cache, next_size, pkey);
     new_table[i].store(child_schema, std::memory_order_relaxed);
   }
 
-  // Build the new directory entry
-  PteLeafSchema dir_leaf{};
-  dir_leaf.set_mut<"present">(1);
-  dir_leaf.set_mut<"pfn">(new_phys.value() >> 12);
-  dir_leaf.set_mut<"rw">(1);
-  dir_leaf.set_mut<"user">(1);
-
-  PteSchema dir_schema{static_cast<std::uint64_t>(dir_leaf)};
+  const PTEntry dir_schema = PageTableEntry::build_directory(new_phys);
   if (pte->cas(old_schema, dir_schema, std::memory_order_release, std::memory_order_acquire)) [[likely]] {
     const std::size_t size = size_to_bytes(curr_size);
-    tlb::ShootdownCoordinator::broadcast(const_cast<PageMap *>(this), virt.align_down(size), true);
+    tlb::ShootdownCoordinator::broadcast(this, virt.align_down(size), size, true);
     return {};
   }
 
+  // CAS failed (another thread shattered it). Clean up and return.
   pmm::free_pages(new_phys);
   return std::unexpected(Error::AlreadyMapped);
 }
@@ -83,9 +78,9 @@ std::expected<PageTableEntry *, Error> PageMap::walk(const VirtualAddress virt, 
     PageTableEntry *pte = &curr_table[indices[lvl]];
 
     while (true) {
-      PteSchema schema = pte->load(std::memory_order_acquire);
+      PTEntry schema = pte->load(std::memory_order_acquire);
 
-      if (schema.small().get<"present">() == 0) [[unlikely]] {
+      if (!schema.get_present()) [[unlikely]] {
         if (!alloc) {
           return std::unexpected(Error::NotMapped);
         }
@@ -98,32 +93,31 @@ std::expected<PageTableEntry *, Error> PageMap::walk(const VirtualAddress virt, 
         PhysicalAddress new_phys{*new_phys_res};
         pmm::phys_to_page(new_phys)->set_mobility(pmm::PageMobility::Unmovable);
 
-        PteLeafSchema dir_leaf{};
-        dir_leaf.set_mut<"present">(1);
-        dir_leaf.set_mut<"pfn">(new_phys.value() >> 12);
-        dir_leaf.set_mut<"rw">(1);
-        dir_leaf.set_mut<"user">(1);
+        // Natively construct directory entry
+        const PTEntry dir_schema = PageTableEntry::build_directory(new_phys);
 
-        const PteSchema dir_schema{static_cast<std::uint64_t>(dir_leaf)};
         if (pte->cas(schema, dir_schema, std::memory_order_release, std::memory_order_acquire)) [[likely]] {
           curr_table = DirectMap::phys_to_virt(new_phys).as<PageTableEntry>();
-          break;
+          break; // Advance to next level
         }
 
-        pmm::free_pages(new_phys);
+        // CAS failed, free allocated page and try again
+        pmm::free_pages(new_phys, 0);
         continue;
       }
 
-      if ((schema.raw & (1ull << 7)) != 0 && lvl > 1) [[unlikely]] {
+      // Check the huge bit type-safely. (For lvl > 1, bit 7 is the Huge Page indicator)
+      if (schema.get_huge() && lvl > 1) [[unlikely]] {
         const auto shatter_res = shatter_huge_page(pte, virt, lvl);
         if (!shatter_res) [[unlikely]] {
           return std::unexpected(shatter_res.error());
         }
 
+        // Loop restarts, traversing into the newly shattered directory
         continue;
       }
 
-      const PhysicalAddress next_phys{schema.small().get<"pfn">() << 12};
+      const PhysicalAddress next_phys{schema.get_pfn_4k() << PAGE_SHIFT_4KB};
       curr_table = DirectMap::phys_to_virt(next_phys).as<PageTableEntry>();
       break;
     }
@@ -146,12 +140,15 @@ std::optional<TranslationResult> PageMap::translate(const VirtualAddress virt) c
 
   for (std::uint8_t lvl = m_lvls; lvl >= 1; --lvl) {
     const PageTableEntry pte = current_table[indices[lvl]];
-    const PteSchema schema = pte.load(std::memory_order_acquire);
-    if (schema.small().get<"present">() == 0) [[unlikely]] {
+    const PTEntry schema = pte.load(std::memory_order_acquire);
+
+    if (!schema.get_present()) [[unlikely]] {
       return std::nullopt;
     }
 
-    const bool is_huge = (lvl > 1) && ((schema.raw & (1ull << 7)) != 0);
+    // Type-safe huge check
+    const bool is_huge = (lvl > 1) && schema.get_huge();
+
     if (lvl == 1 || is_huge) [[unlikely]] {
       TranslationResult result{};
 
@@ -163,7 +160,7 @@ std::optional<TranslationResult> PageMap::translate(const VirtualAddress virt) c
         result.mapped_size = PageSize::Size4K;
       }
 
-      const PageTableEntry leaf_pte{schema.raw};
+      const PageTableEntry leaf_pte{schema.raw()};
       const auto base_phys_res = leaf_pte.extract_address(result.mapped_size);
 
       if (!base_phys_res) [[unlikely]] {
@@ -176,12 +173,12 @@ std::optional<TranslationResult> PageMap::translate(const VirtualAddress virt) c
       result.phys_address = base_phys + virt.page_offset(page_size_bytes);
       result.flags = extract_flags(schema);
       result.cache = extract_cache(schema, is_huge);
-      result.pkey = schema.small().get<"pkey">();
+      result.pkey = schema.get_pkey();
 
       return result;
     }
 
-    const PhysicalAddress next_table_phys{schema.small().get<"pfn">() << 12};
+    const PhysicalAddress next_table_phys{schema.get_pfn_4k() << PAGE_SHIFT_4KB};
     current_table = DirectMap::phys_to_virt(next_table_phys).as<PageTableEntry>();
   }
 

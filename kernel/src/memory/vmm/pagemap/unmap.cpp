@@ -13,30 +13,29 @@ std::expected<PhysicalAddress, Error> PageMap::unmap_1gb_as_2mb(const VirtualAdd
   }
 
   PageTableEntry *pdpte = *pdpte_res;
-  PteSchema expected = pdpte->load(std::memory_order_acquire);
+  PTEntry expected = pdpte->load(std::memory_order_acquire);
 
   while (true) {
-    if (expected.small().get<"present">() == 0) [[unlikely]] {
+    if (!expected.get_present()) [[unlikely]] {
       return std::unexpected(Error::NotMapped);
     }
 
-    if ((expected.raw & (1ull << 7)) != 0) [[unlikely]] {
+    if (expected.get_huge()) [[unlikely]] {
       return std::unexpected(Error::InvalidFlags);
     }
 
-    const PteSchema desired{0};
+    const PTEntry desired;
 
     if (pdpte->cas(expected, desired, std::memory_order_release, std::memory_order_acquire)) [[likely]] {
-      tlb::ShootdownCoordinator::broadcast(this, virt, true);
+      tlb::ShootdownCoordinator::broadcast(this, virt, PAGE_SIZE_1GB, true);
 
-      const PhysicalAddress pml2_phys{expected.small().get<"pfn">() << 12};
+      const PhysicalAddress pml2_phys{expected.get_pfn_4k() << PAGE_SHIFT_4KB};
       auto *pml2_table = DirectMap::phys_to_virt(pml2_phys).as<PageTableEntry>();
 
       PhysicalAddress user_base_phys{};
-      const PteSchema first_pde = pml2_table[0].load(std::memory_order_acquire);
-      if (first_pde.small().get<"present">() == 1) [[likely]] {
-        const PageTableEntry first_pte{first_pde.raw};
-
+      const PTEntry first_pde = pml2_table[0].load(std::memory_order_acquire);
+      if (first_pde.get_present()) [[likely]] {
+        const PageTableEntry first_pte{first_pde.raw()};
         if (auto phys_res = first_pte.extract_address(PageSize::Size2M)) [[likely]] {
           user_base_phys = *phys_res;
         }
@@ -64,16 +63,16 @@ std::expected<PhysicalAddress, Error> PageMap::unmap(const VirtualAddress virt, 
   }
 
   PageTableEntry *pte = *pte_res;
-  PteSchema expected = pte->load(std::memory_order_acquire);
+  PTEntry expected = pte->load(std::memory_order_acquire);
 
   while (true) {
-    if (expected.small().get<"present">() == 0) [[unlikely]] {
+    if (expected.get_present() == 0) [[unlikely]] {
       return std::unexpected(Error::NotMapped);
     }
 
-    const PteSchema desired{0};
+    const PTEntry desired{0};
     if (pte->cas(expected, desired, std::memory_order_release, std::memory_order_acquire)) [[likely]] {
-      const PageTableEntry old_pte{expected.raw};
+      const PageTableEntry old_pte{expected.raw()};
 
       auto addr_res = old_pte.extract_address(size);
       if (!addr_res) [[unlikely]] {
@@ -130,10 +129,9 @@ std::expected<void, Error> PageMap::unmap_range(const VirtualAddress start_virt,
       PageTableEntry *pte = *pt_res;
 
       for (std::size_t i = 0; i < pages_in_batch; ++i) {
-        PteSchema expected = pte[i].load(std::memory_order_acquire);
-        while (expected.small().get<"present">() == 1) {
-          const PteSchema desired{0};
-          if (pte[i].cas(expected, desired, std::memory_order_release, std::memory_order_acquire)) {
+        PTEntry expected = pte[i].load(std::memory_order_acquire);
+        while (expected.get_present()) {
+          if (pte[i].cas(expected, PTEntry{}, std::memory_order_release, std::memory_order_acquire)) {
             break;
           }
         }

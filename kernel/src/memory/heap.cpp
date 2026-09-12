@@ -126,7 +126,7 @@ void KmemCache::destroy() noexcept {
 
     pmm::Page *current_partial = cpu.cpu_partial;
     while (current_partial) {
-      pmm::Page *next = current_partial->next_partial;
+      pmm::Page *next = current_partial->slub.next_partial;
 
       current_partial->set_state(pmm::PageState::Free);
       current_partial->set_mobility(pmm::PageMobility::Movable);
@@ -144,7 +144,7 @@ void KmemCache::destroy() noexcept {
 
     pmm::Page *current = partial_head;
     while (current) {
-      pmm::Page *next = current->next_partial;
+      pmm::Page *next = current->slub.next_partial;
 
       current->set_state(pmm::PageState::Free);
       current->set_mobility(pmm::PageMobility::Movable);
@@ -272,7 +272,7 @@ std::expected<void *, Error> KmemCache::refill(CpuCache &cpu, const std::uint32_
 
   if (cpu.cpu_partial) {
     pmm::Page *partial = cpu.cpu_partial;
-    cpu.cpu_partial = partial->next_partial;
+    cpu.cpu_partial = partial->slub.next_partial;
     cpu.partial_count--;
 
     SlabState state = cpu.page->read_slub_state();
@@ -425,7 +425,7 @@ void KmemCache::abandon_active_page(CpuCache &cpu, std::uint32_t cpu_id) noexcep
 
   const std::uint32_t node_id = page->get_numa_node();
   if (new_state.in_use > 0 && cpu.partial_count < CpuCache::MAX_CPU_PARTIAL) {
-    page->next_partial = cpu.cpu_partial;
+    page->slub.next_partial = cpu.cpu_partial;
     cpu.cpu_partial = page;
     cpu.partial_count++;
   } else if (new_state.in_use == 0) {
@@ -446,11 +446,11 @@ void KmemCache::push_to_node_partial(pmm::Page *page, std::uint32_t node_id, boo
 
   if (mostly_empty) {
     // Push to head
-    page->next_partial = partial_head;
-    page->prev_partial = nullptr;
+    page->slub.next_partial = partial_head;
+    page->slub.prev_partial = nullptr;
 
     if (partial_head) {
-      partial_head->prev_partial = page;
+      partial_head->slub.prev_partial = page;
     } else {
       partial_tail = page;
     }
@@ -458,11 +458,11 @@ void KmemCache::push_to_node_partial(pmm::Page *page, std::uint32_t node_id, boo
     partial_head = page;
   } else {
     // Push to tail
-    page->prev_partial = partial_tail;
-    page->next_partial = nullptr;
+    page->slub.prev_partial = partial_tail;
+    page->slub.next_partial = nullptr;
 
     if (partial_tail) {
-      partial_tail->next_partial = page;
+      partial_tail->slub.next_partial = page;
     } else {
       partial_head = page;
     }
@@ -477,20 +477,20 @@ void KmemCache::remove_from_node_partial(pmm::Page *page, std::uint32_t node_id)
   auto &[lock, num_partial, partial_head, partial_tail] = m_node_caches[node_id];
   utils::NakedGuard guard(lock);
 
-  if (page->prev_partial) {
-    page->prev_partial->next_partial = page->next_partial;
+  if (page->slub.prev_partial) {
+    page->slub.prev_partial->slub.next_partial = page->slub.next_partial;
   } else {
-    partial_head = page->next_partial;
+    partial_head = page->slub.next_partial;
   }
 
-  if (page->next_partial) {
-    page->next_partial->prev_partial = page->prev_partial;
+  if (page->slub.next_partial) {
+    page->slub.next_partial->slub.prev_partial = page->slub.prev_partial;
   } else {
-    partial_tail = page->prev_partial;
+    partial_tail = page->slub.prev_partial;
   }
 
-  page->next_partial = nullptr;
-  page->prev_partial = nullptr;
+  page->slub.next_partial = nullptr;
+  page->slub.prev_partial = nullptr;
   num_partial--;
 }
 
@@ -500,15 +500,15 @@ pmm::Page *KmemCache::pop_from_node_partial(std::uint32_t node_id) noexcept {
 
   pmm::Page *page = partial_head;
   if (page) {
-    partial_head = page->next_partial;
+    partial_head = page->slub.next_partial;
     if (partial_head) {
-      partial_head->prev_partial = nullptr;
+      partial_head->slub.prev_partial = nullptr;
     } else {
       partial_tail = nullptr;
     }
 
-    page->next_partial = nullptr;
-    page->prev_partial = nullptr;
+    page->slub.next_partial = nullptr;
+    page->slub.prev_partial = nullptr;
     num_partial--;
   }
 

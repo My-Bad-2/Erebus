@@ -26,24 +26,20 @@ void single(const std::uint16_t pcid, const std::uintptr_t addr) noexcept {
 void context_legacy(const std::uint16_t target_pcid) noexcept {
   const hw::CR3 cr3 = hw::read::cr3();
 
-  if (target_pcid == cr3.pcid().get<"pcid">()) {
+  if (target_pcid == cr3.get_pcid()) {
     const PhysicalAddress pfn{cr3.extract_address()};
     hw::write::cr3(hw::CR3::build_pcid(pfn, target_pcid, false));
   } else {
-    hw::CR4Schema cr4 = hw::read::cr4();
-
-    cr4.set_mut<"pcide">(0);
-    hw::write::cr4(cr4);
-
-    cr4.set_mut<"pcide">(1);
-    hw::write::cr4(cr4);
+    const hw::CR4 cr4 = hw::read::cr4();
+    hw::write::cr4(cr4.with_pcide(false));
+    hw::write::cr4(cr4.with_pcide(true));
   }
 }
 
 void single_legacy(const std::uint16_t target_pcid, const std::uintptr_t addr) noexcept {
   const hw::CR3 cr3 = hw::read::cr3();
 
-  if (target_pcid == cr3.pcid().get<"pcid">()) {
+  if (target_pcid == cr3.get_pcid()) {
     hw::invlpg(addr);
   } else {
     context_legacy(0);
@@ -196,23 +192,18 @@ void ShootdownCoordinator::local_invalidate(const PageMap *pmap, const VirtualAd
 
 void ShootdownCoordinator::queue_invlpgb(const VirtualAddress virt, const std::size_t size_bytes,
                                          const std::uint16_t target_pcid, const bool is_huge) noexcept {
-  hw::InvlpgbAddressFlagsSchema rax{0};
-  hw::InvlpgbContextIdsSchema edx{0};
-  hw::InvlpgbPageCountSchema ecx{0};
+  hw::InvlpgbCount ecx{0};
 
   const std::uintptr_t virt_addr = virt.value();
+  auto rax = hw::InvlpgbAddress{}
+                 .with_va_valid()    // Flush only the specific virtual address
+                 .with_pcid_valid(); // Flush specific pcid value
+  rax.set_include_global(virt_addr >= DirectMap::s_hhdm_base);
 
-  rax.set_mut<"va_valid">(1);
-  rax.set_mut<"pcid_valid">(1);
+  hw::InvlpgbContext edx{0};
+  edx.set_pcid(target_pcid);
 
-  if (virt_addr >= DirectMap::s_hhdm_base) {
-    rax.set_mut<"include_global">(1);
-  }
-
-  edx.set_mut<"pcid">(target_pcid);
-  if (is_huge) {
-    ecx.set_mut<"large_page_stride">(1);
-  }
+  ecx.set_large_page_stride(true);
 
   const std::size_t page_size = is_huge ? PAGE_SIZE_2MB : PAGE_SIZE;
   std::size_t pages = utils::maths::div_round_up(size_bytes, page_size);
@@ -221,8 +212,8 @@ void ShootdownCoordinator::queue_invlpgb(const VirtualAddress virt, const std::s
   while (pages > 0) {
     const std::uint32_t chunk = std::min<std::size_t>(pages, 4096);
 
-    rax.set_mut<"virt_addr">(curr_virt >> 12);
-    ecx.set_mut<"extra_count">(chunk - 1);
+    rax.set_virt_addr(curr_virt >> 12);
+    ecx.set_extra_count(chunk - 1);
     hw::invlpgb(rax, ecx, edx);
 
     pages -= chunk;

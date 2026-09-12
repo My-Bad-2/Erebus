@@ -84,72 +84,43 @@ enum class ArchFlags : std::uint64_t {
   NX = 1ul << 63
 };
 
-using PteLeafSchema = klib::BitfieldSchema<klib::Bit<"present", 0>,        // present
-                                           klib::Bit<"rw", 1>,             // write
-                                           klib::Bit<"user", 2>,           // user-supervisor
-                                           klib::Bit<"pwt", 3>,            // write through
-                                           klib::Bit<"pcd", 4>,            // cache disable
-                                           klib::Bit<"accessed", 5>,       // accessed
-                                           klib::Bit<"dirty", 6>,          // is dirty
-                                           klib::Bit<"pat", 7>,            // pat
-                                           klib::Bit<"global", 8>,         // global pages
-                                           klib::Bit<"cow", 9>,            // Triggers Copy-on-Write in the #PF handler
-                                           klib::Bit<"shared", 10>,        // Mapped in multiple address spaces
-                                           klib::Bit<"swapped", 11>,       // Evicted to disk. PFN is a swap index.
-                                           klib::Field<"pfn", 12, 40>,     // pfn
-                                           klib::Field<"avl_high", 52, 6>, // available to used
-                                           klib::Bit<"stack", 58>,         // is stack
-                                           klib::Field<"pkey", 59, 4>,     // pkru
-                                           klib::Bit<"nx", 63>>;
+class PTEntry {
+  std::uint64_t m_data;
 
-using PteHugeSchema = klib::BitfieldSchema<klib::Bit<"present", 0>,        // present
-                                           klib::Bit<"rw", 1>,             // write
-                                           klib::Bit<"user", 2>,           // user-supervisor
-                                           klib::Bit<"pwt", 3>,            // write through
-                                           klib::Bit<"pcd", 4>,            // cache disable
-                                           klib::Bit<"accessed", 5>,       // accessed
-                                           klib::Bit<"dirty", 6>,          // is dirty
-                                           klib::Bit<"huge", 7>,           // pat
-                                           klib::Bit<"global", 8>,         // global pages
-                                           klib::Bit<"cow", 9>,            // Triggers Copy-on-Write in the #PF handler
-                                           klib::Bit<"shared", 10>,        // Mapped in multiple address spaces
-                                           klib::Bit<"swapped", 11>,       // Evicted to disk. PFN is a swap index.
-                                           klib::Bit<"pat", 12>,           // pat bit
-                                           klib::Field<"pfn", 21, 31>,     // pfn
-                                           klib::Field<"avl_high", 52, 6>, // available to used
-                                           klib::Bit<"stack", 58>,         // is stack
-                                           klib::Field<"pkey", 59, 4>,     // pkru
-                                           klib::Bit<"nx", 63>>;
+public:
+  constexpr explicit PTEntry(const std::uint64_t val = 0) : m_data(val) {}
+  [[nodiscard]] std::uint64_t raw() const noexcept { return m_data; }
 
-using Pte1gSchema = klib::BitfieldSchema<klib::Bit<"present", 0>,        // present
-                                         klib::Bit<"rw", 1>,             // write
-                                         klib::Bit<"user", 2>,           // user-supervisor
-                                         klib::Bit<"pwt", 3>,            // write through
-                                         klib::Bit<"pcd", 4>,            // cache disable
-                                         klib::Bit<"accessed", 5>,       // accessed
-                                         klib::Bit<"dirty", 6>,          // is dirty
-                                         klib::Bit<"huge", 7>,           // pat
-                                         klib::Bit<"global", 8>,         // global pages
-                                         klib::Bit<"cow", 9>,            // Triggers Copy-on-Write in the #PF handler
-                                         klib::Bit<"shared", 10>,        // Mapped in multiple address spaces
-                                         klib::Bit<"swapped", 11>,       // Evicted to disk. PFN is a swap index.
-                                         klib::Bit<"pat", 12>,           // pat bit
-                                         klib::Field<"pfn", 30, 22>,     // pfn
-                                         klib::Field<"avl_high", 52, 6>, // available to used
-                                         klib::Bit<"stack", 58>,         // is stack
-                                         klib::Field<"pkey", 59, 4>,     // pkru
-                                         klib::Bit<"nx", 63>>;
+  operator std::uint64_t() const noexcept { return m_data; }
 
-struct PteSchema {
-  std::uint64_t raw{0};
+  BF_BIT_RW(present, 0)
+  BF_BIT_RW(rw, 1)
+  BF_BIT_RW(user, 2)
+  BF_BIT_RW(pwt, 3)
+  BF_BIT_RW(pcd, 4)
+  BF_BIT_RW(accessed, 5)
+  BF_BIT_RW(dirty, 6)
 
-  constexpr PteSchema() noexcept = default;
-  constexpr explicit PteSchema(const std::uint64_t val) noexcept : raw{val} {}
+  // If mapping a 4KB page (Leaf), bit 7 is the Page Attribute Table (PAT) bit.
+  // If mapping a 2MB/1GB page, bit 7 is the Page Size (Huge) bit.
+  BF_BIT_RW(pat_4k, 7)
+  BF_BIT_RW(huge, 7)
+  BF_BIT_RW(global, 8)
+  BF_BIT_RW(cow, 9)      // OS specific: Triggers Copy-on-Write
+  BF_BIT_RW(shared, 10)  // OS specific: Mapped in multiple address spaces
+  BF_BIT_RW(swapped, 11) // OS specific: Evicted to disk
 
-  constexpr operator std::uint64_t() const noexcept { return raw; }
+  // For 2MB/1GB pages, PAT is moved to bit 12.
+  BF_BIT_RW(pat_large, 12)
 
-  [[nodiscard]] constexpr PteLeafSchema small() const noexcept { return PteLeafSchema{raw}; }
-  [[nodiscard]] constexpr PteHugeSchema huge() const noexcept { return PteHugeSchema{raw}; }
-  [[nodiscard]] constexpr Pte1gSchema gig() const noexcept { return Pte1gSchema{raw}; }
+  // Page Frame Numbers
+  BF_RW(std::uint64_t, pfn_4k, 12, 40) // 4KB PFN
+  BF_RW(std::uint64_t, pfn_2m, 21, 31) // 2MB PFN
+  BF_RW(std::uint64_t, pfn_1g, 30, 22) // 1GB PFN
+
+  BF_RW(std::uint8_t, avl_high, 52, 6)
+  BF_BIT_RW(stack, 58)             // OS specific: Is stack memory
+  BF_RW(std::uint8_t, pkey, 59, 4) // Protection Keys (PKRU)
+  BF_BIT_RW(nx, 63)                // No-Execute
 };
 } // namespace kernel::memory::vmm

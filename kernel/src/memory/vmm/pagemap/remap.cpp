@@ -29,27 +29,21 @@ std::expected<void, Error> PageMap::remap_1gb_as_2mb(const VirtualAddress virt, 
 
   for (std::uint32_t i = 0; i < MAX_PAGE_ENTRIES; ++i) {
     const PhysicalAddress offset_phys = new_phys + (i * PAGE_SIZE_2MB);
-    const PteSchema child_schema = PageTableEntry::build_schema(offset_phys, flags, cache, PageSize::Size2M, pkey);
+    const PTEntry child_schema = PageTableEntry::build_schema(offset_phys, flags, cache, PageSize::Size2M, pkey);
 
     pml2_table[i].store(child_schema, std::memory_order_relaxed);
   }
 
-  PteLeafSchema dir_leaf{};
-  dir_leaf.set_mut<"present">(1);
-  dir_leaf.set_mut<"pfn">(new_pml2_phys.value() >> 12);
-  dir_leaf.set_mut<"rw">(1);
-  dir_leaf.set_mut<"user">(1);
-
-  const PteSchema desired{static_cast<std::uint64_t>(dir_leaf)};
-  PteSchema expected = pdpte->load(std::memory_order_acquire);
+  const PTEntry desired = PageTableEntry::build_directory(new_pml2_phys);
+  PTEntry expected = pdpte->load(std::memory_order_acquire);
 
   while (true) {
-    if (expected.small().get<"present">() == 0) [[unlikely]] {
+    if (!expected.get_present()) [[unlikely]] {
       pmm::free_pages(new_pml2_phys, 0);
       return std::unexpected(Error::NotMapped);
     }
 
-    if ((expected.raw & (1ul << 7)) != 0) [[unlikely]] {
+    if (expected.get_huge()) [[unlikely]] {
       pmm::free_pages(new_pml2_phys, 0);
       return std::unexpected(Error::InvalidFlags);
     }
@@ -57,7 +51,7 @@ std::expected<void, Error> PageMap::remap_1gb_as_2mb(const VirtualAddress virt, 
     if (pdpte->cas(expected, desired, std::memory_order_release, std::memory_order_acquire)) [[likely]] {
       tlb::ShootdownCoordinator::broadcast(this, virt, PAGE_SIZE_1GB, true);
 
-      const PhysicalAddress old_pml2_phys{expected.small().get<"pfn">() << 12};
+      const PhysicalAddress old_pml2_phys{expected.get_pfn_4k() << PAGE_SHIFT_4KB};
       // TODO: RCU deferred free.
       pmm::free_pages(old_pml2_phys, 0);
 
@@ -90,14 +84,14 @@ std::expected<void, Error> PageMap::remap(const VirtualAddress virt, const Physi
   }
 
   PageTableEntry *pte = *pte_res;
-  PteSchema expected = pte->load(std::memory_order_acquire);
+  PTEntry expected = pte->load(std::memory_order_acquire);
 
   while (true) {
-    if (expected.small().get<"present">() == 0) [[unlikely]] {
+    if (!expected.get_present()) [[unlikely]] {
       return std::unexpected(Error::NotMapped);
     }
 
-    const PteSchema desired = PageTableEntry::build_schema(new_phys, flags, cache, size, pkey);
+    const PTEntry desired = PageTableEntry::build_schema(new_phys, flags, cache, size, pkey);
     if (pte->cas(expected, desired, std::memory_order_release, std::memory_order_acquire)) [[likely]] {
       const bool is_huge = (size != PageSize::Size4K);
       tlb::ShootdownCoordinator::broadcast(this, virt, page_size_bytes, is_huge);
@@ -114,7 +108,7 @@ struct UndoLogNode {
   VirtualAddress base_virt;
   std::uint32_t count;
   PageSize page_size;
-  PteSchema original_ptes[MAX_LOG_PTES];
+  PTEntry original_ptes[MAX_LOG_PTES];
 };
 } // namespace
 
@@ -228,17 +222,17 @@ std::expected<void, Error> PageMap::remap_range(const VirtualAddress start_virt,
 
     PageTableEntry *pte = *pt_res;
     for (std::size_t i = 0; i < pages_in_batch; ++i) {
-      PteSchema expected = pte[i].load(std::memory_order_acquire);
+      PTEntry expected = pte[i].load(std::memory_order_acquire);
 
       while (true) {
-        if (expected.small().get<"present">() == 0) [[unlikely]] {
+        if (expected.get_present() == 0) [[unlikely]] {
           return std::unexpected(Error::NotMapped);
         }
 
         current_log->original_ptes[current_log->count] = expected;
 
         const PhysicalAddress offset_phys = curr_phys + (i * step_size);
-        const PteSchema desired = PageTableEntry::build_schema(offset_phys, flags, cache, target_size, pkey);
+        const PTEntry desired = PageTableEntry::build_schema(offset_phys, flags, cache, target_size, pkey);
         if (pte[i].cas(expected, desired, std::memory_order_release, std::memory_order_acquire)) [[likely]] {
           current_log->count++;
           break;
@@ -332,22 +326,21 @@ std::expected<void, Error> PageMap::protect_virtual_range(VirtualAddress start_v
     guard.tail_log = current_log;
 
     for (std::size_t i = 0; i < pages_in_batch; ++i) {
-      PteSchema expected = pte[i].load(std::memory_order_acquire);
+      PTEntry expected = pte[i].load(std::memory_order_acquire);
 
       while (true) {
-        if (expected.small().get<"present">() == 0) {
+        if (expected.get_present() == 0) {
           break;
         }
 
         current_log->original_ptes[current_log->count] = expected;
 
-        PteLeafSchema modified_leaf{expected.raw};
-        modified_leaf.set_mut<"rw">(has_flag(flags, AccessFlags::Write) ? 1 : 0);
-        modified_leaf.set_mut<"nx">(has_flag(flags, AccessFlags::Execute) ? 0 : 1);
-        modified_leaf.set_mut<"user">(has_flag(flags, AccessFlags::User) ? 1 : 0);
+        PTEntry modified_leaf = expected;
+        modified_leaf.set_rw(has_flag(flags, AccessFlags::Write));
+        modified_leaf.set_nx(!has_flag(flags, AccessFlags::Execute));
+        modified_leaf.set_user(has_flag(flags, AccessFlags::User));
 
-        const PteSchema desired{static_cast<std::uint64_t>(modified_leaf)};
-
+        const PTEntry desired = modified_leaf;
         if (pte[i].cas(expected, desired, std::memory_order_release, std::memory_order_acquire)) [[likely]] {
           current_log->count++;
           break;
@@ -361,7 +354,7 @@ std::expected<void, Error> PageMap::protect_virtual_range(VirtualAddress start_v
   }
 
   guard.success = true;
-  tlb::ShootdownCoordinator::broadcast(this, start_virt, size_bytes, false);
+  tlb::ShootdownCoordinator::broadcast(this, start_virt, size_bytes, size_bytes >= PAGE_SIZE_2MB);
 
   return {};
 }

@@ -24,7 +24,7 @@ std::expected<void, Error> AddressSpace::protect(const VirtualAddress addr, cons
       return std::unexpected(Error::NotMapped);
     }
 
-    const auto p_size = validate_vma->flags.get<"page_size", PageSize>();
+    const auto p_size = validate_vma->flags.get_page_size();
     const std::size_t bpp = get_page_bytes(p_size);
     const auto chunk_end = VirtualAddress{std::min(validate_vma->end.value(), end_addr.value())};
 
@@ -60,7 +60,7 @@ std::expected<void, Error> AddressSpace::protect(const VirtualAddress addr, cons
       }
     }
 
-    curr_vma->flags.set_mut<"access">(std::to_underlying(new_flags));
+    curr_vma->flags.set_access(new_flags);
 
     const std::size_t chunk_size = chunk_end.value() - curr_addr.value();
     if (auto res = m_pagemap.protect_virtual_range(curr_addr, chunk_size, new_flags); !res) {
@@ -96,7 +96,7 @@ std::expected<void, Error> AddressSpace::lock_memory(VirtualAddress addr, std::s
       return std::unexpected(Error::NotMapped);
     }
 
-    const auto p_size = validate_vma->flags.get<"page_size", PageSize>();
+    const PageSize p_size = validate_vma->flags.get_page_size();
     const std::size_t bpp = get_page_bytes(p_size);
     const auto chunk_end = VirtualAddress{std::min(validate_vma->end.value(), end_addr.value())};
 
@@ -130,10 +130,10 @@ std::expected<void, Error> AddressSpace::lock_memory(VirtualAddress addr, std::s
     }
 
     // Mark this specific chunk as excluded from the swap daemon
-    curr_vma->flags.set_mut<"is_locked">(1);
+    curr_vma->flags.set_is_locked(true);
 
-    const auto fault_type = curr_vma->flags.get<"access", AccessFlags>();
-    const PageSize p_size = curr_vma->flags.get<"page_size", PageSize>();
+    const AccessFlags fault_type = curr_vma->flags.get_access();
+    const PageSize p_size = curr_vma->flags.get_page_size();
     const std::size_t bpp = get_page_bytes(p_size);
     const std::size_t chunk_size = chunk_end.value() - curr_addr.value();
 
@@ -180,7 +180,7 @@ auto AddressSpace::unlock_memory(const VirtualAddress addr, const std::size_t si
       return std::unexpected(Error::NotMapped);
     }
 
-    const auto p_size = validate_vma->flags.get<"page_size", PageSize>();
+    const PageSize p_size = validate_vma->flags.get_page_size();
     const std::size_t bpp = get_page_bytes(p_size);
     const auto chunk_end = VirtualAddress{std::min(validate_vma->end.value(), end_addr.value())};
 
@@ -214,7 +214,7 @@ auto AddressSpace::unlock_memory(const VirtualAddress addr, const std::size_t si
       }
     }
 
-    curr_vma->flags.set_mut<"is_locked">(0);
+    curr_vma->flags.set_is_locked(false);
 
     curr_addr = chunk_end;
     curr_vma = curr_vma->next_vma;
@@ -233,11 +233,11 @@ auto AddressSpace::evict_page(VirtualAddress addr) noexcept -> std::expected<voi
     return std::unexpected(Error::NotMapped);
   }
 
-  if (vma->flags.get<"is_wired">() == 1 || vma->flags.get<"is_locked">() == 1) {
+  if (vma->flags.get_is_wired() || vma->flags.get_is_locked()) {
     return std::unexpected(Error::SecurityViolation);
   }
 
-  const PageSize page_size = static_cast<PageSize>(vma->flags.get<"page_size">());
+  const PageSize page_size = vma->flags.get_page_size();
   const std::size_t bytes_per_page = get_page_bytes(page_size);
   const VirtualAddress aligned_addr = addr.align_down(bytes_per_page);
 

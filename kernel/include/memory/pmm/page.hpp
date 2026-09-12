@@ -36,23 +36,33 @@ enum class PageMobility : std::uint8_t {
   Reclaimable = 2,
 };
 
-using FlagsSchema = klib::BitfieldSchema<klib::Field<"state", 0, 3>,    // 0-2 : PageState enum
-                                         klib::Field<"mobility", 3, 2>, // 3-4 : PageMobility enum
-                                         klib::Field<"order", 5, 5>,    // 5-9 : Buddy system order (0-18)
-                                         klib::Field<"flags", 10, 22>   // 10-31: Hardware/Subsystem flags
-                                         >;
+class Flags {
+  std::uint32_t m_data;
 
-using TopologySchema = klib::BitfieldSchema<klib::Field<"numa_node", 0, 32>, // 0-31:  Supports 2^32 NUMA nodes
-                                            klib::Field<"cpu_id", 32, 32>    // 32-63: Supports 2^32 CPUs
-                                            >;
+public:
+  constexpr explicit Flags(const std::uint32_t val = 0) : m_data(val) {}
+  [[nodiscard]] std::uint32_t raw() const noexcept { return m_data; }
+
+  BF_RW(PageState, state, 0, 3)
+  BF_RW(PageMobility, mobility, 3, 2)
+  BF_RW(std::uint8_t, order, 5, 5) // Buddy system order (0-18)
+};
+
+class Topology {
+  std::uint64_t m_data;
+
+public:
+  constexpr explicit Topology(const std::uint64_t val = 0) : m_data(val) {}
+  [[nodiscard]] std::uint64_t raw() const noexcept { return m_data; }
+
+  BF_RW(std::uint32_t, numa_node, 0, 32)
+  BF_RW(std::uint32_t, cpu_id, 32, 32)
+};
 
 struct alignas(64) Page {
   std::atomic<std::uint32_t> ref_count;
   std::atomic<std::uint32_t> flags;
-  TopologySchema topology;
-
-  Page *prev_partial;
-  Page *next_partial;
+  std::atomic<std::uint64_t> topology;
 
   union {
     struct {
@@ -63,6 +73,8 @@ struct alignas(64) Page {
     struct {
       std::atomic<std::uint64_t> state;
       heap::KmemCache *cache;
+      Page *prev_partial;
+      Page *next_partial;
     } slub;
 
     struct {
@@ -78,53 +90,69 @@ struct alignas(64) Page {
   void set_order(const std::uint8_t order) noexcept {
     auto current = flags.load(std::memory_order_relaxed);
     std::uint32_t desired;
-
     do {
-      FlagsSchema schema{current};
-      schema.set_mut<"order">(order);
-      desired = static_cast<std::uint32_t>(schema);
+      Flags schema{current};
+      schema.set_order(order);
+      desired = schema.raw();
     } while (!flags.compare_exchange_weak(current, desired, std::memory_order_release, std::memory_order_relaxed));
   }
 
   [[nodiscard]] std::uint8_t get_order() const noexcept {
-    const FlagsSchema schema{flags.load(std::memory_order_relaxed)};
-    return schema.get<"order">();
+    return Flags{flags.load(std::memory_order_relaxed)}.get_order();
   }
 
   [[nodiscard]] PageState get_state() const noexcept {
-    const FlagsSchema schema{flags.load(std::memory_order_relaxed)};
-    return schema.get<"state", PageState>();
+    return Flags{flags.load(std::memory_order_relaxed)}.get_state();
   }
 
-  void set_state(PageState new_state) noexcept {
-    auto current = flags.load(std::memory_order_relaxed);
+  void set_state(const PageState new_state) noexcept {
+    std::uint32_t current = flags.load(std::memory_order_relaxed);
     std::uint32_t desired;
-
     do {
-      FlagsSchema schema{current};
-      schema.set_mut<"state">(static_cast<std::uint32_t>(new_state));
-      desired = static_cast<std::uint32_t>(schema);
+      Flags schema{current};
+      schema.set_state(new_state);
+      desired = schema.raw();
     } while (!flags.compare_exchange_weak(current, desired, std::memory_order_release, std::memory_order_relaxed));
   }
 
-  void set_mobility(const PageMobility mobility) noexcept {
-    auto current = flags.load(std::memory_order_relaxed);
-    std::uint32_t desired;
+  [[nodiscard]] std::uint32_t get_numa_node() const noexcept {
+    return Topology{topology.load(std::memory_order_relaxed)}.get_numa_node();
+  }
 
+  void set_numa_node(const std::uint32_t numa_id) noexcept {
+    auto current = topology.load(std::memory_order_relaxed);
+    std::uint64_t desired;
     do {
-      FlagsSchema schema{current};
-      schema.set_mut<"mobility">(mobility);
-      desired = static_cast<std::uint32_t>(schema);
+      Topology schema{current};
+      schema.set_numa_node(numa_id);
+      desired = schema.raw();
+    } while (!topology.compare_exchange_weak(current, desired, std::memory_order_release, std::memory_order_relaxed));
+  }
+
+  void set_cpu_owner(const std::uint32_t cpu_id) noexcept {
+    auto current = topology.load(std::memory_order_relaxed);
+    std::uint64_t desired;
+    do {
+      Topology schema{current};
+      schema.set_cpu_id(cpu_id);
+      desired = schema.raw();
+    } while (!topology.compare_exchange_weak(current, desired, std::memory_order_release, std::memory_order_relaxed));
+  }
+
+  void set_mobility(const PageMobility mobility) noexcept {
+    std::uint32_t current = flags.load(std::memory_order_relaxed);
+    std::uint32_t desired;
+    do {
+      Flags schema{current};
+      schema.set_mobility(mobility);
+      desired = schema.raw();
     } while (!flags.compare_exchange_weak(current, desired, std::memory_order_release, std::memory_order_relaxed));
   }
 
   [[nodiscard]] PageMobility get_mobility() const noexcept {
-    const FlagsSchema schema{flags.load(std::memory_order_relaxed)};
-    return schema.get<"mobility", PageMobility>();
+    const Flags schema{flags.load(std::memory_order_relaxed)};
+    return schema.get_mobility();
   }
-
-  [[nodiscard]] std::uint32_t get_numa_node() const noexcept { return topology.get<"numa_node", std::uint32_t>(); }
-  void set_cpu_owner(const std::uint32_t cpu_id) noexcept { topology.set_mut<"cpu_id", std::uint32_t>(cpu_id); }
 
   [[nodiscard]] bool try_update_slub_state(heap::SlabState &expected, const heap::SlabState desired) noexcept {
     auto old_val = std::bit_cast<std::uint64_t>(expected);
@@ -135,7 +163,6 @@ struct alignas(64) Page {
       return true;
     }
 
-    hw::cpu_relax();
     expected = std::bit_cast<heap::SlabState>(old_val);
     return false;
   }

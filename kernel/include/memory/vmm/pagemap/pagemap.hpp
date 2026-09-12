@@ -32,11 +32,11 @@ class PageMap {
     return PAGE_SIZE << ((std::to_underlying(size) - 1) * 9);
   }
 
-  static AccessFlags extract_flags(const PteSchema &schema) noexcept;
-  static CacheMode extract_cache(const PteSchema &schema, bool is_huge) noexcept;
+  static AccessFlags extract_flags(const PTEntry &schema) noexcept;
+  static CacheMode extract_cache(const PTEntry &schema, bool is_huge) noexcept;
 
   std::expected<void, Error> shatter_huge_page(PageTableEntry *pte, VirtualAddress virt,
-                                               std::uint8_t curr_lvl) const noexcept;
+                                               std::uint8_t curr_lvl) noexcept;
   [[nodiscard]] std::expected<PageTableEntry *, Error> walk(VirtualAddress virt, bool alloc,
                                                             PageSize target_size) noexcept;
 

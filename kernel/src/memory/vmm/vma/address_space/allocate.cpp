@@ -36,17 +36,16 @@ auto AddressSpace::alloc(const std::size_t size_bytes, const AccessFlags access,
   vma->start = addr;
   vma->end = addr + aligned_size;
 
-  vma->flags.data = 0;
-  vma->flags.set_mut<"access">(std::to_underlying(access));
-  vma->flags.set_mut<"cache">(std::to_underlying(cache));
-  vma->flags.set_mut<"page_size">(std::to_underlying(page_size));
-  vma->flags.set_mut<"type">(std::to_underlying(type));
-  vma->flags.set_mut<"type">(std::to_underlying(type));
-  vma->flags.set_mut<"numa">(std::to_underlying(NUMAPolicy::FirstTouch));
-  vma->flags.set_mut<"pkey">(pkey);
+  vma->flags.clear();
+  vma->flags.set_access(access);
+  vma->flags.set_cache(cache);
+  vma->flags.set_page_size(page_size);
+  vma->flags.set_type(type);
+  vma->flags.set_numa(NUMAPolicy::FirstTouch);
+  vma->flags.set_pkey(pkey);
 
   if (type == VMAType::HardwareMMIO || has_flag(access, AccessFlags::Mmio)) {
-    vma->flags.set_mut<"is_wired">(1);
+    vma->flags.set_is_wired(1);
   }
 
   vma->vm_object = obj;
@@ -92,7 +91,7 @@ std::expected<VirtualAddress, Error> AddressSpace::realloc(VirtualAddress old_ad
     return std::unexpected(Error::NotMapped);
   }
 
-  const PageSize page_size = vma->flags.get<"page_size", PageSize>();
+  const PageSize page_size = vma->flags.get_page_size();
   const std::size_t bytes_per_page = get_page_bytes(page_size);
   const std::size_t new_aligned = utils::maths::align_up(new_size, bytes_per_page);
   const std::size_t old_size = vma->size_bytes();
@@ -160,20 +159,14 @@ auto AddressSpace::map_object(VMObject *existing_obj, std::size_t size_bytes, st
 
   const AccessFlags final_access = access | AccessFlags::Shared;
 
-  vma->flags.data = 0;
-  vma->flags.set_mut<"access">(std::to_underlying(final_access));
-  vma->flags.set_mut<"cache">(std::to_underlying(cache));
-  vma->flags.set_mut<"page_size">(std::to_underlying(page_size));
-  vma->flags.set_mut<"type">(std::to_underlying(type));
-  vma->flags.set_mut<"numa">(std::to_underlying(NUMAPolicy::FirstTouch));
-  vma->flags.set_mut<"pkey">(pkey);
-
-  // Wire MMIO natively
-  if (type == VMAType::HardwareMMIO || has_flag(final_access, AccessFlags::Mmio)) {
-    vma->flags.set_mut<"is_wired">(1);
-  } else {
-    vma->flags.set_mut<"is_wired">(0);
-  }
+  vma->flags.clear();
+  vma->flags.set_access(final_access);
+  vma->flags.set_cache(cache);
+  vma->flags.set_page_size(page_size);
+  vma->flags.set_type(type);
+  vma->flags.set_numa(NUMAPolicy::FirstTouch);
+  vma->flags.set_pkey(pkey);
+  vma->flags.set_is_wired(type == VMAType::HardwareMMIO || has_flag(final_access, AccessFlags::Mmio));
 
   vma->vm_object = existing_obj;
   vma->vm_object->add_ref();
@@ -218,15 +211,14 @@ auto AddressSpace::map_mmio(PhysicalAddress phys_base, std::size_t size_bytes, A
 
   const AccessFlags final_access = access | AccessFlags::Mmio;
 
-  vma->flags.data = 0;
-  vma->flags.set_mut<"access">(std::to_underlying(final_access));
-  vma->flags.set_mut<"cache">(std::to_underlying(cache));
-  vma->flags.set_mut<"page_size">(std::to_underlying(page_size));
-  vma->flags.set_mut<"type">(std::to_underlying(VMAType::HardwareMMIO));
-  vma->flags.set_mut<"numa">(std::to_underlying(NUMAPolicy::StrictLocal));
-  vma->flags.set_mut<"pkey">(pkey);
-
-  vma->flags.set_mut<"is_wired">(1);
+  vma->flags.clear();
+  vma->flags.set_access(final_access);
+  vma->flags.set_cache(cache);
+  vma->flags.set_page_size(page_size);
+  vma->flags.set_type(VMAType::HardwareMMIO);
+  vma->flags.set_numa(NUMAPolicy::StrictLocal);
+  vma->flags.set_pkey(pkey);
+  vma->flags.set_is_wired(true);
 
   vma->vm_object = nullptr;
   vma->object_offset = 0;
@@ -272,11 +264,11 @@ auto AddressSpace::create_alias(const VirtualAddress src_addr, const std::size_t
   vma->start = alias_addr;
   vma->end = alias_addr + size_bytes;
 
-  vma->flags.data = 0;
-  vma->flags.set_mut<"access">(std::to_underlying(alias_flags));
-  vma->flags.set_mut<"type">(std::to_underlying(VMAType::Anonymous));
+  vma->flags.clear();
+  vma->flags.set_access(alias_flags);
+  vma->flags.set_type(VMAType::Anonymous);
+  vma->flags.set_is_wired(true);
 
-  vma->flags.set_mut<"is_wired">(1);
   vma->vm_object = nullptr;
   vma->object_offset = 0;
   vma->fault_count = 0;
@@ -301,7 +293,7 @@ auto AddressSpace::create_alias(const VirtualAddress src_addr, const std::size_t
 
       if (m_vma_tree.get_floor(curr_src.value(), fk, src_vma) && curr_src >= src_vma->start &&
           curr_src < src_vma->end) {
-        const auto src_flags = src_vma->flags.get<"access", AccessFlags>();
+        const auto src_flags = src_vma->flags.get_access();
 
         auto fault_res = resolve_vma_fault_locked(src_vma, curr_src, src_flags);
         if (!fault_res) {

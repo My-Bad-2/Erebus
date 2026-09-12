@@ -11,17 +11,31 @@
 #include "utils/locks/locks.hpp"
 
 namespace kernel::hw {
-using CpuTopology = klib::BitfieldSchema<klib::Field<"cpu-id", 0, 32>,    // 32 bits: CPU Cores
-                                         klib::Field<"numa-node", 32, 32> // 32 bits: NUMA Nodes
-                                         >;
+class CpuTopology {
+  std::uint64_t m_data;
 
-using CpuContext = klib::BitfieldSchema<klib::Field<"ast-flags", 0, 8>,      // Asynchronous traps count
-                                        klib::Field<"preempt-count", 8, 8>,  // Preemption depth
-                                        klib::Field<"softirq-count", 16, 8>, // deferred work
-                                        klib::Field<"hardirq-count", 24, 8>, // IRQ nesting
-                                        klib::Field<"nmi-count", 32, 4>,     // NMI nesting
-                                        klib::Field<"mce-count", 36, 4>      // Machine Check Exception nesting
-                                        >;
+public:
+  constexpr explicit CpuTopology(const std::uint64_t val = 0) : m_data(val) {}
+  [[nodiscard]] std::uint64_t raw() const noexcept { return m_data; }
+
+  BF_RW(std::uint32_t, cpu_id, 0, 32)
+  BF_RW(std::uint32_t, numa_node, 32, 32)
+};
+
+class CpuContext {
+  std::uint64_t m_data;
+
+public:
+  constexpr explicit CpuContext(const std::uint64_t val = 0) : m_data(val) {}
+  [[nodiscard]] std::uint64_t raw() const noexcept { return m_data; }
+
+  BF_RW(std::uint8_t, ast_flags, 0, 8)      // Asynchronous traps count
+  BF_RW(std::uint8_t, preempt_count, 8, 8)  // Preemption depth
+  BF_RW(std::uint8_t, softirq_count, 16, 8) // Deferred work
+  BF_RW(std::uint8_t, hardirq_count, 24, 8) // IRQ nesting
+  BF_RW(std::uint8_t, nmi_count, 32, 4)     // NMI nesting
+  BF_RW(std::uint8_t, mce_count, 36, 4)     // Machine Check Exception nesting
+};
 
 struct alignas(std::hardware_destructive_interference_size) PerCpu {
   PerCpu *self{this};
@@ -41,8 +55,8 @@ struct alignas(std::hardware_destructive_interference_size) PerCpu {
 };
 
 namespace percpu {
-[[gnu::always_inline]] inline std::uint32_t id() noexcept { return READ_PCP(topology).get<"cpu-id">(); }
-[[gnu::always_inline]] inline std::uint32_t numa_node() noexcept { return READ_PCP(topology).get<"numa-node">(); }
+[[gnu::always_inline]] inline std::uint32_t id() noexcept { return READ_PCP(topology).get_cpu_id(); }
+[[gnu::always_inline]] inline std::uint32_t numa_node() noexcept { return READ_PCP(topology).get_numa_node(); }
 [[gnu::always_inline]] inline PerCpu *self() noexcept { return READ_PCP(self); }
 [[gnu::always_inline]] inline crypto::Blake2bPrng &rng() noexcept { return self()->rng; }
 [[nodiscard]] inline memory::vmm::tlb::PcidManager &pcid_manager() noexcept { return self()->pcid_manager; }

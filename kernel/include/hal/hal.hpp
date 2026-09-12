@@ -1,6 +1,5 @@
 #pragma once
 
-#include "gs.hpp"
 #include "patch.h"
 #include "patcher.hpp"
 
@@ -148,105 +147,126 @@ namespace detail {
   asm volatile("mwaitx" : /* No Output */ : "a"(hints), "c"(extension), "b"(timeout) : "memory");
 }
 
-using CR0Schema = klib::BitfieldSchema<klib::Bit<"pe", 0>,  // Protected Mode Enable
-                                       klib::Bit<"mp", 1>,  // Monitor co-processor
-                                       klib::Bit<"em", 2>,  // Emulation
-                                       klib::Bit<"ts", 3>,  // Task Switched
-                                       klib::Bit<"et", 4>,  // Extension type
-                                       klib::Bit<"ne", 5>,  // numeric error
-                                       klib::Bit<"wp", 16>, // write protect
-                                       klib::Bit<"am", 18>, // Alignment Mask
-                                       klib::Bit<"nw", 29>, // Not-Write through
-                                       klib::Bit<"cd", 30>, // Cache disable
-                                       klib::Bit<"pg", 31>, // Paging
-                                       klib::Reserved<32, 32>>;
+class CR0 {
+  std::uint64_t m_data;
 
-using CR4Schema =
-    klib::BitfieldSchema<klib::Bit<"vme", 0>,         // Virtual 8096 mode extensions
-                         klib::Bit<"pvi", 1>,         // Protected-mode virtual interrupts
-                         klib::Bit<"tsd", 2>,         // Timestamp disabled (except in ring-0)
-                         klib::Bit<"de", 3>,          // Debugging extensions
-                         klib::Bit<"pse", 4>,         // Page Size extension
-                         klib::Bit<"pae", 5>,         // Physical Address Extension
-                         klib::Bit<"mce", 6>,         // Machine check exception
-                         klib::Bit<"pge", 7>,         // Page global enabled
-                         klib::Bit<"pce", 8>,         // Performance-monitoring Counter enable (in any privilege level)
-                         klib::Bit<"osfxsr", 9>,      // Enabled SSE and FPU save & restore
-                         klib::Bit<"osxmmexcpt", 10>, // enables unmasked SSE exceptions
-                         klib::Bit<"umip", 11>,       // sgdt, sidt, sldt, smsw, and str can't be used if cpl > 0.
-                         klib::Bit<"la57", 12>,       // 5-lvl paging
-                         klib::Bit<"vmxe", 13>,       // Virtual machine extensions enable
-                         klib::Bit<"smxe", 14>,       // Safer mode extensions enable
-                         klib::Bit<"fsgsbase", 16>,   // enables rdfsbase, rdgsbase, wrfsbase, wrgsbase
-                         klib::Bit<"pcide", 17>,      // enables pcids
-                         klib::Bit<"osxsave", 18>,    // xsave and processor extended states enable
-                         klib::Bit<"kl", 19>,         // Key locker enable
-                         klib::Bit<"smep", 20>,       // execution of code in a higher ring generates a fault
-                         klib::Bit<"smap", 21>,       // access of data in a higher ring generates a fault
-                         klib::Bit<"pke", 22>,        // Protection key enable
-                         klib::Bit<"cet", 23>,        // Control-flow enforcement
-                         klib::Bit<"pks", 24>,        // Enable protection keys for supervisor pages
-                         klib::Bit<"uintr", 25>,      // User interrupts enable
-                         klib::Bit<"lass", 27>,       // Linear Address space separation
-                         klib::Bit<"lam-sup", 28>,    // Linear address masking for supervisor pointers
-                         klib::Bit<"fred", 32>        // Flexible return and event delivery
-                         >;
+public:
+  constexpr explicit CR0(const std::uint64_t val = 0) : m_data(val) {}
+  [[nodiscard]] std::uint64_t raw() const noexcept { return m_data; }
 
-using CR3LegacySchema = klib::BitfieldSchema<klib::Reserved<0, 3>, klib::Bit<"pwt", 3>, klib::Bit<"pcd", 4>,
-                                             klib::Reserved<5, 7>, klib::Field<"pfn", 12, 40>>;
+  BF_BIT_RW(pe, 0)  // protection mode enable
+  BF_BIT_RW(mp, 1)  // monitor co-processor
+  BF_BIT_RW(em, 2)  // emulation
+  BF_BIT_RW(ts, 3)  // task switch
+  BF_BIT_RW(et, 4)  // extension type
+  BF_BIT_RW(ne, 5)  // numeric error
+  BF_BIT_RW(wp, 16) // write protected
+  BF_BIT_RW(am, 18) // alignment mask
+  BF_BIT_RW(nw, 29) // not write through
+  BF_BIT_RW(cd, 30) // cache disable
+  BF_BIT_RW(pg, 31) // paging
+};
 
-using CR3PcidSchema =
-    klib::BitfieldSchema<klib::Field<"pcid", 0, 12>, klib::Field<"pfn", 12, 40>, klib::Bit<"no-flush", 63>>;
+class CR4 {
+  std::uint64_t m_data;
 
-struct CR3 {
-  std::uint64_t raw{0};
+public:
+  constexpr explicit CR4(const std::uint64_t val = 0) : m_data(val) {}
+  [[nodiscard]] std::uint64_t raw() const noexcept { return m_data; }
 
-  constexpr CR3() noexcept = default;
-  constexpr explicit CR3(const std::uint64_t val) noexcept : raw{val} {}
+  BF_BIT_RW(vme, 0)         // Virtual 8096 mode extensions
+  BF_BIT_RW(pvi, 1)         // Protected-mode virtual interrupts
+  BF_BIT_RW(tsd, 2)         // Timestamp disabled (except in ring-0)
+  BF_BIT_RW(de, 3)          // Debugging extensions
+  BF_BIT_RW(pse, 4)         // Page Size extension
+  BF_BIT_RW(pae, 5)         // Physical Address Extension
+  BF_BIT_RW(mce, 6)         // Machine check exception
+  BF_BIT_RW(pge, 7)         // Page global enabled
+  BF_BIT_RW(pce, 8)         // Performance-monitoring Counter enable (in any privilege level)
+  BF_BIT_RW(osfxsr, 9)      // Enabled SSE and FPU save & restore
+  BF_BIT_RW(osxmmexcpt, 10) // enables unmasked SSE exceptions
+  BF_BIT_RW(umip, 11)       // sgdt, sidt, sldt, smsw, and str can't be used if cpl > 0.
+  BF_BIT_RW(la57, 12)       // 5-lvl paging
+  BF_BIT_RW(vmxe, 13)       // Virtual machine extensions enable
+  BF_BIT_RW(smxe, 14)       // Safer mode extensions enable
+  BF_BIT_RW(fsgsbase, 16)   // enables rdfsbase, rdgsbase, wrfsbase, wrgsbase
+  BF_BIT_RW(pcide, 17)      // enables pcids
+  BF_BIT_RW(osxsave, 18)    // xsave and processor extended states enable
+  BF_BIT_RW(kl, 19)         // Key locker enable
+  BF_BIT_RW(smep, 20)       // execution of code in a higher ring generates a fault
+  BF_BIT_RW(smap, 21)       // access of data in a higher ring generates a fault
+  BF_BIT_RW(pke, 22)        // Protection key enable
+  BF_BIT_RW(cet, 23)        // Control-flow enforcement
+  BF_BIT_RW(pks, 24)        // Enable protection keys for supervisor pages
+  BF_BIT_RW(uintr, 25)      // User interrupts enable
+  BF_BIT_RW(lass, 27)       // Linear Address space separation
+  BF_BIT_RW(lam_sup, 28)    // Linear address masking for supervisor pointers
+  BF_BIT_RW(fred, 32)       // Flexible return and event delivery
+};
 
-  constexpr operator std::uint64_t() const noexcept { return raw; }
+class CR3 {
+  std::uint64_t m_data;
 
-  [[nodiscard]] constexpr CR3LegacySchema legacy() const noexcept { return CR3LegacySchema{raw}; }
-  [[nodiscard]] constexpr CR3PcidSchema pcid() const noexcept { return CR3PcidSchema{raw}; }
+public:
+  constexpr explicit CR3(const std::uint64_t val = 0) : m_data(val) {}
+  [[nodiscard]] std::uint64_t raw() const noexcept { return m_data; }
+
+  // PCID Mode Fields (when CR4.PCIDE = 1)
+  BF_RW(std::uint16_t, pcid, 0, 12) // Process-context identifier
+  BF_BIT_RW(no_flush, 63)           // Preserve old TLB entries on CR3 write
+
+  // Legacy Mode Fields (when CR4.PCIDE = 0)
+  BF_BIT_RW(pwt, 3) // Page-level write-through
+  BF_BIT_RW(pcd, 4) // Page-level cache disable
+
+  BF_RW(std::uint64_t, pfn, 12, 40) // Page frame number (base physical address)
 
   [[nodiscard]] constexpr memory::PhysicalAddress extract_address() const noexcept {
-    return memory::PhysicalAddress{legacy().get<"pfn">() << 12};
+    return memory::PhysicalAddress{get_pfn() << 12};
   }
 
   [[nodiscard]] static constexpr CR3 build_legacy(const memory::PhysicalAddress phys, const bool pwt = false,
                                                   const bool pcd = false) noexcept {
-    CR3LegacySchema schema{0};
-    schema.set_mut<"pfn">(phys.value() >> 12);
-    schema.set_mut<"pwt">(pwt ? 1 : 0);
-    schema.set_mut<"pcd">(pcd ? 1 : 0);
-
-    return CR3{static_cast<std::uint64_t>(schema)};
+    CR3 val{0};
+    val.set_pfn(phys.value() >> 12);
+    val.set_pwt(pwt);
+    val.set_pcd(pcd);
+    return val;
   }
 
   [[nodiscard]] static constexpr CR3 build_pcid(const memory::PhysicalAddress phys, const std::uint16_t pcid,
                                                 const bool no_flush = false) noexcept {
-    CR3PcidSchema schema{0};
-    schema.set_mut<"pfn">(phys.value() >> 12);
-    schema.set_mut<"pcid">(pcid & 0xFFF);
-    schema.set_mut<"no-flush">(no_flush ? 1 : 0);
-    return CR3{static_cast<std::uint64_t>(schema)};
+    CR3 val{0};
+    val.set_pfn(phys.value() >> 12);
+    val.set_pcid(pcid & 0xfff);
+    val.set_no_flush(no_flush);
+    return val;
   }
 };
 
-using EferSchema = klib::BitfieldSchema<klib::Bit<"sce", 0>,       // enables syscalls
-                                        klib::Bit<"lme", 8>,       // Enables IA-32e mode operation
-                                        klib::ReadOnly<"lma", 10>, // IA-32e mode is active
-                                        klib::Bit<"nxe", 11>,      // No execute enabled
-                                        klib::Bit<"svme", 12>,     // enables amd virtualization
-                                        klib::Bit<"ffxsr", 14>,    // enables optimized versions of fxsave and fxrstor
-                                        klib::Bit<"tce", 15>,      // enables translation cache extension
-                                        klib::Reserved<16, 47>>;
+class EFER {
+  std::uint64_t m_data;
+
+public:
+  constexpr explicit EFER(const std::uint64_t val = 0) : m_data(val) {}
+  [[nodiscard]] std::uint64_t raw() const noexcept { return m_data; }
+
+  BF_BIT_RW(sce, 0) // enables syscalls
+  BF_BIT_RW(lme, 8) // Enables IA-32e mode operation
+
+  BF_BIT_RO(lma, 10) // IA-32e mode is active
+
+  BF_BIT_RW(nxe, 11)   // No execute enabled
+  BF_BIT_RW(svme, 12)  // enables amd virtualization
+  BF_BIT_RW(ffxsr, 14) // enables optimized versions of fxsave and fxrstor
+  BF_BIT_RW(tce, 15)   // enables translation cache extension
+};
 
 namespace read {
-[[gnu::always_inline]] inline CR0Schema cr0() noexcept {
+[[gnu::always_inline]] inline CR0 cr0() noexcept {
   std::uint64_t val;
   asm volatile("mov %%cr0, %0" : "=r"(val) : /* No Input */ : "memory");
-  return CR0Schema{val};
+  return CR0{val};
 }
 
 [[gnu::always_inline]] inline std::uint64_t cr2() noexcept {
@@ -261,10 +281,10 @@ namespace read {
   return CR3{val};
 }
 
-[[gnu::always_inline]] inline CR4Schema cr4() noexcept {
+[[gnu::always_inline]] inline CR4 cr4() noexcept {
   std::uint64_t val;
   asm volatile("mov %%cr4, %0" : "=r"(val) : /* No Input */ : "memory");
-  return CR4Schema{val};
+  return CR4{val};
 }
 
 [[gnu::always_inline]] inline std::uint64_t cr8() noexcept {
@@ -279,9 +299,9 @@ namespace read {
   return (static_cast<std::uint64_t>(hi) << 32) | lo;
 }
 
-[[gnu::always_inline]] inline EferSchema efer() noexcept {
+[[gnu::always_inline]] inline EFER efer() noexcept {
   constexpr std::uint32_t IA32_EFER = 0xC0000080;
-  return EferSchema{msr(IA32_EFER)};
+  return EFER{msr(IA32_EFER)};
 }
 
 [[gnu::always_inline]] inline std::uint64_t gs_base() noexcept {
@@ -298,8 +318,8 @@ namespace read {
 } // namespace read
 
 namespace write {
-[[gnu::always_inline]] inline void cr0(const CR0Schema val) noexcept {
-  asm volatile("mov %0, %%cr0" : /* No output */ : "r"(val.data) : "memory");
+[[gnu::always_inline]] inline void cr0(const CR0 val) noexcept {
+  asm volatile("mov %0, %%cr0" : /* No output */ : "r"(val.raw()) : "memory");
 }
 
 [[gnu::always_inline]] inline void cr2(const std::uint64_t val) noexcept {
@@ -307,11 +327,11 @@ namespace write {
 }
 
 [[gnu::always_inline]] inline void cr3(CR3 val) noexcept {
-  asm volatile("mov %0, %%cr3" : /* No output */ : "r"(static_cast<std::uint64_t>(val)) : "memory");
+  asm volatile("mov %0, %%cr3" : /* No output */ : "r"(val.raw()) : "memory");
 }
 
-[[gnu::always_inline]] inline void cr4(const CR4Schema val) noexcept {
-  asm volatile("mov %0, %%cr4" : /* No output */ : "r"(val.data) : "memory");
+[[gnu::always_inline]] inline void cr4(const CR4 val) noexcept {
+  asm volatile("mov %0, %%cr4" : /* No output */ : "r"(val.raw()) : "memory");
 }
 
 [[gnu::always_inline]] inline void cr8(const std::uint64_t val) noexcept {
@@ -324,9 +344,9 @@ namespace write {
   asm volatile("wrmsr" : /* No Output */ : "c"(msr), "a"(lo), "d"(hi) : "memory");
 }
 
-[[gnu::always_inline]] inline void efer(const EferSchema val) noexcept {
+[[gnu::always_inline]] inline void efer(const EFER val) noexcept {
   constexpr std::uint32_t IA32_EFER = 0xC0000080;
-  msr(IA32_EFER, val.data);
+  msr(IA32_EFER, val.raw());
 }
 
 [[gnu::always_inline]] inline void gs_base(const std::uint64_t base) noexcept {
@@ -360,30 +380,54 @@ struct alignas(16) InvpcidDescriptor {
   asm volatile("invlpg (%0)" : /* No Output */ : "r"(addr) : "memory");
 }
 
-using InvlpgbAddressFlagsSchema =
-    klib::BitfieldSchema<klib::Bit<"va_valid", 0>,                              // Flush specific VA
-                         klib::Bit<"pcid_valid", 1>,                            // Match the PCID.
-                         klib::Bit<"asid_valid", 2>,                            // Match the ASID.
-                         klib::Bit<"global", 3>,                                // Flush Global pages.
-                         klib::Bit<"include_global", 4>,                        // Flush pcid/asid and global
-                         klib::Bit<"final_only", 5>,                            // Flush only the leaf PTE.
-                         klib::Bit<"include_nested", 6>,                        // Flush guest hypervisor translations.
-                         klib::Reserved<7, 5>, klib::Field<"virt_addr", 12, 52> // Target Virtual Address.
-                         >;
+// Maps to RAX
+class InvlpgbAddress {
+  std::uint64_t m_data;
 
-using InvlpgbContextIdsSchema =
-    klib::BitfieldSchema<klib::Field<"asid", 0, 16>,  // Guest Address Space ID (Virtualization only)
-                         klib::Field<"pcid", 16, 12>, // Process-Context ID (Matches CR3 PCID).
-                         klib::Reserved<28, 4>>;
+public:
+  constexpr explicit InvlpgbAddress(const std::uint64_t val = 0) : m_data(val) {}
+  [[nodiscard]] std::uint64_t raw() const noexcept { return m_data; }
 
-using InvlpgbPageCountSchema =
-    klib::BitfieldSchema<klib::Field<"extra_count", 0, 16>, // number of additional pages to flush
-                         klib::Reserved<16, 15>, klib::Bit<"large_page_stride", 31> // increment va by 2mb/1gb per count
-                         >;
+  BF_BIT_RW(va_valid, 0)       // Flush specific VA
+  BF_BIT_RW(pcid_valid, 1)     // Match the PCID
+  BF_BIT_RW(asid_valid, 2)     // Match the ASID
+  BF_BIT_RW(global, 3)         // Flush Global pages
+  BF_BIT_RW(include_global, 4) // Flush pcid/asid and global
+  BF_BIT_RW(final_only, 5)     // Flush only the leaf PTE
+  BF_BIT_RW(include_nested, 6) // Flush guest hypervisor translations
 
-[[gnu::always_inline]] inline void invlpgb(InvlpgbAddressFlagsSchema rax, InvlpgbPageCountSchema ecx,
-                                           InvlpgbContextIdsSchema edx) noexcept {
-  asm volatile("invlpgb" : /* No Output */ : "a"(rax.data), "c"(ecx.data), "d"(edx.data) : "memory");
+  BF_RW(std::uint64_t, virt_addr, 12, 52) // Target Virtual Address (bits 12-63)
+};
+
+// Maps to EDX
+class InvlpgbContext {
+  std::uint32_t m_data;
+
+public:
+  constexpr explicit InvlpgbContext(const std::uint32_t val = 0) : m_data(val) {}
+  [[nodiscard]] std::uint32_t raw() const noexcept { return m_data; }
+
+  BF_RW(std::uint16_t, asid, 0, 16)  // Guest Address Space ID
+  BF_RW(std::uint16_t, pcid, 16, 12) // Process-Context ID
+};
+
+// Maps to ECX
+class InvlpgbCount {
+  std::uint32_t m_data;
+
+public:
+  constexpr explicit InvlpgbCount(const std::uint32_t val = 0) : m_data(val) {}
+  [[nodiscard]] std::uint32_t raw() const noexcept { return m_data; }
+
+  BF_RW(std::uint16_t, extra_count, 0, 16) // Number of additional pages to flush
+  BF_BIT_RW(large_page_stride, 31)         // Increment VA by 2MB/1GB per count
+};
+
+[[gnu::always_inline]] inline void invlpgb(InvlpgbAddress rax, InvlpgbCount ecx, InvlpgbContext edx) noexcept {
+  asm volatile("invlpgb"
+               : /* No Output */
+               : "a"(rax.raw()), "c"(ecx.raw()), "d"(edx.raw())
+               : "memory");
 }
 
 [[gnu::always_inline]] inline void tlbsync() noexcept {

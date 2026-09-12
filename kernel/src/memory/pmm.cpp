@@ -386,7 +386,7 @@ void initialize(std::span<limine_memmap_entry *> memmap, const std::uint32_t tot
         head_page->set_state(PageState::Free);
         head_page->set_order(order);
         head_page->set_mobility(PageMobility::Movable);
-        head_page->topology.set_mut<"numa_node">(target_node_id);
+        head_page->set_numa_node(target_node_id);
 
         target_zone.inject_free_page_cold(head_page, order);
         curr_phys += static_cast<std::uint64_t>(PAGE_SIZE) << order;
