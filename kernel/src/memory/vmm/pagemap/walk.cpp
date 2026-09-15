@@ -33,13 +33,12 @@ std::expected<void, Error> PageMap::shatter_huge_page(PageTableEntry *pte, Virtu
   const CacheMode cache = extract_cache(old_schema, true);
   const std::uint8_t pkey = old_schema.get_pkey();
 
-  const auto new_page_res = pmm::alloc_pages_zeroed(pmm::PageMobility::Movable, 0);
+  const auto new_page_res = pmm::alloc_pages_zeroed(pmm::PageMobility::Unmovable, 0);
   if (!new_page_res) {
     return std::unexpected(Error::OutOfMemory);
   }
 
   const PhysicalAddress new_phys = *new_page_res;
-  pmm::phys_to_page(new_phys)->set_mobility(pmm::PageMobility::Unmovable);
   auto *new_table = DirectMap::phys_to_virt(new_phys).as<PageTableEntry>();
 
   for (std::uint32_t i = 0; i < MAX_PAGE_ENTRIES; ++i) {
@@ -85,13 +84,12 @@ std::expected<PageTableEntry *, Error> PageMap::walk(const VirtualAddress virt, 
           return std::unexpected(Error::NotMapped);
         }
 
-        auto new_phys_res = pmm::alloc_pages_zeroed(pmm::PageMobility::Movable, 0);
+        auto new_phys_res = pmm::alloc_pages_zeroed(pmm::PageMobility::Unmovable, 0);
         if (!new_phys_res) {
           return std::unexpected(Error::OutOfMemory);
         }
 
         PhysicalAddress new_phys{*new_phys_res};
-        pmm::phys_to_page(new_phys)->set_mobility(pmm::PageMobility::Unmovable);
 
         // Natively construct directory entry
         const PTEntry dir_schema = PageTableEntry::build_directory(new_phys);

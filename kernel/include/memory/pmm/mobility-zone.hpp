@@ -17,32 +17,32 @@ struct ZoneWatermarks {
 
 class NumaNode;
 
-std::uint64_t page_to_pfn(const Page *page) noexcept;
-Page *pfn_to_page(std::uint64_t pfn) noexcept;
-
 class alignas(std::hardware_destructive_interference_size) MobilityZone {
   friend NumaNode;
+  friend class Router;
 
-  utils::QSpinlock m_lock;
+  mutable utils::QSpinlock m_lock;
   std::uint32_t m_active_orders_bitmap{0};
-  std::atomic<std::uint64_t> m_total_free_pages;
+  FreeArea m_areas[MAX_ORDER + 1];
 
-  PageMobility m_mobility;
+  alignas(std::hardware_destructive_interference_size) std::atomic<std::uint64_t> m_total_free_pages{0};
+
+  alignas(std::hardware_destructive_interference_size) PageMobility m_mobility;
   NumaNode *m_parent_node;
   ZoneWatermarks m_watermarks{};
   PcpCache *m_pcp_cache{nullptr};
 
-  utils::MpscRingBuffer<Page *, 512> m_deferred_frees;
-  FreeArea m_areas[MAX_ORDER + 1];
+  alignas(std::hardware_destructive_interference_size) utils::MpscRingBuffer<Page *, 512> m_deferred_frees;
 
+  [[nodiscard]] Page *extract_block_internal(std::uint8_t requested_order) noexcept;
   void buddy_merge_internal(Page *page, std::uint8_t order) noexcept;
+
   void flush_deferred_frees_internal() noexcept;
+  void evaluate_watermarks(std::uint64_t curr_free, std::uint8_t requested_order, bool alloc_failed) const noexcept;
 
   [[nodiscard]] Page *alloc_pages_locked(std::uint8_t requested_order) noexcept;
   void free_page_locked(Page *page, std::uint8_t order) noexcept;
 
-  // PCP Batch Engines
-  bool scavenge_deferred_frees(PcpList &list) noexcept;
   bool batch_refill_pcp(PcpList &list, std::uint8_t order) noexcept;
   void batch_drain_pcp(PcpList &list, std::uint8_t order) noexcept;
 
@@ -104,7 +104,7 @@ public:
 
   void allocate_pcp(void *pcp_memory) noexcept { m_pcp_cache = static_cast<PcpCache *>(pcp_memory); }
 
-  void tune_pcp(const std::uint32_t total_cpus) noexcept {
+  void tune_pcp(const std::uint32_t total_cpus) const noexcept {
     if (!m_pcp_cache) {
       return;
     }
@@ -113,7 +113,7 @@ public:
 
     for (std::uint32_t c = 0; c < total_cpus; ++c) {
       for (std::uint8_t order = 0; order <= PCP_MAX_ORDER; ++order) {
-        m_pcp_cache[c].lists[order].tune(zone_pages >> order);
+        m_pcp_cache[c].lists[order].tune(zone_pages >> order, order);
       }
     }
   }

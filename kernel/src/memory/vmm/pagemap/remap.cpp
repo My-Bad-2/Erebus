@@ -18,13 +18,12 @@ std::expected<void, Error> PageMap::remap_1gb_as_2mb(const VirtualAddress virt, 
 
   PageTableEntry *pdpte = *pdpte_res;
 
-  const auto new_page_res = pmm::alloc_pages_zeroed(pmm::PageMobility::Movable, 0);
+  const auto new_page_res = pmm::alloc_pages_zeroed(pmm::PageMobility::Unmovable, 0);
   if (!new_page_res) [[unlikely]] {
     return std::unexpected(Error::OutOfMemory);
   }
 
   const PhysicalAddress new_pml2_phys{*new_page_res};
-  pmm::phys_to_page(new_pml2_phys)->set_mobility(pmm::PageMobility::Unmovable);
   auto *pml2_table = DirectMap::phys_to_virt(new_pml2_phys).as<PageTableEntry>();
 
   for (std::uint32_t i = 0; i < MAX_PAGE_ENTRIES; ++i) {
@@ -207,7 +206,7 @@ std::expected<void, Error> PageMap::remap_range(const VirtualAddress start_virt,
       return std::unexpected(pt_res.error());
     }
 
-    auto log_page = pmm::alloc_pages_zeroed(pmm::PageMobility::Movable, 0);
+    auto log_page = pmm::alloc_pages_zeroed(pmm::PageMobility::Unmovable, 0);
     if (!log_page) [[unlikely]] {
       return std::unexpected(Error::OutOfMemory);
     }
@@ -312,7 +311,7 @@ std::expected<void, Error> PageMap::protect_virtual_range(VirtualAddress start_v
 
     PageTableEntry *pte = *pt_res;
 
-    auto log_page = pmm::alloc_pages_zeroed(pmm::PageMobility::Movable, 0);
+    auto log_page = pmm::alloc_pages_zeroed(pmm::PageMobility::Unmovable, 0);
     if (!log_page) [[unlikely]] {
       return std::unexpected(Error::OutOfMemory);
     }

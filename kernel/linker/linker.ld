@@ -16,97 +16,96 @@ PHDRS {
 SECTIONS {
     /* Kernel virtual base. */
     . = 0xffffffff80000000;
-    __image_base = .;
+    PROVIDE(__image_base = .);
 
+    PROVIDE_HIDDEN(__limine_requests_start = .);
     .limine_requests : {
-        __limine_requests_start = .;
         KEEP(*(.limine_requests_start))
         KEEP(*(.limine_requests))
         KEEP(*(.limine_requests_end))
-        __limine_requests_end = .;
     } :requests
+    PROVIDE_HIDDEN(__limine_requests_end = .);
+
 
     /* Align to page boundary. */
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
+    PROVIDE_HIDDEN(__text_start = .);
     .text : {
-        __text_start = .;
         *(.text .text.*)
         *(.text.hot .text.hot.*)
         *(.text.unlikely .text.unlikely.*)
         . = ALIGN(64);
         *(.altinstr_replacement)
-
-        __text_end = .;
     } :text
+    PROVIDE_HIDDEN(__text_end = .);
 
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
+    PROVIDE_HIDDEN(__rodata_start = .);
     .rodata : {
-        __rodata_start = .;
         *(SORT_BY_ALIGNMENT(.rodata .rodata.*))
         *(SORT_BY_ALIGNMENT(.srodata .srodata.*))
 
         /* Exception Fixup Table */
         . = ALIGN(8);
-        __start_extable = .;
+        PROVIDE_HIDDEN(__start_extable = .);
         *(.extable)
-        __stop_extable = .;
-
-        __rodata_end = .;
+        PROVIDE_HIDDEN(__stop_extable = .);
     } :rodata
+    PROVIDE_HIDDEN(__rodata_end = .);
 
     . = ALIGN(CONSTANT(COMMONPAGESIZE));
 
+    PROVIDE_HIDDEN(__dynamic_start = .);
     .dynamic : {
-        __dynamic_start = .;
         KEEP(*(.dynamic))
-        __dynamic_end = .;
     } :rodata :dynamic
+    PROVIDE_HIDDEN(__dynamic_end = .);
 
+    PROVIDE_HIDDEN(__rela_dyn_start = .);
     .rela.dyn : {
-        __rela_dyn_start = .;
         KEEP(*(.rela.dyn .rela.*))
-        __rela_dyn_end = .;
     } :rodata
+    PROVIDE_HIDDEN(__rela_dyn_end = .);
 
+    PROVIDE_HIDDEN(__rel_dyn_start = .);
     .rel.dyn : {
-        __rel_dyn_start = .;
         KEEP(*(.rel.dyn .rel.*))
-        __rel_dyn_end = .;
     } :rodata
+    PROVIDE_HIDDEN(__rel_dyn_end = .);
 
+    PROVIDE_HIDDEN(__data_rel_ro_start = .);
     .data.rel.ro : {
-        __data_rel_ro_start = .;
         *(.data.rel.ro .data.rel.ro.*)
-        __data_rel_ro_end = .;
     } :rodata
+    PROVIDE_HIDDEN(__data_rel_ro_end = .);
 
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
+    PROVIDE_HIDDEN(__data_start = .);
     .data : {
-        __data_start = .;
         *(SORT_BY_ALIGNMENT(.data .data.*))
         *(SORT_BY_ALIGNMENT(.sdata .sdata.*))
         *(.got .got.*)
         *(.got.plt)
-        __data_end = .;
     } :data
+    PROVIDE_HIDDEN(__data_end = .);
 
+    . = ALIGN(64);
+
+    PROVIDE_HIDDEN(__bss_start = .);
     .bss : ALIGN(CONSTANT(MAXPAGESIZE)) {
-        . = ALIGN(64);
-        __bss_start = .;
         *(SORT_BY_ALIGNMENT(.bss .bss.*))
         *(SORT_BY_ALIGNMENT(.sbss .sbss.*))
         *(COMMON)
-        __bss_end = .;
     } :data
+    PROVIDE_HIDDEN(__bss_end = .);
 
     . = ALIGN(CONSTANT(MAXPAGESIZE));
 
+    PROVIDE_HIDDEN(__init_start = .);
     .init : {
-        __init_start = .;
-
         /* Boot Code */
         *(.init.text .init.text.*)
         *(.init .init.*)
@@ -114,35 +113,35 @@ SECTIONS {
 
         /* Static Keys & Alternative Instructions Metadata */
         . = ALIGN(8);
-        __start_altinstructions = .;
+        PROVIDE_HIDDEN(__start_altinstructions = .);
         *(.init.altinstructions)
-        __stop_altinstructions = .;
+        PROVIDE_HIDDEN(__stop_altinstructions = .);
 
         . = ALIGN(8);
-        __start_static_keys = .;
+        PROVIDE_HIDDEN(__start_static_keys = .);
         *(.init.static_keys)
-        __stop_static_keys = .;
+        PROVIDE_HIDDEN(__stop_static_keys = .);
 
         /* C++ Constructors */
         . = ALIGN(8);
-        __preinit_array_start = .;
+        PROVIDE_HIDDEN(__preinit_array_start = .);
         KEEP(*(.preinit_array))
-        __preinit_array_end = .;
+        PROVIDE_HIDDEN(__preinit_array_end = .);
 
         . = ALIGN(8);
-        __init_array_start = .;
+        PROVIDE_HIDDEN(__init_array_start = .);
         KEEP(*(SORT_BY_INIT_PRIORITY(.init_array.*)))
         KEEP(*(.init_array))
         KEEP(*(SORT_BY_INIT_PRIORITY(.ctors.*)))
         KEEP(*(.ctors))
-        __init_array_end = .;
+        PROVIDE_HIDDEN(__init_array_end = .);
 
         /* Ensure the init block end is page-aligned */
         . = ALIGN(CONSTANT(COMMONPAGESIZE));
-        __init_end = .;
     } :init
+    PROVIDE_HIDDEN(__init_end = .);
 
-    __image_end = .;
+    PROVIDE_HIDDEN(__image_end = .);
 
     /* Drop non-loadable metadata. */
     /DISCARD/ : {

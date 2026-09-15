@@ -123,14 +123,12 @@ CacheMode PageMap::extract_cache(const PTEntry &s, const bool is_huge) noexcept 
 }
 
 PageMap::PageMap() noexcept : m_lvls{max_lvls} {
-  const auto root_res = pmm::alloc_pages_zeroed(pmm::PageMobility::Movable, 0);
+  const auto root_res = pmm::alloc_pages_zeroed(pmm::PageMobility::Unmovable, 0);
   if (!root_res) {
     utils::logger::fatal("Unable to allocate page for top pml table!\n");
   }
 
   const PhysicalAddress root_phys{*root_res};
-  pmm::phys_to_page(root_phys)->set_mobility(pmm::PageMobility::Unmovable);
-
   m_root_phys = root_phys;
 
   if (s_kernel_root) [[likely]] {

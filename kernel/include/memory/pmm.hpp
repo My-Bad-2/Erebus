@@ -4,18 +4,34 @@
 #include "boot/limine.h"
 #include "memory.hpp"
 #include "pmm/router.hpp"
+#include "utils/logger.hpp"
 
 namespace kernel::memory::pmm {
 using AllocResult = std::optional<PhysicalAddress>;
 
+namespace detail {
+extern Page *g_vmemmap_base;
+extern std::uint64_t g_max_pfn;
+} // namespace detail
+
+[[nodiscard, gnu::always_inline]] inline std::uint64_t page_to_pfn(const Page *page) noexcept {
+  return static_cast<std::uint64_t>(page - detail::g_vmemmap_base);
+}
+
+[[nodiscard, gnu::always_inline]] inline Page *pfn_to_page(const std::uint64_t pfn) noexcept {
+  if (pfn >= detail::g_max_pfn) [[unlikely]] {
+    utils::logger::fatal("PMM: pfn_to_page out of bounds (PFN: {}, MAX: {})\n", pfn, detail::g_max_pfn);
+  }
+
+  return detail::g_vmemmap_base + pfn;
+}
+
 [[nodiscard, gnu::always_inline]] inline PhysicalAddress page_to_phys(const Page *pg) noexcept {
-  const std::uint64_t pfn = page_to_pfn(pg);
-  return PhysicalAddress{pfn * PAGE_SIZE};
+  return PhysicalAddress{page_to_pfn(pg) * PAGE_SIZE};
 }
 
 [[nodiscard, gnu::always_inline]] inline Page *phys_to_page(const PhysicalAddress phys) noexcept {
-  const std::uint64_t pfn = phys.value() / PAGE_SIZE;
-  return pfn_to_page(pfn);
+  return pfn_to_page(phys.value() / PAGE_SIZE);
 }
 
 [[nodiscard]] AllocResult alloc_pages(PageMobility mobility, std::uint8_t order = 0) noexcept;

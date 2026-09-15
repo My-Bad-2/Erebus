@@ -19,7 +19,7 @@ std::expected<void, Error> PageMap::alias_virtual_range(VirtualAddress src_virt,
   std::size_t remaining = size_bytes;
 
   while (remaining > 0) {
-    auto trans = translate(curr_src);
+    const auto trans = translate(curr_src);
     if (!trans) [[unlikely]] {
       [[maybe_unused]] auto _ = unmap_range(dest_virt, size_bytes - remaining);
       return std::unexpected(Error::NotMapped);
@@ -33,7 +33,6 @@ std::expected<void, Error> PageMap::alias_virtual_range(VirtualAddress src_virt,
     const PhysicalAddress target_phys = trans->phys_address + offset_in_page;
 
     const auto map_res = map_range(curr_dest, target_phys, chunk_bytes, trans->flags, trans->cache, trans->pkey);
-
     if (!map_res) [[unlikely]] {
       [[maybe_unused]] auto _ = unmap_range(dest_virt, size_bytes - remaining);
       return std::unexpected(map_res.error());

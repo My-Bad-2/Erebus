@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstddef>
 #include <cstdint>
 
 #include "page.hpp"
@@ -93,12 +92,20 @@ public:
       return 0;
     }
 
-    std::uint32_t steal_count = m_nr_free / 2;
+    const std::uint32_t steal_count = m_nr_free / 2;
     Page *curr = m_cold_tail;
 
     // Find the breaking point
-    for (std::uint32_t i = 0; i < steal_count - 1; i++) {
+    for (std::uint32_t i = 0; i < steal_count; i++) {
+      if (!curr) [[unlikely]] {
+        return 0; // The list is corrupted
+      }
+
       curr = curr->buddy.prev;
+    }
+
+    if (!curr) {
+      return 0;
     }
 
     // `curr` is now the new tail of this list

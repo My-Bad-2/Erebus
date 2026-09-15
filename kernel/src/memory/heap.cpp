@@ -109,7 +109,7 @@ void initialize() noexcept {
     if (cache) {
       g_kmalloc_caches[i] = *cache;
     } else {
-      utils::logger::fatal("Failed to allocate generic caches for Kmalloc!");
+      utils::logger::fatal("Failed to allocate generic caches for Kmalloc!\n");
     }
   }
 }
@@ -328,6 +328,7 @@ std::expected<void *, Error> KmemCache::refill(CpuCache &cpu, const std::uint32_
       .total = total,
       .generation = 0,
   };
+
   new_page->slub.state.store(std::bit_cast<std::uint64_t>(init_state), std::memory_order_relaxed);
   new_page->slub.cache = this;
   new_page->set_state(pmm::PageState::Active);

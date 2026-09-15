@@ -69,7 +69,7 @@ public:
 
     while (true) {
       slot = &m_slots[head & Mask];
-      const std::size_t seq = slot->sequence.load(std::memory_order_relaxed);
+      const std::size_t seq = slot->sequence.load(std::memory_order_acquire);
       const auto diff = static_cast<std::intptr_t>(seq - head);
 
       if (diff == 0) {

@@ -12,16 +12,15 @@ enum class MemoryTier : std::uint8_t {
 
 class alignas(std::hardware_destructive_interference_size) NumaNode {
   std::uint32_t m_node_id;
-
   MemoryTier m_tier;
   std::uint32_t m_bandwidth_mbps;
   std::uint32_t m_latency_ns;
 
-  const PageMobility m_fallback_hierarchy[3][2] = {
+  static constexpr std::array<std::array<PageMobility, 2>, 3> s_fallback_hierarchy = {{
       {PageMobility::Reclaimable, PageMobility::Movable},   // Unmovable starved
       {PageMobility::Reclaimable, PageMobility::Unmovable}, // Movable starved
       {PageMobility::Unmovable, PageMobility::Movable},     // Reclaimable starved
-  };
+  }};
 
   MobilityZone m_zones[3];
 

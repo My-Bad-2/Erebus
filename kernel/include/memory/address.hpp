@@ -45,6 +45,16 @@ public:
     return lhs.m_address - rhs.m_address;
   }
 
+  constexpr PhysicalAddress &operator+=(const PhysicalAddress other) noexcept {
+    m_address += other.m_address;
+    return *this;
+  }
+
+  constexpr PhysicalAddress &operator-=(const PhysicalAddress other) noexcept {
+    m_address -= other.m_address;
+    return *this;
+  }
+
   constexpr PhysicalAddress &operator+=(const OffsetType offset) noexcept {
     m_address += offset;
     return *this;

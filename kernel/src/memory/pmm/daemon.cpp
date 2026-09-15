@@ -4,78 +4,84 @@
 
 namespace kernel::memory::pmm {
 namespace {
+constexpr std::uint32_t COMPACTION_FRAG_THRESHOLD = 85;
+constexpr std::array RECLAIMABLE_ZONES = {PageMobility::Unmovable, PageMobility::Movable, PageMobility::Reclaimable};
+
 struct alignas(64) DaemonControlBlock {
-  std::atomic_flag reclaim_pending{ATOMIC_FLAG_INIT};
-  std::atomic_flag compact_pending{ATOMIC_FLAG_INIT};
+  std::atomic<bool> reclaim_pending{false};
+  std::atomic<bool> compact_pending{false};
 
   void *reclaim_thread{nullptr};
   void *compact_thread{nullptr};
 };
 
-DaemonControlBlock *dcbs = nullptr;
+DaemonControlBlock *g_dcbs = nullptr;
 
-void reclaim_worker_loop(std::uint32_t node_id) noexcept {
-  DaemonControlBlock &dcb = dcbs[node_id];
+void reclaim_worker_loop(const std::uint32_t node_id) noexcept {
+  DaemonControlBlock &dcb = g_dcbs[node_id];
   NumaNode &node = g_router.get_node(node_id);
 
   while (true) {
-    dcb.reclaim_pending.clear(std::memory_order_acquire);
+    dcb.reclaim_pending.exchange(false, std::memory_order_acquire);
 
-    bool memory_pressure_resolved = true;
-    for (int i = 0; i < 3; ++i) {
-      MobilityZone &zone = node.get_zone(static_cast<PageMobility>(i));
+    bool pressure_resolved = true;
 
-      if (zone.get_free_pages() < zone.get_watermarks().high) {
-        memory_pressure_resolved = false;
+    for (const PageMobility mobility : RECLAIMABLE_ZONES) {
+      MobilityZone &zone = node.get_zone(mobility);
+      const auto [min, low, high] = zone.get_watermarks();
 
-        // reclaim pages via vmm
+      if (zone.get_free_pages() < high) {
+        pressure_resolved = false;
+
+        // TODO: Reclaim pages via VMM
+        // e.g., shrink SLUB caches, swap out inactive pages, drop pagecache
       }
     }
 
-    if (memory_pressure_resolved) {
-      // sleep until next trigger
+    if (pressure_resolved) {
+      // TODO: Sleep/block thread until next trigger
     } else {
-      dcb.reclaim_pending.test_and_set(std::memory_order_release);
-      // yield
+      // Re-arm pending flag and yield to prevent spinning 100% CPU on OOM
+      dcb.reclaim_pending.store(true, std::memory_order_release);
+      // TODO: yield
     }
   }
 }
 
-void compaction_worker_loop(std::uint32_t node_id) noexcept {
-  DaemonControlBlock &dcb = dcbs[node_id];
+void compaction_worker_loop(const std::uint32_t node_id) noexcept {
+  DaemonControlBlock &dcb = g_dcbs[node_id];
   NumaNode &node = g_router.get_node(node_id);
 
   while (true) {
-    dcb.compact_pending.clear(std::memory_order_acquire);
+    dcb.compact_pending.exchange(false, std::memory_order_acquire);
     MobilityZone &zone = node.get_zone(PageMobility::Movable);
 
-    if (zone.calculate_fragmentation_index() > 85) {
-      // PLAN:
-      // isolate a 2mb phys block which have few 4kb pages in use
-      // allocate fresh 4 kb page elsewhere
-      // copy the data, update the VMM page tables, flush the TLB.
-      // free the old 4kb
+    if (zone.calculate_fragmentation_index() > COMPACTION_FRAG_THRESHOLD) {
+      // Isolate a 2MB phys block which has few 4KB pages in use.
+      // Allocate fresh 4KB pages elsewhere.
+      // Copy the data, update the VMM page tables, flush the TLB.
+      // Free the old 4KB pages back to the zone.
 
-      dcb.compact_pending.test_and_set(std::memory_order_release);
-      // yield
+      dcb.compact_pending.store(true, std::memory_order_release);
+      // TODO: yield
     } else {
-      // sleep until next trigger
+      // TODO: Sleep/block thread until next trigger
     }
   }
 }
 } // namespace
 
 void wake_reclaim_daemon(const std::uint32_t node_id) noexcept {
-  // if (!dcbs[node_id].reclaim_pending.test_and_set(std::memory_order_release)) {
-  //   // wakeup reclaim thread
+  // if (g_dcbs && !g_dcbs[node_id].reclaim_pending.exchange(true, std::memory_order_release)) {
+  //   // TODO: Wake up thread via scheduler
   // }
 
   utils::logger::fatal("Reclaim Daemon not implemented yet!\n");
 }
 
 void wake_compaction_daemon(const std::uint32_t node_id) noexcept {
-  // if (!dcbs[node_id].compact_pending.test_and_set(std::memory_order_release)) {
-  //   // wakeup compact thread
+  // if (g_dcbs && !g_dcbs[node_id].compact_pending.exchange(true, std::memory_order_release)) {
+  //   // TODO: Wake up thread via scheduler
   // }
 
   utils::logger::fatal("Compaction Daemon not implemented yet!\n");

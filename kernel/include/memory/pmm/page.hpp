@@ -170,5 +170,28 @@ struct alignas(64) Page {
   [[nodiscard]] heap::SlabState read_slub_state() const noexcept {
     return std::bit_cast<heap::SlabState>(slub.state.load(std::memory_order_relaxed));
   }
+
+  void setup_buddy_metadata(const PageState state, const PageMobility mobility, const std::uint8_t order,
+                            const std::uint32_t node) noexcept {
+    auto current_flags = flags.load(std::memory_order_relaxed);
+    while (true) {
+      Flags schema{current_flags};
+      schema.set_state(state);
+      schema.set_mobility(mobility);
+      schema.set_order(order);
+      if (flags.compare_exchange_weak(current_flags, schema.raw(), std::memory_order_relaxed)) {
+        break;
+      }
+    }
+
+    auto current_top = topology.load(std::memory_order_relaxed);
+    while (true) {
+      Topology schema{current_top};
+      schema.set_numa_node(node);
+      if (topology.compare_exchange_weak(current_top, schema.raw(), std::memory_order_relaxed)) {
+        break;
+      }
+    }
+  }
 };
 } // namespace kernel::memory::pmm

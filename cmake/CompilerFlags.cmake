@@ -54,7 +54,7 @@ target_compile_options(os_base_flags INTERFACE "-march=${OS_ARCH_LEVEL}"
 
         "$<$<BOOL:${OS_ENABLE_UBSAN}>:-fsanitize=undefined;-fsanitize-trap=undefined>"
 
-        "$<$<CONFIG:Debug>:-O0;-g3;-fno-omit-frame-pointer;-fno-optimize-sibling-calls;-fno-limit-debug-info>"
+        "$<$<CONFIG:Debug>:-Og;-g3;-fno-omit-frame-pointer;-fno-optimize-sibling-calls;-fno-limit-debug-info>"
         "$<$<CONFIG:Release>:-O3;-DNDEBUG;-flto=auto;-fomit-frame-pointer>"
         "$<$<CONFIG:MinSizeRel>:-Oz;-DNDEBUG;-ffunction-sections;-fdata-sections;-flto=auto;-fomit-frame-pointer>"
         "$<$<CONFIG:RelWithDebInfo>:-O2;-g;-DNDEBUG;-fno-omit-frame-pointer;-gsplit-dwarf>"
