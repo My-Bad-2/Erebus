@@ -106,8 +106,8 @@ std::expected<VMArea *, Error> AddressSpace::split_vma(VMArea *vma, const Virtua
 }
 
 void AddressSpace::initialize() noexcept {
-  const auto vma_res = heap::KmemCache::create("vma", sizeof(VMArea), alignof(VMArea));
-  const auto vmo_res = heap::KmemCache::create("vm_object", sizeof(VMObject), alignof(VMObject));
+  const auto vma_res = heap::KmemCache::create(sizeof(VMArea), alignof(VMArea));
+  const auto vmo_res = heap::KmemCache::create(sizeof(VMObject), alignof(VMObject));
   if (!vma_res || !vmo_res) {
     if (vma_res) {
       (*vma_res)->destroy();

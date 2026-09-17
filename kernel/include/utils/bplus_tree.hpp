@@ -291,7 +291,7 @@ template <BTreeData K, BTreeData V, size_t NodeBytes = std::hardware_destructive
 
 public:
   BPlusTree() {
-    const auto res = memory::heap::KmemCache::create("bplus_node", sizeof(Node), alignof(Node));
+    const auto res = memory::heap::KmemCache::create(sizeof(Node), alignof(Node));
     if (!res) {
       logger::fatal("Unable to create memory block allocator.");
     }
