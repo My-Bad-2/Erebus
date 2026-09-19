@@ -5,21 +5,14 @@
 #include <expected>
 #include <span>
 
+#include "core/errors.hpp"
 #include "cpu_info.hpp"
 
 namespace kernel::hw::patcher {
 template <typename T>
 concept CodePointer = std::is_pointer_v<T> || std::is_integral_v<T>;
 
-enum class PatchError {
-  InstructionBoundaryMismatch,
-  TargetTooSmallForTrampoline,
-  ZydisRelocationFailed,
-  ZydisConversionFailed,
-  IBTViolation // triggered if ENDBR64 is missing from a replacement
-};
-
-using PatchResult = std::expected<void, PatchError>;
+using PatchResult = std::expected<void, Error>;
 constexpr std::uint32_t FEATURE_ALWAYS = 0xFFFFFFFF;
 
 enum class PatchFlags : std::uint8_t { INLINE, OUT_OF_TRAMPOLINE, STRIP_PREFIX };

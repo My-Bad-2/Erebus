@@ -72,7 +72,7 @@ std::uint64_t g_max_pfn;
 } // namespace detail
 
 AllocResult alloc_pages(const PageMobility mobility, const std::uint8_t order) noexcept {
-  const std::uint32_t numa_node_id = hw::percpu::numa_node();
+  const std::uint32_t numa_node_id = hw::percpu::numa_node_id();
 
   if (Page *page = g_router.alloc_single(numa_node_id, mobility, order)) [[likely]] {
     page->ref_count.store(1, std::memory_order_relaxed);
@@ -109,7 +109,7 @@ std::size_t alloc_pages_bulk(const PageMobility mobility, const std::uint8_t ord
   }
 
   constexpr std::size_t CHUNK_SIZE = 64;
-  const std::uint32_t numa_node_id = hw::percpu::numa_node();
+  const std::uint32_t numa_node_id = hw::percpu::numa_node_id();
 
   std::array<Page *, CHUNK_SIZE> page_chunk{};
   std::size_t total_allocated = 0;

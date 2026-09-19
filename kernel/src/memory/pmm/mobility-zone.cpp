@@ -196,7 +196,7 @@ Page *MobilityZone::alloc_pages(const std::uint8_t requested_order) noexcept {
 }
 
 void MobilityZone::free_page(Page *page, const std::uint8_t order) noexcept {
-  const std::uint32_t curr_node_id = hw::percpu::numa_node();
+  const std::uint32_t curr_node_id = hw::percpu::numa_node_id();
   const std::uint32_t cpu_id = hw::percpu::id();
 
   if (curr_node_id != m_parent_node->get_id()) [[unlikely]] {

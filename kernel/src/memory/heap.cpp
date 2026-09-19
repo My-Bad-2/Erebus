@@ -252,7 +252,7 @@ void *CpuCache::alloc(const std::uint32_t object_size, const KmemCache *cache) n
 }
 
 std::expected<void *, Error> KmemCache::refill(CpuCache &cpu, const std::uint32_t cpu_id) noexcept {
-  const std::uint32_t node_id = hw::percpu::numa_node();
+  const std::uint32_t node_id = hw::percpu::numa_node_id();
 
   // Attempt to reclaim remote frees from the curr active page
   if (cpu.page) {

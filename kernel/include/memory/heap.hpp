@@ -5,17 +5,13 @@
 #include <new>
 #include <span>
 
+#include "core/errors.hpp"
 #include "crypto/blake2b_prng.hpp"
 #include "pmm/page.hpp"
 #include "utils/lock.hpp"
 #include "utils/logger.hpp"
 
 namespace kernel::memory::heap {
-enum class Error {
-  OutOfMemory,
-  InvalidAlignment,
-};
-
 enum class CacheFlags : std::uint8_t {
   None = 0,
   RedZone = 1 << 0, // Adds bounds-checking magic bytes

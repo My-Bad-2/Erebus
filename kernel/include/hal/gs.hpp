@@ -62,7 +62,7 @@ template <std::size_t Offset, std::size_t Size> [[gnu::always_inline]] void dec(
   } else if constexpr (Size == 4) {
     asm volatile("decl %%gs:%c0" : : "i"(Offset) : "memory", "cc");
   } else if constexpr (Size == 2) {
-    asm volatile("devw %%gs:%c0" : : "i"(Offset) : "memory", "cc");
+    asm volatile("decw %%gs:%c0" : : "i"(Offset) : "memory", "cc");
   } else if constexpr (Size == 1) {
     asm volatile("decb %%gs:%c0" : : "i"(Offset) : "memory", "cc");
   }

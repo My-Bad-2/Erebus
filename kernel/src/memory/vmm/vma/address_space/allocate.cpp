@@ -52,7 +52,7 @@ auto AddressSpace::alloc(const std::size_t size_bytes, const AccessFlags access,
   vma->vm_object->add_ref();
   vma->object_offset = 0;
   vma->fault_count = 0;
-  vma->preferred_numa_node = hw::percpu::numa_node();
+  vma->preferred_numa_node = hw::percpu::numa_node_id();
 
   m_vma_tree.insert(addr.value(), vma);
   link_vma(vma);
@@ -173,7 +173,7 @@ auto AddressSpace::map_object(VMObject *existing_obj, std::size_t size_bytes, st
 
   vma->object_offset = obj_offset_pages;
   vma->fault_count = 0;
-  vma->preferred_numa_node = hw::percpu::numa_node();
+  vma->preferred_numa_node = hw::percpu::numa_node_id();
 
   m_vma_tree.insert(addr.value(), vma);
   link_vma(vma);
@@ -223,7 +223,7 @@ auto AddressSpace::map_mmio(PhysicalAddress phys_base, std::size_t size_bytes, A
   vma->vm_object = nullptr;
   vma->object_offset = 0;
   vma->fault_count = 0;
-  vma->preferred_numa_node = hw::percpu::numa_node();
+  vma->preferred_numa_node = hw::percpu::numa_node_id();
 
   for (std::size_t i = 0; i < aligned_size; i += bytes_per_page) {
     if (auto map_res = m_pagemap.map(addr + i, phys_base + i, final_access, cache, pkey, page_size); !map_res) {

@@ -1,25 +1,11 @@
 #pragma once
 
+#include "core/errors.hpp"
 #include <bitfield.hpp>
 #include <cstdint>
 #include <utility>
 
 namespace kernel::memory::vmm {
-enum class Error {
-  Success = 0,
-  OutOfMemory,
-  AlreadyMapped,
-  NotMapped,
-  InvalidAlignment,
-  InvalidFlags,
-  CasFailed,
-  SecurityViolation,
-  OutOfBounds,
-  NotImplemented,
-  StackOverflow,
-  InvalidState,
-};
-
 enum class PageSize : std::uint8_t {
   Size4K = 1,
   Size2M = 2,

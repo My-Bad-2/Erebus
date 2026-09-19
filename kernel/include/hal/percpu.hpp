@@ -4,13 +4,18 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "../memory/vmm/pagemap/tlb.hpp"
 #include "crypto/blake2b_prng.hpp"
+#include "gdt.hpp"
 #include "gs.hpp"
 #include "memory/pmm/pcp_cache.hpp"
+#include "memory/vmm/pagemap/tlb.hpp"
 #include "utils/locks/locks.hpp"
 
 namespace kernel::hw {
+struct alignas(std::hardware_destructive_interference_size) PerNumaNode {
+  std::uint32_t numa_id;
+};
+
 class CpuTopology {
   std::uint64_t m_data;
 
@@ -33,22 +38,23 @@ public:
   BF_RW(std::uint8_t, preempt_count, 8, 8)  // Preemption depth
   BF_RW(std::uint8_t, softirq_count, 16, 8) // Deferred work
   BF_RW(std::uint8_t, hardirq_count, 24, 8) // IRQ nesting
-  BF_RW(std::uint8_t, nmi_count, 32, 4)     // NMI nesting
-  BF_RW(std::uint8_t, mce_count, 36, 4)     // Machine Check Exception nesting
+  BF_RW(std::uint8_t, nmi_count, 32, 8)     // NMI nesting
+  BF_RW(std::uint8_t, mce_count, 40, 8)     // Machine Check Exception nesting
 };
 
 struct alignas(std::hardware_destructive_interference_size) PerCpu {
   PerCpu *self{this};
-  CpuTopology topology{0};
-  CpuContext context{0};
-
+  PerNumaNode *numa_node{nullptr};
   const CpuInfo *info{nullptr};
+  CpuTopology topology{0};
+  gdt::GlobalDescriptorTable gdt_table{};
 
+  alignas(std::hardware_destructive_interference_size) CpuContext context{0};
   std::array<utils::CLHNode, 2> node;
   utils::CLHNode *curr_node{&node[0]};
   utils::CLHNode *prev_node{&node[1]};
 
-  memory::vmm::tlb::PcidManager pcid_manager;
+  alignas(std::hardware_destructive_interference_size) memory::vmm::tlb::PcidManager pcid_manager;
   crypto::Blake2bPrng rng;
 
   constexpr explicit PerCpu() noexcept : rng(crypto::Blake2bPrng::create()) {}
@@ -56,7 +62,7 @@ struct alignas(std::hardware_destructive_interference_size) PerCpu {
 
 namespace percpu {
 [[gnu::always_inline]] inline std::uint32_t id() noexcept { return READ_PCP(topology).get_cpu_id(); }
-[[gnu::always_inline]] inline std::uint32_t numa_node() noexcept { return READ_PCP(topology).get_numa_node(); }
+[[gnu::always_inline]] inline std::uint32_t numa_node_id() noexcept { return READ_PCP(topology).get_numa_node(); }
 [[gnu::always_inline]] inline PerCpu *self() noexcept { return READ_PCP(self); }
 [[gnu::always_inline]] inline crypto::Blake2bPrng &rng() noexcept { return self()->rng; }
 [[nodiscard]] inline memory::vmm::tlb::PcidManager &pcid_manager() noexcept { return self()->pcid_manager; }
@@ -124,13 +130,13 @@ inline constexpr std::size_t NMI_MCE_BYTE = CTX_BASE + 4; // Nibble-split
 
 [[nodiscard, gnu::always_inline]] inline bool in_interrupt() noexcept {
   // Reads Bytes 2 (soft), 3 (hard), 4 (nmi/mce), and 5 (unused zeros)
-  const auto combined_irqs = gs::read<SOFTIRQ_BYTE, std::uint32_t>();
+  const auto combined_irqs = gs::read<SOFTIRQ_BYTE, std::uint64_t>();
   return combined_irqs != 0;
 }
 
 [[nodiscard, gnu::always_inline]] inline bool can_sleep() noexcept {
   // Reads Preempt (Byte 1), Soft (Byte 2), Hard (Byte 3), NMI/MCE (Byte 4)
-  const auto combined_state = gs::read<PREEMPT_BYTE, std::uint32_t>();
+  const auto combined_state = gs::read<PREEMPT_BYTE, std::uint64_t>();
   return combined_state == 0;
 }
 

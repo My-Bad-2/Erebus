@@ -211,7 +211,7 @@ PatchResult BootPatcher::apply_patch(const AltInstr &alt) noexcept {
   const auto repl = reinterpret_cast<std::uintptr_t>(&alt.repl_offset) + static_cast<std::intptr_t>(alt.repl_offset);
 
   if (!InstructionDecoder::verify_boundaries(dest, alt.instr_len)) {
-    return std::unexpected(PatchError::InstructionBoundaryMismatch);
+    return std::unexpected(Error::InstructionBoundaryMismatch);
   }
 
   if (alt.flags == PatchFlags::OUT_OF_TRAMPOLINE) {
@@ -227,7 +227,7 @@ PatchResult BootPatcher::apply_patch(const AltInstr &alt) noexcept {
       }
     } else {
       if (alt.instr_len < 5) {
-        return std::unexpected(PatchError::TargetTooSmallForTrampoline);
+        return std::unexpected(Error::TargetTooSmallForTrampoline);
       }
 
       const auto disp64 = static_cast<std::int64_t>(repl) - static_cast<std::int64_t>(target + 5);
@@ -237,7 +237,7 @@ PatchResult BootPatcher::apply_patch(const AltInstr &alt) noexcept {
 
       if (disp64 < MIN_REL32 || disp64 > MAX_REL32) {
         utils::logger::fatal("Trampoline displacement out of 32-bit bounds!\n");
-        return std::unexpected(PatchError::TargetTooSmallForTrampoline);
+        return std::unexpected(Error::TargetTooSmallForTrampoline);
       }
 
       dest[0] = 0xE9; // JMP rel32
@@ -259,11 +259,11 @@ PatchResult BootPatcher::apply_patch(const AltInstr &alt) noexcept {
     klib::memcpy(payload.data(), reinterpret_cast<const void *>(repl), alt.repl_len);
 
     if (!validate_ibt(std::span<const std::uint8_t>{payload.data(), alt.repl_len}, dest)) {
-      return std::unexpected(PatchError::IBTViolation);
+      return std::unexpected(Error::IBTViolation);
     }
 
     if (!InstructionDecoder::relocate_rip_instructions(std::span(payload.data(), alt.repl_len), repl, target)) {
-      return std::unexpected(PatchError::ZydisRelocationFailed);
+      return std::unexpected(Error::ZydisRelocationFailed);
     }
   }
 

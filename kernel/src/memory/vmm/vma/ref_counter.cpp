@@ -2,7 +2,7 @@
 
 namespace kernel::memory::vmm {
 void RefCount::add_ref() noexcept {
-  const auto node_id = hw::percpu::numa_node();
+  const auto node_id = hw::percpu::numa_node_id();
   LocalNode *local = m_nodes.lookup(node_id);
 
   if (!local) [[unlikely]] {
@@ -21,7 +21,7 @@ void RefCount::add_ref() noexcept {
 }
 
 bool RefCount::drop_ref() noexcept {
-  const auto node_id = hw::percpu::numa_node();
+  const auto node_id = hw::percpu::numa_node_id();
   LocalNode *local = m_nodes.lookup(node_id);
   if (!local) {
     return false;
