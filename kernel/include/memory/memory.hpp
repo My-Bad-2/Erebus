@@ -13,3 +13,7 @@ inline constexpr std::size_t PAGE_SIZE_1GB = 1ul << PAGE_SHIFT_1GB;
 
 void initialize();
 } // namespace kernel::memory
+
+namespace kernel {
+constexpr std::size_t KSTACK_SIZE = 4 * memory::PAGE_SIZE;
+}

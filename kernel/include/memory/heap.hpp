@@ -52,7 +52,6 @@ class alignas(std::hardware_destructive_interference_size) KmemCache {
   std::span<CpuCache> m_cpu_caches;
   std::span<NodeCache> m_node_caches;
 
-  std::uintptr_t m_random_cookie;
   void (*m_ctor)(void *);
 
   std::uint32_t m_obj_size;
@@ -76,9 +75,7 @@ public:
                       const CacheFlags flags, void (*ctor)(void *), const std::span<CpuCache> cpus,
                       const std::span<NodeCache> nodes) noexcept
       : m_cpu_caches(cpus), m_node_caches(nodes), m_ctor(ctor), m_obj_size(obj_size), m_size(size), m_order(order),
-        m_flags(flags), m_reserved(0) {
-    hw::percpu::rng().get_random(m_random_cookie);
-  }
+        m_flags(flags), m_reserved(0) {}
 
   KmemCache(const KmemCache &) = delete;
   KmemCache &operator=(const KmemCache &) = delete;
@@ -106,13 +103,6 @@ public:
   }
 
   void free(void *obj) noexcept;
-
-  [[nodiscard]] void *obfuscate_ptr(void *ptr, void *obj_addr) const noexcept {
-    return reinterpret_cast<void *>(reinterpret_cast<std::uintptr_t>(ptr) ^ m_random_cookie ^
-                                    reinterpret_cast<std::uintptr_t>(obj_addr));
-  }
-
-  [[nodiscard]] void *reveal_ptr(void *ptr, void *obj_addr) const noexcept { return obfuscate_ptr(ptr, obj_addr); }
 
   void apply_poison(void *obj) const noexcept {
     if (!has_flag(m_flags, CacheFlags::Poison)) {

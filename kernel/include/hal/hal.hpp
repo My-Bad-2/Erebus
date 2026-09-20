@@ -118,12 +118,14 @@ namespace detail {
 }
 } // namespace detail
 
-[[gnu::always_inline]] inline void cpu_idle_loop(volatile std::uint32_t *runqueue_count) noexcept {
+[[gnu::always_inline, noreturn]] inline void cpu_idle_loop(volatile std::uint32_t *runqueue_count) noexcept {
   if (EREBUS_STATIC_BRANCH_UNLIKELY(detail::use_mwait)) {
     detail::idle_mwait(runqueue_count);
   } else {
     detail::idle_generic(runqueue_count);
   }
+
+  std::unreachable();
 }
 
 [[gnu::always_inline]] inline void umonitor(const volatile void *addr) noexcept {
@@ -432,6 +434,17 @@ public:
 
 [[gnu::always_inline]] inline void tlbsync() noexcept {
   asm volatile("tlbsync" : /* No Output */ : /* No Input */ : "memory");
+}
+
+[[noreturn, gnu::naked]] inline void execute_on_new_stack(std::uint64_t new_stack_top, void *payload,
+                                                          void (*target_function)(void *)) noexcept {
+  asm volatile("movq %%rdi, %%rsp\n\t"
+               "movq %%rsi, %%rdi\n\t"
+               "xorq %%rbp, %%rbp\n\t"
+               "jmp *%%rdx\n\t"
+               : /* No Output */
+               : /* No Input */
+               : "memory");
 }
 
 void initialize() noexcept;

@@ -1,8 +1,8 @@
 #include "memory/vmm.hpp"
 
+#include "hal/interrupt_manager.hpp"
 #include "hal/percpu.hpp"
 #include "memory/vmm/vma/vma.hpp"
-#include "utils/logger.hpp"
 
 extern "C" {
 extern std::uint8_t __image_base[];
@@ -38,9 +38,78 @@ constexpr std::uintptr_t KERNEL_VMA_HEAP_ADDR{0xFFFFC00000000000};
     return CacheMode::UncacheableMinus;
   }
 }
+
+struct PageFaultErrorCode {
+private:
+  std::uint32_t m_data;
+
+public:
+  explicit PageFaultErrorCode(const std::uint32_t data) noexcept : m_data(data) {}
+
+  BF_BIT_RO(present, 0)
+  BF_BIT_RO(write, 1)
+  BF_BIT_RO(user, 2)
+  BF_BIT_RO(reserved_violation, 3)
+  BF_BIT_RO(instruction_fetch, 4)
+  BF_BIT_RO(protection_key, 5)
+  BF_BIT_RO(shadow_stack, 6)
+};
+
+class PageFaultDispatcher {
+  hw::interrupts::InterruptRegistration m_registration;
+  static constexpr std::uint8_t PF_VECTOR = std::to_underlying(hw::interrupts::InterruptVector::PageFault);
+
+  static hw::interrupts::InterruptStatus isr_trampoline(const hw::interrupts::Event &event, void *ctx) noexcept {
+    auto *self = static_cast<PageFaultDispatcher *>(ctx);
+    return self->dispatch(event);
+  }
+
+  hw::interrupts::InterruptStatus dispatch(const hw::interrupts::Event &event) noexcept {
+    using namespace hw::interrupts;
+    const auto fault_addr = VirtualAddress{event.payload};
+    AddressSpace *curr_space = kernel_space();
+
+    PageFaultErrorCode error_code{event.error_code};
+
+    if (curr_space == nullptr) [[unlikely]] {
+      return InterruptStatus::Unhandled;
+    }
+
+    AccessFlags fault_type = AccessFlags::None;
+    if (error_code.get_write()) {
+      fault_type |= AccessFlags::Write;
+    } else {
+      fault_type |= AccessFlags::Read;
+    }
+
+    if (error_code.get_user()) {
+      fault_type |= AccessFlags::User;
+    }
+
+    if (error_code.get_instruction_fetch()) {
+      fault_type |= AccessFlags::Execute;
+    }
+
+    const auto res = curr_space->handle_page_fault(fault_addr, fault_type);
+
+    if (!res) {
+      return InterruptStatus::Unhandled;
+    }
+
+    return InterruptStatus::Handled;
+  }
+
+public:
+  PageFaultDispatcher() noexcept : m_registration(&PageFaultDispatcher::isr_trampoline, this) {
+    using namespace hw::interrupts;
+    InterruptManager::register_handler(PF_VECTOR, &m_registration);
+  }
+};
+
+PageFaultDispatcher pf_dispatcher;
 } // namespace
 
-const AddressSpace *kernel_space() noexcept { return g_kernel_space; }
+AddressSpace *kernel_space() noexcept { return g_kernel_space; }
 
 void initialize(std::span<limine_memmap_entry *> memmap) noexcept {
   initialize_hw();
@@ -94,5 +163,6 @@ void initialize(std::span<limine_memmap_entry *> memmap) noexcept {
   map_kernel_section(__init_start, __init_end, AccessFlags::Read | AccessFlags::Write | AccessFlags::Execute);
 
   hw::percpu::pcid_manager().load(kernel_pagemap);
+  new (&pf_dispatcher) PageFaultDispatcher();
 }
 } // namespace kernel::memory::vmm

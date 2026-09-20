@@ -57,6 +57,26 @@ auto AddressSpace::alloc(const std::size_t size_bytes, const AccessFlags access,
   m_vma_tree.insert(addr.value(), vma);
   link_vma(vma);
 
+  if (has_flag(access, AccessFlags::Populate)) {
+    for (std::size_t i = 0; i < aligned_size; i += bytes_per_page) {
+      if (auto fault_res = resolve_vma_fault_locked(vma, addr + i, access); !fault_res) {
+        // Rollback 'cause we're out of physical memory
+        unlink_vma(vma);
+        m_vma_tree.erase(addr.value());
+
+        if (i > 0) {
+          [[maybe_unused]] auto _ = m_pagemap.unmap_range(addr, i);
+          tlb::ShootdownCoordinator::broadcast(&m_pagemap, addr, i, page_size != PageSize::Size4K);
+        }
+
+        vma->vm_object->drop_ref();
+        s_vma_cache->free(vma);
+
+        return std::unexpected(fault_res.error());
+      }
+    }
+  }
+
   return addr;
 }
 

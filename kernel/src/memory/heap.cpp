@@ -230,9 +230,7 @@ std::expected<KmemCache *, Error> KmemCache::create(const std::uint32_t obj_size
 void *CpuCache::alloc(const std::uint32_t object_size, const KmemCache *cache) noexcept {
   void *obj = local_freelist;
   if (obj != nullptr) [[likely]] {
-    void *obf_next = *static_cast<void **>(obj);
-    local_freelist = cache->reveal_ptr(obf_next, obj);
-
+    local_freelist = *static_cast<void **>(obj);
     if (local_freelist) {
       __builtin_prefetch(local_freelist, 1, 0);
     }
@@ -290,8 +288,11 @@ std::expected<void *, Error> KmemCache::refill(CpuCache &cpu, const std::uint32_
   // If we successfully grabbed a partial page, freeze and claim it
   if (partial) {
     SlabState state = partial->read_slub_state();
-    SlabState new_state;
+    if (state.remote_head_idx == SLUB_NO_IDX) [[unlikely]] {
+      utils::logger::fatal("KmemCache: Pulled a completely full page from partial list!\n");
+    }
 
+    SlabState new_state;
     do {
       new_state = state;
       new_state.frozen = 1;
@@ -362,7 +363,7 @@ void KmemCache::free(void *obj) noexcept {
 
   // Freeing to the actively bumping page on this CPU
   if (page == cpu.page) [[likely]] {
-    *static_cast<void **>(obj) = obfuscate_ptr(cpu.local_freelist, obj);
+    *static_cast<void **>(obj) = cpu.local_freelist;
     cpu.local_freelist = obj;
     return;
   }
@@ -379,7 +380,7 @@ void KmemCache::free(void *obj) noexcept {
     new_state = state;
 
     void *next_ptr = (state.remote_head_idx != SLUB_NO_IDX) ? (base + (state.remote_head_idx * m_size)) : nullptr;
-    *static_cast<void **>(obj) = obfuscate_ptr(next_ptr, obj);
+    *static_cast<void **>(obj) = next_ptr;
 
     new_state.remote_head_idx = obj_idx;
     new_state.in_use--;
@@ -430,6 +431,7 @@ void KmemCache::abandon_active_page(CpuCache &cpu, std::uint32_t cpu_id) noexcep
     chain_head = cpu.local_freelist;
     void *curr = chain_head;
     local_free_count++;
+
     while (*static_cast<void **>(curr) != nullptr) {
       curr = *static_cast<void **>(curr);
       local_free_count++;
@@ -446,7 +448,7 @@ void KmemCache::abandon_active_page(CpuCache &cpu, std::uint32_t cpu_id) noexcep
 
     for (std::uint16_t i = 0; i < cpu.bump_left; ++i) {
       void *next = (i == cpu.bump_left - 1) ? nullptr : (current + m_size);
-      *reinterpret_cast<void **>(current) = obfuscate_ptr(next, current);
+      *reinterpret_cast<void **>(current) = next;
       bump_tail = current;
       current += m_size;
     }
@@ -468,11 +470,13 @@ void KmemCache::abandon_active_page(CpuCache &cpu, std::uint32_t cpu_id) noexcep
   do {
     new_state = state;
     new_state.in_use -= total_local_free;
-    to_cpu_partial = (new_state.in_use > 0 && cpu.partial_count < CpuCache::MAX_CPU_PARTIAL);
+    to_cpu_partial =
+        (new_state.in_use > 0 && new_state.in_use < new_state.total && cpu.partial_count < CpuCache::MAX_CPU_PARTIAL);
     new_state.frozen = to_cpu_partial ? 1 : 0;
 
     if (chain_tail && state.remote_head_idx != SLUB_NO_IDX) {
-      *static_cast<void **>(chain_tail) = base + (state.remote_head_idx * m_size);
+      void *remote_head_ptr = base + (state.remote_head_idx * m_size);
+      *static_cast<void **>(chain_tail) = remote_head_ptr;
     }
 
     if (chain_head) {
@@ -492,10 +496,12 @@ void KmemCache::abandon_active_page(CpuCache &cpu, std::uint32_t cpu_id) noexcep
     page->slub.cache = nullptr;
     page->set_state(pmm::PageState::Free);
     pmm::free_pages(pmm::page_to_phys(page), m_order);
-  } else {
+  } else if (new_state.in_use < new_state.total) {
     const std::uint32_t node_id = page->get_numa_node();
     const bool mostly_empty = new_state.in_use <= (new_state.total / 2);
     push_to_node_partial(page, node_id, mostly_empty);
+  } else {
+    // Page is completely full. Eat 5-stars and do nothing.
   }
 
   cpu.page = nullptr;

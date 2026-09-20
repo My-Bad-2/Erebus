@@ -141,5 +141,6 @@ inline constexpr std::size_t NMI_MCE_BYTE = CTX_BASE + 4; // Nibble-split
 }
 
 void early_initialize() noexcept;
+void initialize_interrupts(memory::VirtualAddress rsp) noexcept;
 } // namespace percpu
 } // namespace kernel::hw

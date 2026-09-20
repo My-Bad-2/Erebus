@@ -68,7 +68,7 @@ public:
 };
 
 constexpr std::uint8_t get_page_order(const PageSize size) noexcept {
-  return static_cast<std::uint8_t>(std::to_underlying(size) * 9);
+  return static_cast<std::uint8_t>((std::to_underlying(size) - 1) * 9);
 }
 
 constexpr std::size_t get_page_bytes(const PageSize size) noexcept { return PAGE_SIZE << get_page_order(size); }

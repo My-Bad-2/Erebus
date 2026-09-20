@@ -40,7 +40,7 @@ std::expected<VMArea *, Error> AddressSpace::expand_stack_locked(const VirtualAd
 }
 
 std::expected<void, Error> AddressSpace::resolve_vma_fault_locked(VMArea *vma, VirtualAddress fault_addr,
-                                                                  AccessFlags fault_type) noexcept {
+                                                                  const AccessFlags fault_type) noexcept {
   const AccessFlags vma_access = vma->flags.get_access();
   const PageSize page_size = vma->flags.get_page_size();
   const CacheMode cache = vma->flags.get_cache();

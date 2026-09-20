@@ -143,5 +143,5 @@ public:
   }
 };
 
-const AddressSpace *kernel_space() noexcept;
+AddressSpace *kernel_space() noexcept;
 } // namespace kernel::memory::vmm

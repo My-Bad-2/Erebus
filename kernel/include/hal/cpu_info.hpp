@@ -138,9 +138,10 @@ enum class Feature : std::uint32_t {
   CORE_CAPABILITIES = make_feat(7, 0, Reg::EDX, 30),
 
   // Extended Features: Leaf 7, Subleaf 1
-  LAM = make_feat(7, 1, Reg::EAX, 26),
+  FRED = make_feat(7, 1, Reg::EAX, 17),
   AVX10 = make_feat(7, 1, Reg::EDX, 19),
-  APX_F = make_feat(7, 1, Reg::EDX, 21),
+  AMX_F = make_feat(7, 1, Reg::EDX, 21),
+  LAM = make_feat(7, 1, Reg::EAX, 26),
 
   // AMD/Intel Extended Features: Leaf 0x80000001
   SVM = make_feat(0x80000001, 0, Reg::ECX, 2),

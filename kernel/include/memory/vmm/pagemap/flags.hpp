@@ -26,6 +26,7 @@ enum class AccessFlags : std::uint32_t {
   Dirty = 1 << 9,
   Mmio = 1 << 10, // Memory Mapped IO (Forces Uncacheable)
   Stack = 1 << 11,
+  Populate = 1 << 12, // Instantly allocates physical memory
 };
 
 constexpr AccessFlags operator|(const AccessFlags a, const AccessFlags b) noexcept {
