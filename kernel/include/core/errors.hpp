@@ -5,6 +5,7 @@
 namespace kernel {
 enum class Error : std::uint32_t {
   Success = 0x0,
+  HardwareError = 0x1,
 
   // Generic errors
   NotImplemented = 0x1001,
@@ -42,6 +43,11 @@ enum class Error : std::uint32_t {
   ZydisConversionFailed = 0x5004,
   InvalidOpcode = 0x5005,
   TrampolineAllocationFailed = 0x5006,
+
+  // IOAPIC errors
+  UnmappedGSI = 0x6001,
+  ControllerLimitReached = 0x6002,
+  OverrideLimitReached = 0x6003,
 };
 
 [[nodiscard]] constexpr bool IsSuccess(const Error e) noexcept { return e == Error::Success; }

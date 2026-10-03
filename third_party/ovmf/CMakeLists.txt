@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.18)
 
-set(OVMF_BINARY_URL "https://github.com/osdev0/edk2-ovmf-stable-bins/releases/download/20260526T165842Z/edk2-ovmf-bins.tar.xz"
+set(OVMF_BINARY_URL "https://github.com/osdev0/edk2-ovmf-stable-bins/releases/download/20260930T044308Z/edk2-ovmf-bins.tar.xz"
 		CACHE STRING "URL to the pre-built Ovmf binary archive")
 
-set(OVMF_BINARY_SHA256 "2b1af03999f39625f20a6ef7e72c10eace3f0335a8646ed836f186f2c8e1b3e8"
+set(OVMF_BINARY_SHA256 "0edb662053aec872a0c398ab3aa5351d503376dbdca53bba10e8d30bbdfa575f"
 		CACHE STRING "Expected SHA256 hash of the archive")
 
 set(OVMF_ARCHIVE_FILE "${CMAKE_CURRENT_BINARY_DIR}/ovmf-binaries.tar.xz")

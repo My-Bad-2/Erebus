@@ -1,9 +1,30 @@
 #include "drivers/acpi.hpp"
 #include "memory/pmm/bootstrap.hpp"
 #include "utils/logger.hpp"
+#include <uacpi/acpi.h>
 
 namespace kernel::memory::pmm {
-void TopologyParser::parse_srat(EarlyAllocFn alloc) noexcept {
+namespace {
+struct acpi_hmat_locality_arrays {
+  uacpi_u32 *initiator_domains; // Initiator Proximity Domain lists
+  uacpi_u32 *target_domains;    // Target Proximity Domain lists
+  uacpi_u16 *matrix;            // Matrix of latency/bandwidth values
+};
+
+void uacpi_hmat_locality_get_arrays(struct acpi_hmat_locality *loc, struct acpi_hmat_locality_arrays *out_arrays) {
+  auto ptr = reinterpret_cast<std::uint8_t *>(loc + 1);
+
+  out_arrays->initiator_domains = reinterpret_cast<std::uint32_t *>(ptr);
+
+  ptr += (loc->num_initiator_proximity_domains * sizeof(uacpi_u32));
+  out_arrays->target_domains = reinterpret_cast<std::uint32_t *>(ptr);
+
+  ptr += (loc->num_target_proximity_domains * sizeof(uacpi_u32));
+  out_arrays->matrix = reinterpret_cast<std::uint16_t *>(ptr);
+}
+} // namespace
+
+void TopologyParser::parse_srat(const EarlyAllocFn alloc) noexcept {
   using namespace drivers::acpi;
   auto srat_res = Table::find<"SRAT">();
   if (!srat_res.has_value()) {

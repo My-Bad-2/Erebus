@@ -9,4 +9,6 @@ extern "C" {
 void __assert_fail(const char *assertion, const char *file, unsigned int line, const char *function) {
   kernel::utils::logger::error("{} failed @ {}:{}:{}!", assertion, file, line, function);
 }
+
+void atexit() { kernel::utils::logger::fatal("Atexit Called!\n"); }
 }

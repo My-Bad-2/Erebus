@@ -1,9 +1,9 @@
 cmake_minimum_required(VERSION 3.18)
 
-set(LIMINE_BINARY_URL "https://github.com/Limine-Bootloader/Limine/releases/download/v12.6.0/limine-binary.tar.xz"
+set(LIMINE_BINARY_URL "https://github.com/Limine-Bootloader/Limine/releases/download/v12.9.1/limine-binary.tar.xz"
 		CACHE STRING "URL to the pre-built Limine binary archive")
 
-set(LIMINE_BINARY_SHA256 "44fb480294463c15823bba5378c955b46d15d08fc7b5a74de49fef2953d1878d"
+set(LIMINE_BINARY_SHA256 "ce972a05e9d1973dc9b725f9130bd15af01add0eb3a7f90c118ac5cfe21c17b8"
 		CACHE STRING "Expected SHA256 hash of the archive")
 
 set(LIMINE_ARCHIVE_FILE "${CMAKE_CURRENT_BINARY_DIR}/limine-binaries.tar.xz")

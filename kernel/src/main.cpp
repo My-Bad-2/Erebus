@@ -19,17 +19,6 @@ std::uint32_t runqueue_count = 0;
   const memory::VirtualAddress bsp_stack{stack};
   hw::percpu::initialize_interrupts(bsp_stack);
 
-  // const auto test_res =
-  //     memory::vmm::kernel_space()->alloc(KSTACK_SIZE, memory::vmm::AccessFlags::Read |
-  //     memory::vmm::AccessFlags::Write);
-  // if (!test_res) {
-  //   utils::logger::fatal("Failed to allocate test! error : {}\n", std::to_underlying(test_res.error()));
-  // }
-  //
-  // memory::VirtualAddress test{*test_res};
-  //
-  // *test.as<int>() = 10;
-
   utils::logger::info("Hello, World!\n");
   hw::cpu_idle_loop(&runqueue_count);
 }
