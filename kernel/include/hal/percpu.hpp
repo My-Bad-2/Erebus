@@ -7,6 +7,7 @@
 #include "crypto/blake2b_prng.hpp"
 #include "gdt.hpp"
 #include "gs.hpp"
+#include "hal/apic/lapic.hpp"
 #include "memory/pmm/pcp_cache.hpp"
 #include "memory/vmm/pagemap/tlb.hpp"
 #include "utils/locks/locks.hpp"
@@ -55,6 +56,7 @@ struct alignas(std::hardware_destructive_interference_size) PerCpu {
   utils::CLHNode *prev_node{&node[1]};
 
   alignas(std::hardware_destructive_interference_size) memory::vmm::tlb::PcidManager pcid_manager;
+  apic::Lapic lapic;
   crypto::Blake2bPrng rng;
 
   constexpr explicit PerCpu() noexcept : rng(crypto::Blake2bPrng::create()) {}
@@ -66,6 +68,7 @@ namespace percpu {
 [[gnu::always_inline]] inline PerCpu *self() noexcept { return READ_PCP(self); }
 [[gnu::always_inline]] inline crypto::Blake2bPrng &rng() noexcept { return self()->rng; }
 [[nodiscard]] inline memory::vmm::tlb::PcidManager &pcid_manager() noexcept { return self()->pcid_manager; }
+[[nodiscard]] inline apic::Lapic &lapic() noexcept { return self()->lapic; }
 
 // Used by QSpinlock
 [[nodiscard, gnu::always_inline]] inline utils::CLHNode *get_curr_node() noexcept { return READ_PCP(curr_node); }
@@ -141,6 +144,6 @@ inline constexpr std::size_t NMI_MCE_BYTE = CTX_BASE + 4; // Nibble-split
 }
 
 void early_initialize() noexcept;
-void initialize_interrupts(memory::VirtualAddress rsp) noexcept;
+void initialize(memory::VirtualAddress bsp_rsp) noexcept;
 } // namespace percpu
 } // namespace kernel::hw

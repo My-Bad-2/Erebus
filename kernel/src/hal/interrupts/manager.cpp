@@ -1,4 +1,6 @@
+#include "hal/apic/ioapic.hpp"
 #include "hal/interrupt_manager.hpp"
+#include "utils/lock.hpp"
 #include "utils/logger.hpp"
 
 namespace kernel::hw::interrupts {
@@ -51,8 +53,14 @@ void dump_event(const Event &event) noexcept {
 }
 } // namespace
 
+void InterruptManager::set_eoi_strategy(const std::uint8_t vector, const bool is_lvl,
+                                        apic::IoApicController *controller) noexcept {
+  s_slots[vector].is_level_triggered = is_lvl;
+  s_slots[vector].ioapic_controller = controller;
+}
+
 void InterruptManager::register_handler(const std::uint8_t vector, InterruptRegistration *reg) noexcept {
-  auto &[lock, direct_callback, direct_dpc, direct_ctx, list] = s_slots[vector];
+  auto &[lock, direct_callback, direct_dpc, direct_ctx, list, lvl_triggered, ioapic] = s_slots[vector];
 
   utils::IrqSaveGuard guard(lock);
 
@@ -69,7 +77,7 @@ void InterruptManager::register_handler(const std::uint8_t vector, InterruptRegi
 }
 
 void InterruptManager::unregister_handler(const std::uint8_t vector, InterruptRegistration *reg) noexcept {
-  auto &[lock, direct_callback, direct_dpc, direct_ctx, list] = s_slots[vector];
+  auto &[lock, direct_callback, direct_dpc, direct_ctx, list, lvl_triggered, ioapic] = s_slots[vector];
   utils::IrqSaveGuard guard(lock);
   list.remove(*reg);
 
@@ -91,7 +99,7 @@ void InterruptManager::unregister_handler(const std::uint8_t vector, InterruptRe
 
 void InterruptManager::route_event(const Event &event) noexcept {
   if (event.category == EventClass::Interrupt) [[likely]] {
-    auto &[lock, direct_callback, direct_dpc, direct_ctx, list] = s_slots[event.vector];
+    auto &[lock, direct_callback, direct_dpc, direct_ctx, list, lvl_triggered, ioapic] = s_slots[event.vector];
 
     bool handled = false;
     bool yield = false;
@@ -124,7 +132,13 @@ void InterruptManager::route_event(const Event &event) noexcept {
       }
     }
 
-    // Send EOI
+    percpu::lapic().eoi();
+
+    if (lvl_triggered) [[unlikely]] {
+      if (ioapic) {
+        ioapic->send_eoi(event.vector);
+      }
+    }
 
     if (!handled && list.empty()) [[unlikely]] {
       // Spurious interrupt

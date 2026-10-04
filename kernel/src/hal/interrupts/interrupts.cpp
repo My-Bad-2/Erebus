@@ -158,19 +158,23 @@ struct [[gnu::packed]] IDTR {
 alignas(16) std::array<IDTEntry, IDT_SIZE> g_idt_table{};
 
 void initialize() noexcept {
-  for (std::size_t vec = 0; vec < IDT_SIZE; ++vec) {
-    const auto handler = reinterpret_cast<void *>(legacy_idt_stubs[vec]);
-    constexpr auto dpl = EventCpl::Ring0;
+  static auto once = [] {
+    for (std::size_t vec = 0; vec < IDT_SIZE; ++vec) {
+      const auto handler = reinterpret_cast<void *>(legacy_idt_stubs[vec]);
+      constexpr auto dpl = EventCpl::Ring0;
 
-    std::uint8_t ist_idx = 0;
-    if (vec == std::to_underlying(InterruptVector::NonMaskableInterrupt) ||
-        vec == std::to_underlying(InterruptVector::DoubleFault) ||
-        vec == std::to_underlying(InterruptVector::MachineCheck)) {
-      ist_idx = 1;
+      std::uint8_t ist_idx = 0;
+      if (vec == std::to_underlying(InterruptVector::NonMaskableInterrupt) ||
+          vec == std::to_underlying(InterruptVector::DoubleFault) ||
+          vec == std::to_underlying(InterruptVector::MachineCheck)) {
+        ist_idx = 1;
+      }
+
+      g_idt_table[vec].set_handler(handler, gdt::Selector::KernelCode, GateType::Interrupt, dpl, ist_idx);
     }
 
-    g_idt_table[vec].set_handler(handler, gdt::Selector::KernelCode, GateType::Interrupt, dpl, ist_idx);
-  }
+    return true;
+  }();
 
   IDTR idtr{
       .limit = static_cast<std::uint16_t>(sizeof(g_idt_table) - 1),

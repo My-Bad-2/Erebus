@@ -24,6 +24,8 @@ public:
 
   [[nodiscard]] constexpr ValueType value() const noexcept { return m_address; }
 
+  explicit operator std::uint64_t() const noexcept { return m_address; }
+
   [[nodiscard]] friend constexpr auto operator<=>(PhysicalAddress, PhysicalAddress) noexcept = default;
 
   [[nodiscard]] friend constexpr PhysicalAddress operator+(const PhysicalAddress addr,

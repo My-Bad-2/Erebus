@@ -1,6 +1,6 @@
 #pragma once
 
-#include "io.hpp"
+#include "../io.hpp"
 
 #include <array>
 #include <cstddef>
@@ -11,10 +11,11 @@
 #include "uacpi/acpi.h"
 #include "utils/lock.hpp"
 
+#include "apic.hpp"
 #include "utils/vector.hpp"
 #include <bitfield.hpp>
 
-namespace kernel::hw::interrupts {
+namespace kernel::hw::apic {
 struct IoApicConfig {
   static constexpr std::size_t max_controllers = 8;
   static constexpr std::size_t max_isa_overrides = 16;
@@ -84,19 +85,6 @@ public:
   BF_RO(std::uint8_t, max_redirection_entries, 16, 8)
 };
 
-enum class DeliveryMode : std::uint8_t {
-  Fixed = 0b000,
-  LowestPri = 0b001,
-  SMI = 0b010,
-  NMI = 0b100,
-  Init = 0b101,
-  ExtInt = 0b111
-};
-
-enum class DestinationMode : std::uint8_t { Physical = 0, Logical = 1 };
-enum class PinPolarity : std::uint8_t { High = 0, Low = 1 };
-enum class TriggerMode : std::uint8_t { Edge = 0, Level = 1 };
-
 struct RedirectionEntryLow {
 private:
   std::uint32_t m_data{0};
@@ -113,7 +101,7 @@ public:
 
   BF_BIT_RO(delivery_status, 12)
   BF_RW(PinPolarity, pin_polarity, 13, 1)
-  BF_BIT_RW(remote_irr, 14)
+  BF_BIT_RO(remote_irr, 14)
   BF_RW(TriggerMode, trigger_mode, 15, 1)
   BF_BIT_RW(mask, 16)
 };
@@ -213,13 +201,15 @@ public:
     return gsi >= m_gsi_base && gsi < (m_gsi_base + m_max_entries);
   }
 
+  constexpr std::uint8_t version() const noexcept { return m_version; }
+
   [[nodiscard]] std::uint64_t get_cached_state(const std::uint32_t gsi) const noexcept {
     const std::uint32_t pin = gsi - m_gsi_base;
     return m_shadow_table[pin].load(std::memory_order_acquire);
   }
 
-  void configure_gsi(std::uint32_t gsi, RedirectionEntryLow low, RedirectionEntryHigh high) noexcept;
-  void set_mask(std::uint32_t gsi, bool mask) noexcept;
+  void configure_gsi(std::uint32_t gsi, RedirectionEntryLow low, RedirectionEntryHigh high) const noexcept;
+  void set_mask(std::uint32_t gsi, bool mask) const noexcept;
 
   void send_eoi(const std::uint8_t vector) const noexcept {
     if (m_version >= 0x20) {
@@ -259,7 +249,9 @@ public:
                                                 bool masked = true) noexcept;
   std::expected<void, Error> mask_gsi(std::uint32_t gsi) noexcept;
   std::expected<void, Error> unmask_gsi(std::uint32_t gsi) noexcept;
+
+  bool supports_directed_eoi() const noexcept { return m_controllers[0].version() >= 0x20; }
 };
 
 extern IoApicManager io_apic_manager;
-} // namespace kernel::hw::interrupts
+} // namespace kernel::hw::apic

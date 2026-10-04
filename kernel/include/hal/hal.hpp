@@ -436,8 +436,8 @@ public:
   asm volatile("tlbsync" : /* No Output */ : /* No Input */ : "memory");
 }
 
-[[noreturn, gnu::naked]] inline void execute_on_new_stack(std::uint64_t new_stack_top, void *payload,
-                                                          void (*target_function)(void *)) noexcept {
+[[noreturn, gnu::naked, gnu::noinline]] constexpr void execute_on_new_stack(std::uint64_t new_stack_top, void *payload,
+                                                                            void (*target_function)(void *)) noexcept {
   asm volatile("movq %%rdi, %%rsp\n\t"
                "movq %%rsi, %%rdi\n\t"
                "xorq %%rbp, %%rbp\n\t"

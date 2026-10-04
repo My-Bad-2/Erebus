@@ -6,6 +6,9 @@
 #include <array>
 #include <cstdint>
 
+namespace kernel::hw::apic {
+class IoApicController;
+}
 namespace kernel::hw::interrupts {
 enum class InterruptStatus : std::uint8_t {
   Handled,
@@ -40,10 +43,14 @@ class InterruptManager {
     Callback direct_callback;
     DpcCallback direct_dpc;
     void *direct_ctx;
-
-    constexpr VectorSlot() noexcept : direct_callback(nullptr), direct_dpc(nullptr), direct_ctx(nullptr) {}
-
     utils::SList<InterruptRegistration> list;
+
+    bool is_level_triggered;
+    apic::IoApicController *ioapic_controller;
+
+    constexpr VectorSlot() noexcept
+        : direct_callback(nullptr), direct_dpc(nullptr), direct_ctx(nullptr), is_level_triggered(false),
+          ioapic_controller(nullptr) {}
   };
 
   static inline std::array<VectorSlot, IDT_SIZE> s_slots{};
@@ -58,6 +65,7 @@ public:
     }
   }
 
+  static void set_eoi_strategy(std::uint8_t vector, bool is_lvl, apic::IoApicController *controller = nullptr) noexcept;
   static void register_handler(std::uint8_t vector, InterruptRegistration *reg) noexcept;
   static void unregister_handler(std::uint8_t vector, InterruptRegistration *reg) noexcept;
   static void route_event(const Event &event) noexcept;

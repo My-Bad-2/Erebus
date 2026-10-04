@@ -81,6 +81,7 @@ enum class Feature : std::uint32_t {
   SSE4_2 = make_feat(1, 0, Reg::ECX, 20),
   X2APIC = make_feat(1, 0, Reg::ECX, 21),
   POPCNT = make_feat(1, 0, Reg::ECX, 23),
+  TSC_DEADLINE = make_feat(1, 0, Reg::ECX, 24),
   AES = make_feat(1, 0, Reg::ECX, 25),
   XSAVE = make_feat(1, 0, Reg::ECX, 26),
   OSXSAVE = make_feat(1, 0, Reg::ECX, 27),
@@ -93,6 +94,7 @@ enum class Feature : std::uint32_t {
   PSE = make_feat(1, 0, Reg::EDX, 3),
   TSC = make_feat(1, 0, Reg::EDX, 4),
   MSR = make_feat(1, 0, Reg::EDX, 5),
+  MCE = make_feat(1, 0, Reg::EDX, 7),
   APIC = make_feat(1, 0, Reg::EDX, 9),
   SEP = make_feat(1, 0, Reg::EDX, 11),
   PGE = make_feat(1, 0, Reg::EDX, 13),
@@ -145,6 +147,7 @@ enum class Feature : std::uint32_t {
 
   // AMD/Intel Extended Features: Leaf 0x80000001
   SVM = make_feat(0x80000001, 0, Reg::ECX, 2),
+  EXT_APIC = make_feat(0x80000001, 0, Reg::ECX, 3),
   LZCNT = make_feat(0x80000001, 0, Reg::ECX, 5),
   MONITORX = make_feat(0x80000001, 0, Reg::ECX, 29),
   TCE = make_feat(0x80000001, 0, Reg::ECX, 17),

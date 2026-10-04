@@ -1,12 +1,13 @@
-#include "hal/ioapic.hpp"
+#include "hal/apic/ioapic.hpp"
 
+#include "hal/interrupt_manager.hpp"
 #include "utils/logger.hpp"
 
-namespace kernel::hw::interrupts {
+namespace kernel::hw::apic {
 IoApicManager io_apic_manager;
 
 void IoApicController::configure_gsi(const std::uint32_t gsi, const RedirectionEntryLow low,
-                                     const RedirectionEntryHigh high) noexcept {
+                                     const RedirectionEntryHigh high) const noexcept {
   const std::uint32_t pin = gsi - m_gsi_base;
   const ShadowEntry entry{low.raw(), high.raw()};
 
@@ -18,7 +19,7 @@ void IoApicController::configure_gsi(const std::uint32_t gsi, const RedirectionE
   write_indirect_unsafe(offset, entry.low().raw());
 }
 
-void IoApicController::set_mask(const std::uint32_t gsi, const bool mask) noexcept {
+void IoApicController::set_mask(const std::uint32_t gsi, const bool mask) const noexcept {
   const std::uint32_t pin = gsi - m_gsi_base;
   utils::IrqSaveGuard guard(m_lock);
 
@@ -159,6 +160,7 @@ std::expected<void, Error> IoApicManager::route_direct_gsi(const std::uint32_t g
   const auto high = RedirectionEntryHigh{}.with_destination(apic_id);
 
   controller->configure_gsi(gsi, low, high);
+  interrupts::InterruptManager::set_eoi_strategy(vector, (trigger == TriggerMode::Level), controller);
   return {};
 }
 
@@ -193,4 +195,4 @@ std::expected<void, Error> IoApicManager::unmask_gsi(std::uint32_t gsi) noexcept
   controller->set_mask(gsi, false);
   return {};
 }
-} // namespace kernel::hw::interrupts
+} // namespace kernel::hw::apic

@@ -17,7 +17,7 @@ std::uint32_t runqueue_count = 0;
 
 [[noreturn]] void kmain(void *stack) {
   const memory::VirtualAddress bsp_stack{stack};
-  hw::percpu::initialize_interrupts(bsp_stack);
+  hw::percpu::initialize(bsp_stack);
 
   utils::logger::info("Hello, World!\n");
   hw::cpu_idle_loop(&runqueue_count);
