@@ -6,21 +6,21 @@
 
 namespace kernel::memory::pmm {
 class alignas(32) FreeArea {
-  Page *m_hot_head{nullptr};  // recently freed
-  Page *m_cold_tail{nullptr}; // reclaimed / un-cached
+  Page* m_hot_head{nullptr};   // recently freed
+  Page* m_cold_tail{nullptr};  // reclaimed / un-cached
   std::uint32_t m_nr_free{0};
 
-public:
+ public:
   constexpr FreeArea() noexcept = default;
   ~FreeArea() noexcept = default;
 
-  FreeArea(FreeArea const &) noexcept = delete;
-  FreeArea &operator=(const FreeArea &) = delete;
+  FreeArea(FreeArea const&) noexcept = delete;
+  FreeArea& operator=(const FreeArea&) = delete;
 
   [[nodiscard]] bool is_empty() const noexcept { return m_nr_free == 0; }
   [[nodiscard]] std::uint32_t count() const noexcept { return m_nr_free; }
 
-  void push_hot(Page *page) noexcept {
+  void push_hot(Page* page) noexcept {
     page->buddy.next = m_hot_head;
     page->buddy.prev = nullptr;
 
@@ -34,7 +34,7 @@ public:
     m_nr_free++;
   }
 
-  void push_cold(Page *page) noexcept {
+  void push_cold(Page* page) noexcept {
     page->buddy.next = nullptr;
     page->buddy.prev = m_cold_tail;
 
@@ -48,8 +48,8 @@ public:
     m_nr_free++;
   }
 
-  [[nodiscard]] Page *pop_hot() noexcept {
-    Page *page = m_hot_head;
+  [[nodiscard]] Page* pop_hot() noexcept {
+    Page* page = m_hot_head;
 
     if (page) [[likely]] {
       m_hot_head = page->buddy.next;
@@ -69,7 +69,7 @@ public:
     return page;
   }
 
-  void remove(Page *page) noexcept {
+  void remove(Page* page) noexcept {
     if (page->buddy.prev) [[likely]] {
       page->buddy.prev->buddy.next = page->buddy.next;
     } else {
@@ -87,18 +87,18 @@ public:
     m_nr_free--;
   }
 
-  std::uint32_t steal_half(FreeArea &dest_area) noexcept {
+  std::uint32_t steal_half(FreeArea& dest_area) noexcept {
     if (m_nr_free < 2) {
       return 0;
     }
 
     const std::uint32_t steal_count = m_nr_free / 2;
-    Page *curr = m_cold_tail;
+    Page* curr = m_cold_tail;
 
     // Find the breaking point
     for (std::uint32_t i = 0; i < steal_count; i++) {
       if (!curr) [[unlikely]] {
-        return 0; // The list is corrupted
+        return 0;  // The list is corrupted
       }
 
       curr = curr->buddy.prev;
@@ -109,12 +109,12 @@ public:
     }
 
     // `curr` is now the new tail of this list
-    Page *stolen_head = curr->buddy.next;
+    Page* stolen_head = curr->buddy.next;
 
     curr->buddy.next = nullptr;
     stolen_head->buddy.prev = nullptr;
 
-    Page *stolen_tail = m_cold_tail;
+    Page* stolen_tail = m_cold_tail;
     m_cold_tail = curr;
     m_nr_free -= steal_count;
 
@@ -131,4 +131,4 @@ public:
     return steal_count;
   }
 };
-} // namespace kernel::memory::pmm
+}  // namespace kernel::memory::pmm

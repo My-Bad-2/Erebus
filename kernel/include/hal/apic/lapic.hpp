@@ -1,12 +1,12 @@
 #pragma once
 
+#include <bitfield.hpp>
+
 #include "apic.hpp"
 #include "hal/hal.hpp"
 #include "hal/io.hpp"
 #include "memory/address.hpp"
 #include "utility"
-
-#include <bitfield.hpp>
 
 namespace kernel::hw::apic {
 constexpr std::uint32_t IA32_APIC_BASE = 0x1B;
@@ -21,7 +21,7 @@ enum class Reg : std::uint32_t {
   Dfr = 0x00E0,
   Svr = 0x00F0,
   Esr = 0x0280,
-  LvtCmci = 0x02F0, // CMCI: Corrected Machine Check Interrupt
+  LvtCmci = 0x02F0,  // CMCI: Corrected Machine Check Interrupt
   IcrLow = 0x0300,
   IcrHigh = 0x0310,
   LvtTimer = 0x0320,
@@ -35,14 +35,14 @@ enum class Reg : std::uint32_t {
   TimerDivide = 0x03E0,
   AmdExtFeature = 0x0400,
   AmdExtControl = 0x0410,
-  AmdExtLvtBase = 0x0500 // Base + (0x10 * index) up to 4
+  AmdExtLvtBase = 0x0500  // Base + (0x10 * index) up to 4
 };
 
 struct BaseMsrSchema {
-private:
+ private:
   std::uint64_t m_data{0};
 
-public:
+ public:
   BaseMsrSchema(const std::uint64_t data = 0) noexcept : m_data{data} {}
   std::uint64_t raw() const noexcept { return m_data; }
 
@@ -53,10 +53,10 @@ public:
 };
 
 struct IdSchema {
-private:
+ private:
   std::uint32_t m_data{0};
 
-public:
+ public:
   IdSchema(const std::uint32_t data = 0) noexcept : m_data{data} {}
   std::uint32_t raw() const noexcept { return m_data; }
 
@@ -65,10 +65,10 @@ public:
 };
 
 struct VersionSchema {
-private:
+ private:
   std::uint32_t m_data{0};
 
-public:
+ public:
   VersionSchema(const std::uint32_t data = 0) noexcept : m_data{data} {}
   std::uint32_t raw() const noexcept { return m_data; }
 
@@ -78,10 +78,10 @@ public:
 };
 
 struct LdrSchema {
-private:
+ private:
   std::uint32_t m_data{0};
 
-public:
+ public:
   LdrSchema(const std::uint32_t data = 0) noexcept : m_data{data} {}
   std::uint32_t raw() const noexcept { return m_data; }
 
@@ -89,21 +89,21 @@ public:
 };
 
 struct DfrSchema {
-private:
+ private:
   std::uint32_t m_data{0};
 
-public:
+ public:
   DfrSchema(const std::uint32_t data = 0) noexcept : m_data{data} {}
   std::uint32_t raw() const noexcept { return m_data; }
 
-  BF_RW(std::uint8_t, model, 28, 4) // 0xF = Flat, 0x0 = Cluster
+  BF_RW(std::uint8_t, model, 28, 4)  // 0xF = Flat, 0x0 = Cluster
 };
 
 struct SvrSchema {
-private:
+ private:
   std::uint32_t m_data{0};
 
-public:
+ public:
   SvrSchema(const std::uint32_t data = 0) noexcept : m_data{data} {}
   std::uint32_t raw() const noexcept { return m_data; }
 
@@ -113,10 +113,10 @@ public:
 };
 
 struct LvtSchema {
-private:
+ private:
   std::uint32_t m_data{0};
 
-public:
+ public:
   LvtSchema(const std::uint32_t data = 0) noexcept : m_data{data} {}
   std::uint32_t raw() const noexcept { return m_data; }
 
@@ -131,10 +131,10 @@ public:
 };
 
 struct IcrSchema {
-private:
+ private:
   std::uint64_t m_data{0};
 
-public:
+ public:
   IcrSchema(const std::uint64_t data = 0) noexcept : m_data{data} {}
   std::uint64_t raw() const noexcept { return m_data; }
 
@@ -149,10 +149,10 @@ public:
 };
 
 struct PrioritySchema {
-private:
+ private:
   std::uint32_t m_data{0};
 
-public:
+ public:
   PrioritySchema(const std::uint32_t data = 0) noexcept : m_data{data} {}
   std::uint32_t raw() const noexcept { return m_data; }
 
@@ -160,10 +160,10 @@ public:
 };
 
 struct AmdExtFeatureSchema {
-private:
+ private:
   std::uint32_t m_data{0};
 
-public:
+ public:
   AmdExtFeatureSchema(const std::uint32_t data = 0) noexcept : m_data{data} {}
   std::uint32_t raw() const noexcept { return m_data; }
 
@@ -174,10 +174,10 @@ public:
 };
 
 struct Raw32Schema {
-private:
+ private:
   std::uint32_t m_data{0};
 
-public:
+ public:
   Raw32Schema(const std::uint32_t data = 0) noexcept : m_data{data} {}
   std::uint32_t raw() const noexcept { return m_data; }
 
@@ -185,7 +185,7 @@ public:
 };
 
 class Lapic {
-public:
+ public:
   struct Capabilities {
     bool has_x2apic = false;
     bool has_tsc_deadline = false;
@@ -196,7 +196,7 @@ public:
     std::uint8_t amd_ext_lvt_count = 0;
   };
 
-private:
+ private:
   MmioResource m_mmio{};
   std::uint32_t m_cached_id{0};
   ApicMode m_mode{ApicMode::Disabled};
@@ -218,8 +218,10 @@ private:
         icr_lo = m_mmio.read<std::uint32_t>(icr_low);
       }
 
-      m_mmio.write<std::uint32_t>(icr_high, static_cast<std::uint32_t>(icr.raw() >> 32));
-      m_mmio.write<std::uint32_t>(icr_low, static_cast<std::uint32_t>(icr.raw()));
+      m_mmio.write<std::uint32_t>(icr_high,
+                                  static_cast<std::uint32_t>(icr.raw() >> 32));
+      m_mmio.write<std::uint32_t>(icr_low,
+                                  static_cast<std::uint32_t>(icr.raw()));
 
       icr_lo = m_mmio.read<std::uint32_t>(icr_low);
       while (icr_lo.get_delivery_status()) {
@@ -229,27 +231,35 @@ private:
     }
   }
 
-public:
+ public:
   Lapic() = default;
-  Lapic(const Lapic &) = delete;
+  Lapic(const Lapic&) = delete;
 
-  void initialize(memory::VirtualAddress mmio_base, bool prefer_x2apic = true) noexcept;
+  void initialize(memory::VirtualAddress mmio_base,
+                  bool prefer_x2apic = true) noexcept;
 
   [[nodiscard]] ApicMode mode() const noexcept { return m_mode; }
   [[nodiscard]] uint32_t id() const noexcept { return m_cached_id; }
-  [[nodiscard]] const Capabilities &capabilities() const noexcept { return m_caps; }
-  [[nodiscard]] static bool is_bsp() noexcept { return BaseMsrSchema{read::msr(IA32_APIC_BASE)}.get_bsp(); }
+  [[nodiscard]] const Capabilities& capabilities() const noexcept {
+    return m_caps;
+  }
+  [[nodiscard]] static bool is_bsp() noexcept {
+    return BaseMsrSchema{read::msr(IA32_APIC_BASE)}.get_bsp();
+  }
 
-  template <typename Schema> [[nodiscard]] Schema read(const Reg reg) const noexcept {
+  template <typename Schema>
+  [[nodiscard]] Schema read(const Reg reg) const noexcept {
     const std::uint32_t offset = std::to_underlying(reg);
     if (m_mode == ApicMode::x2APIC) [[likely]] {
-      return Schema(static_cast<std::uint32_t>(read::msr(LAPIC_BASE_MSR + (offset >> 4))));
+      return Schema(static_cast<std::uint32_t>(
+          read::msr(LAPIC_BASE_MSR + (offset >> 4))));
     }
 
     return Schema(m_mmio.read<std::uint32_t>(offset));
   }
 
-  template <typename Schema> void write(const Reg reg, const Schema val) const noexcept {
+  template <typename Schema>
+  void write(const Reg reg, const Schema val) const noexcept {
     const std::uint32_t offset = std::to_underlying(reg);
     if (m_mode == ApicMode::x2APIC) [[likely]] {
       write::msr(LAPIC_BASE_MSR + (offset >> 4), val.raw());
@@ -258,7 +268,9 @@ public:
     }
   }
 
-  [[gnu::always_inline]] void eoi() const noexcept { write(Reg::Eoi, Raw32Schema{0}); }
+  [[gnu::always_inline]] void eoi() const noexcept {
+    write(Reg::Eoi, Raw32Schema{0});
+  }
 
   void enable_directed_eoi(const bool enable) const noexcept {
     if (m_caps.has_directed_eoi) {
@@ -270,11 +282,16 @@ public:
     write(Reg::Tpr, PrioritySchema{}.with_priority(priority));
   }
 
-  [[nodiscard]] std::uint8_t get_tpr() const noexcept { return read<PrioritySchema>(Reg::Tpr).get_priority(); }
-  [[nodiscard]] std::uint8_t get_ppr() const noexcept { return read<PrioritySchema>(Reg::Ppr).get_priority(); }
+  [[nodiscard]] std::uint8_t get_tpr() const noexcept {
+    return read<PrioritySchema>(Reg::Tpr).get_priority();
+  }
+  [[nodiscard]] std::uint8_t get_ppr() const noexcept {
+    return read<PrioritySchema>(Reg::Ppr).get_priority();
+  }
 
-  void configure_logical_destination(const std::uint32_t logical_id,
-                                     const std::uint8_t flat_model = 0xF) const noexcept {
+  void configure_logical_destination(
+      const std::uint32_t logical_id,
+      const std::uint8_t flat_model = 0xF) const noexcept {
     if (m_mode == ApicMode::xAPIC) {
       write(Reg::Dfr, DfrSchema{}.with_model(flat_model));
       write(Reg::Ldr, LdrSchema{}.with_id(logical_id << 24));
@@ -288,24 +305,30 @@ public:
     write(Reg::TimerInitCnt, Raw32Schema{0});
   }
 
-  void arm_periodic(const std::uint8_t vector, const std::uint32_t count, const TimerDivide div) const noexcept {
-    const auto lvt = LvtSchema{}.with_vector(vector).with_timer_mode(TimerMode::Periodic);
+  void arm_periodic(const std::uint8_t vector, const std::uint32_t count,
+                    const TimerDivide div) const noexcept {
+    const auto lvt =
+        LvtSchema{}.with_vector(vector).with_timer_mode(TimerMode::Periodic);
 
     write(Reg::TimerDivide, Raw32Schema{std::to_underlying(div)});
     write(Reg::LvtTimer, lvt);
     write(Reg::TimerInitCnt, Raw32Schema{count});
   }
 
-  void arm_oneshot(const std::uint8_t vector, const std::uint32_t count, const TimerDivide div) const noexcept {
-    const auto lvt = LvtSchema{}.with_vector(vector).with_timer_mode(TimerMode::OneShot);
+  void arm_oneshot(const std::uint8_t vector, const std::uint32_t count,
+                   const TimerDivide div) const noexcept {
+    const auto lvt =
+        LvtSchema{}.with_vector(vector).with_timer_mode(TimerMode::OneShot);
 
     write(Reg::TimerDivide, Raw32Schema{std::to_underlying(div)});
     write(Reg::LvtTimer, lvt);
     write(Reg::TimerInitCnt, Raw32Schema{count});
   }
 
-  [[gnu::always_inline]] void arm_tsc_deadline(std::uint8_t vector, std::uint64_t target_tsc) const noexcept {
-    const auto lvt = LvtSchema{}.with_vector(vector).with_timer_mode(TimerMode::TscDeadline);
+  [[gnu::always_inline]] void arm_tsc_deadline(
+      std::uint8_t vector, std::uint64_t target_tsc) const noexcept {
+    const auto lvt =
+        LvtSchema{}.with_vector(vector).with_timer_mode(TimerMode::TscDeadline);
     write(Reg::LvtTimer, lvt);
     asm volatile("mfence" : /* No Output */ : /* No Input */ : "memory");
     constexpr std::uint32_t TSC_DEADLINE_MSR = 0x6E0;
@@ -316,37 +339,54 @@ public:
     return read<Raw32Schema>(Reg::TimerCurrCnt).get_value();
   }
 
-  void configure_nmi(const Reg lint_reg = Reg::LvtLint1, const bool masked = false) const noexcept {
-    write(lint_reg, LvtSchema{}.with_delivery_mode(DeliveryMode::NMI).with_masked(masked));
-  }
-
-  void configure_pmu(const std::uint8_t vector, const DeliveryMode delivery = DeliveryMode::Fixed,
+  void configure_nmi(const Reg lint_reg = Reg::LvtLint1,
                      const bool masked = false) const noexcept {
-    write(Reg::LvtPerf, LvtSchema{}.with_vector(vector).with_delivery_mode(delivery).with_masked(masked));
+    write(
+        lint_reg,
+        LvtSchema{}.with_delivery_mode(DeliveryMode::NMI).with_masked(masked));
   }
 
-  void configure_cmci(const std::uint8_t vector, const DeliveryMode delivery = DeliveryMode::Fixed,
+  void configure_pmu(const std::uint8_t vector,
+                     const DeliveryMode delivery = DeliveryMode::Fixed,
+                     const bool masked = false) const noexcept {
+    write(Reg::LvtPerf, LvtSchema{}
+                            .with_vector(vector)
+                            .with_delivery_mode(delivery)
+                            .with_masked(masked));
+  }
+
+  void configure_cmci(const std::uint8_t vector,
+                      const DeliveryMode delivery = DeliveryMode::Fixed,
                       const bool masked = false) const noexcept {
     if (m_caps.has_cmci) {
-      write(Reg::LvtCmci, LvtSchema{}.with_vector(vector).with_delivery_mode(delivery).with_masked(masked));
+      write(Reg::LvtCmci, LvtSchema{}
+                              .with_vector(vector)
+                              .with_delivery_mode(delivery)
+                              .with_masked(masked));
     }
   }
 
-  void configure_amd_ext_lvt(const std::uint8_t index, const std::uint8_t vector,
+  void configure_amd_ext_lvt(const std::uint8_t index,
+                             const std::uint8_t vector,
                              const DeliveryMode delivery = DeliveryMode::Fixed,
                              const bool masked = false) const noexcept {
     if (!m_caps.has_amd_ext_apic || index >= m_caps.amd_ext_lvt_count) {
       return;
     }
 
-    const auto target_reg = static_cast<Reg>(std::to_underlying(Reg::AmdExtLvtBase) + (index * 0x10));
-    const auto lvt = LvtSchema{}.with_vector(vector).with_delivery_mode(delivery).with_masked(masked);
+    const auto target_reg = static_cast<Reg>(
+        std::to_underlying(Reg::AmdExtLvtBase) + (index * 0x10));
+    const auto lvt = LvtSchema{}
+                         .with_vector(vector)
+                         .with_delivery_mode(delivery)
+                         .with_masked(masked);
     write(target_reg, lvt);
   }
 
   void send_ipi(const std::uint32_t dest_id, const std::uint8_t vector,
                 const DeliveryMode delivery = DeliveryMode::Fixed,
-                const DestinationMode dest_mode = DestinationMode::Physical) const noexcept {
+                const DestinationMode dest_mode =
+                    DestinationMode::Physical) const noexcept {
     const auto icr = IcrSchema{}
                          .with_vector(vector)
                          .with_delivery_mode(delivery)
@@ -356,12 +396,16 @@ public:
     dispatch_icr(icr);
   }
 
-  [[gnu::always_inline]] void send_self_ipi(const std::uint8_t vector) const noexcept {
+  [[gnu::always_inline]] void send_self_ipi(
+      const std::uint8_t vector) const noexcept {
     if (m_mode == ApicMode::x2APIC) {
       constexpr std::uint32_t IA32_X2APIC_SELF_IPI = 0x83F;
       write::msr(IA32_X2APIC_SELF_IPI, vector);
     } else {
-      const auto icr = IcrSchema{}.with_vector(vector).with_shorthand(DestinationShorthand::Self).with_level_assert();
+      const auto icr = IcrSchema{}
+                           .with_vector(vector)
+                           .with_shorthand(DestinationShorthand::Self)
+                           .with_level_assert();
       dispatch_icr(icr);
     }
   }
@@ -375,7 +419,8 @@ public:
     dispatch_icr(icr);
   }
 
-  void send_sipi(const std::uint32_t dest_id, const std::uint8_t page_frame) const noexcept {
+  void send_sipi(const std::uint32_t dest_id,
+                 const std::uint8_t page_frame) const noexcept {
     const auto icr = IcrSchema{}
                          .with_vector(page_frame)
                          .with_delivery_mode(DeliveryMode::StartUp)
@@ -384,4 +429,4 @@ public:
     dispatch_icr(icr);
   }
 };
-} // namespace kernel::hw::apic
+}  // namespace kernel::hw::apic

@@ -1,21 +1,22 @@
 #pragma once
 
-#include "hal/io.hpp"
 #include <bitfield.hpp>
 #include <expected>
 
+#include "hal/io.hpp"
+
 namespace kernel::drivers::uart {
 enum class ReceiveError : std::uint8_t {
-  Overrun,        // Data lost because the driver didn't read it fast enough
-  Parity,         // Hardware detected electrical noise/corruption
-  Framing,        // Start/Stop bits misaligned (baud rate mismatch)
-  BreakInterrupt, // Remote device intentionally held the line low
+  Overrun,         // Data lost because the driver didn't read it fast enough
+  Parity,          // Hardware detected electrical noise/corruption
+  Framing,         // Start/Stop bits misaligned (baud rate mismatch)
+  BreakInterrupt,  // Remote device intentionally held the line low
 };
 
 class LCR {
   std::uint8_t m_data;
 
-public:
+ public:
   constexpr explicit LCR(std::uint8_t val = 0) : m_data(val) {}
   [[nodiscard]] std::uint8_t raw() const noexcept { return m_data; }
 
@@ -23,13 +24,13 @@ public:
   BF_BIT_RW(stop_bits, 2)
   BF_RW(std::uint8_t, parity, 3, 3)
   BF_BIT_RW(break_enable, 6)
-  BF_BIT_RW(dlab, 7) // Divisor Latch Access Bit
+  BF_BIT_RW(dlab, 7)  // Divisor Latch Access Bit
 };
 
 class FCR {
   std::uint8_t m_data;
 
-public:
+ public:
   constexpr explicit FCR(std::uint8_t val = 0) : m_data(val) {}
   [[nodiscard]] std::uint8_t raw() const noexcept { return m_data; }
 
@@ -44,7 +45,7 @@ public:
 class IIR {
   std::uint8_t m_data;
 
-public:
+ public:
   constexpr explicit IIR(std::uint8_t val = 0) : m_data(val) {}
   [[nodiscard]] std::uint8_t raw() const noexcept { return m_data; }
 
@@ -57,7 +58,7 @@ public:
 class LSR {
   std::uint8_t m_data;
 
-public:
+ public:
   constexpr explicit LSR(std::uint8_t val = 0) : m_data(val) {}
   [[nodiscard]] std::uint8_t raw() const noexcept { return m_data; }
 
@@ -74,7 +75,7 @@ public:
 class IER {
   std::uint8_t m_data;
 
-public:
+ public:
   constexpr explicit IER(std::uint8_t val = 0) : m_data(val) {}
   [[nodiscard]] std::uint8_t raw() const noexcept { return m_data; }
 
@@ -87,7 +88,7 @@ public:
 class MCR {
   std::uint8_t m_data;
 
-public:
+ public:
   constexpr explicit MCR(std::uint8_t val = 0) : m_data(val) {}
   [[nodiscard]] std::uint8_t raw() const noexcept { return m_data; }
 
@@ -102,12 +103,12 @@ class SerialPort {
   hw::IoResource m_io;
   std::uint8_t m_fifo_depth{1};
 
-  REG_WO(THR, 0, std::uint8_t) // Transmit Holding
-  REG_RO(RBR, 0, std::uint8_t) // Receive Buffer
+  REG_WO(THR, 0, std::uint8_t)  // Transmit Holding
+  REG_RO(RBR, 0, std::uint8_t)  // Receive Buffer
 
   // DLAB = 1
-  REG_RW(Dll, 0, std::uint8_t) // Divisor Latch Low
-  REG_RW(Dlm, 1, std::uint8_t) // Divisor Latch High
+  REG_RW(Dll, 0, std::uint8_t)  // Divisor Latch Low
+  REG_RW(Dlm, 1, std::uint8_t)  // Divisor Latch High
 
   REG_RW(Ier, 1, IER)
   REG_RO(Iir, 2, IIR)
@@ -119,7 +120,8 @@ class SerialPort {
   template <typename Reg>
     requires klib::bitfield::WritableReg<Reg>
   void write(Reg::Type val) const noexcept {
-    static_assert(Reg::access != klib::bitfield::Access::RO, "Attempting to write a Read-Only register!");
+    static_assert(Reg::access != klib::bitfield::Access::RO,
+                  "Attempting to write a Read-Only register!");
 
     if constexpr (std::is_integral_v<typename Reg::Type>) {
       m_io.write<typename Reg::Type>(Reg::offset, val);
@@ -132,7 +134,8 @@ class SerialPort {
   template <typename Reg>
     requires klib::bitfield::ReadableReg<Reg>
   [[nodiscard, gnu::always_inline]] Reg::Type read() const noexcept {
-    static_assert(Reg::access != klib::bitfield::Access::WO, "Attempting to read a Write-Only register!");
+    static_assert(Reg::access != klib::bitfield::Access::WO,
+                  "Attempting to read a Write-Only register!");
 
     if constexpr (std::is_integral_v<typename Reg::Type>) {
       return m_io.read<typename Reg::Type>(Reg::offset);
@@ -143,26 +146,34 @@ class SerialPort {
     }
   }
 
-public:
+ public:
   constexpr explicit SerialPort(const hw::IoResource io) noexcept : m_io(io) {}
 
-  [[nodiscard]] std::expected<void, std::string_view> initialize(std::uint32_t baud_rate = 115200,
-                                                                 std::uint32_t base_clock_hz = 1843200) noexcept;
+  [[nodiscard]] std::expected<void, std::string_view> initialize(
+      std::uint32_t baud_rate = 115200,
+      std::uint32_t base_clock_hz = 1843200) noexcept;
 
-  [[nodiscard]] bool is_transmit_fifo_empty() const noexcept { return read<Lsr>().get_thr_empty() != 0; }
-  [[nodiscard]] bool has_data() const noexcept { return read<Lsr>().get_data_ready() != 0; }
+  [[nodiscard]] bool is_transmit_fifo_empty() const noexcept {
+    return read<Lsr>().get_thr_empty() != 0;
+  }
+  [[nodiscard]] bool has_data() const noexcept {
+    return read<Lsr>().get_data_ready() != 0;
+  }
 
   void append(std::string_view str) const noexcept;
   void push(char c) const noexcept;
 
-  [[nodiscard]] static constexpr char *advance(std::size_t /* n */) noexcept {
+  void append_fill(const std::size_t count, const char c) const noexcept;
+
+  [[nodiscard]] static constexpr char* advance(std::size_t /* n */) noexcept {
     // UARTs are stream devices, not memory buffers. Formatter must fall back
     // to `push()` and `append()`.
     return nullptr;
   }
 
   [[nodiscard]] std::expected<char, ReceiveError> read_char() const noexcept;
-  [[nodiscard]] std::expected<char, ReceiveError> try_read_char() const noexcept {
+  [[nodiscard]] std::expected<char, ReceiveError> try_read_char()
+      const noexcept {
     if (!has_data()) {
       return '\0';
     }
@@ -170,4 +181,4 @@ public:
     return read_char();
   }
 };
-} // namespace kernel::drivers::uart
+}  // namespace kernel::drivers::uart

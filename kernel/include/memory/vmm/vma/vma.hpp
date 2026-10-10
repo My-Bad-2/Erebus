@@ -1,9 +1,10 @@
 #pragma once
 
+#include <cstdint>
+
 #include "memory/vmm/pagemap/flags.hpp"
 #include "utils/bplus_tree.hpp"
 #include "vm_object.hpp"
-#include <cstdint>
 
 namespace kernel::memory::vmm {
 enum class VMAType : std::uint8_t {
@@ -22,34 +23,34 @@ enum class NUMAPolicy : std::uint8_t {
 class VMAFlags {
   std::uint64_t m_data;
 
-public:
+ public:
   constexpr explicit VMAFlags(const std::uint64_t val = 0) : m_data(val) {}
   [[nodiscard]] std::uint64_t raw() const noexcept { return m_data; }
 
   void clear() noexcept { m_data = 0; }
 
-  BF_RW(AccessFlags, access, 0, 16) // AccessFlags
-  BF_RW(CacheMode, cache, 16, 3)    // CacheMode
-  BF_RW(PageSize, page_size, 19, 2) // PageSize
-  BF_RW(VMAType, type, 21, 4)       // VMAType
-  BF_RW(NUMAPolicy, numa, 25, 3)    // NUMAPolicy
+  BF_RW(AccessFlags, access, 0, 16)  // AccessFlags
+  BF_RW(CacheMode, cache, 16, 3)     // CacheMode
+  BF_RW(PageSize, page_size, 19, 2)  // PageSize
+  BF_RW(VMAType, type, 21, 4)        // VMAType
+  BF_RW(NUMAPolicy, numa, 25, 3)     // NUMAPolicy
 
-  BF_BIT_RW(is_locked, 28) // Excluded from swap
-  BF_BIT_RW(is_wired, 29)  // Pinned in memory
+  BF_BIT_RW(is_locked, 28)  // Excluded from swap
+  BF_BIT_RW(is_wired, 29)   // Pinned in memory
 
-  BF_RW(std::uint8_t, pkey, 30, 4) // Protection key
+  BF_RW(std::uint8_t, pkey, 30, 4)  // Protection key
 };
 
 struct alignas(std::hardware_destructive_interference_size) VMArea {
   VirtualAddress start;
   VirtualAddress end;
 
-  VMObject *vm_object;
+  VMObject* vm_object;
   std::size_t object_offset;
   VMAFlags flags;
 
-  VMArea *next_vma;
-  VMArea *prev_vma;
+  VMArea* next_vma;
+  VMArea* prev_vma;
 
   std::uint32_t preferred_numa_node;
   std::uint32_t fault_count;
@@ -58,17 +59,19 @@ struct alignas(std::hardware_destructive_interference_size) VMArea {
     return addr.value() >= start.value() && addr.value() < end.value();
   }
 
-  [[nodiscard]] std::size_t size_bytes() const noexcept { return end.value() - start.value(); }
+  [[nodiscard]] std::size_t size_bytes() const noexcept {
+    return end.value() - start.value();
+  }
 };
 
 class AddressSpace {
-  static inline heap::KmemCache *s_vmo_cache = nullptr;
-  static inline heap::KmemCache *s_vma_cache = nullptr;
+  static inline heap::KmemCache* s_vmo_cache = nullptr;
+  static inline heap::KmemCache* s_vma_cache = nullptr;
 
-  utils::BPlusTree<std::uint64_t, VMArea *, 256> m_vma_tree;
+  utils::BPlusTree<std::uint64_t, VMArea*, 256> m_vma_tree;
 
-  VMArea *m_vma_list_head{nullptr};
-  VMArea *m_vma_list_tail{nullptr};
+  VMArea* m_vma_list_head{nullptr};
+  VMArea* m_vma_list_tail{nullptr};
 
   PageMap m_pagemap;
   mutable utils::RWLock m_as_lock;
@@ -76,66 +79,93 @@ class AddressSpace {
   VirtualAddress m_heap_bump;
   VirtualAddress m_mmap_bump;
 
-  [[nodiscard]] VirtualAddress find_free_gap(std::size_t size_bytes, std::size_t alignment,
+  [[nodiscard]] VirtualAddress find_free_gap(std::size_t size_bytes,
+                                             std::size_t alignment,
                                              bool is_heap = false) noexcept;
-  void link_vma(VMArea *new_vma) noexcept;
-  void unlink_vma(VMArea *vma) noexcept;
-  auto split_vma(VMArea *vma, VirtualAddress split_point) noexcept -> std::expected<VMArea *, Error>;
+  void link_vma(VMArea* new_vma) noexcept;
+  void unlink_vma(VMArea* vma) noexcept;
+  auto split_vma(VMArea* vma, VirtualAddress split_point) noexcept
+      -> std::expected<VMArea*, Error>;
 
-  void merge_vma(VMArea *vma) noexcept;
+  void merge_vma(VMArea* vma) noexcept;
 
-  [[nodiscard]] auto expand_stack_locked(VirtualAddress fault_addr) noexcept -> std::expected<VMArea *, Error>;
-  [[nodiscard]] auto resolve_vma_fault_locked(VMArea *vma, VirtualAddress fault_addr, AccessFlags fault_type) noexcept
+  [[nodiscard]] auto expand_stack_locked(VirtualAddress fault_addr) noexcept
+      -> std::expected<VMArea*, Error>;
+  [[nodiscard]] auto resolve_vma_fault_locked(VMArea* vma,
+                                              VirtualAddress fault_addr,
+                                              AccessFlags fault_type) noexcept
       -> std::expected<void, Error>;
 
-public:
+ public:
   explicit AddressSpace(VirtualAddress base_addr) noexcept;
   ~AddressSpace() noexcept;
 
   static void initialize() noexcept;
 
-  [[nodiscard]] PageMap &pagemap() noexcept { return m_pagemap; }
+  [[nodiscard]] PageMap& pagemap() noexcept { return m_pagemap; }
 
-  [[nodiscard]] auto alloc(std::size_t size_bytes, AccessFlags access, CacheMode cache = CacheMode::WriteBack,
-                           PageSize page_size = PageSize::Size4K, VMAType type = VMAType::Anonymous,
-                           std::uint8_t pkey = 0, VirtualAddress hint = VirtualAddress{}) noexcept
+  [[nodiscard]] auto alloc(std::size_t size_bytes, AccessFlags access,
+                           CacheMode cache = CacheMode::WriteBack,
+                           PageSize page_size = PageSize::Size4K,
+                           VMAType type = VMAType::Anonymous,
+                           std::uint8_t pkey = 0,
+                           VirtualAddress hint = VirtualAddress{}) noexcept
       -> std::expected<VirtualAddress, Error>;
-  [[nodiscard]] auto free(VirtualAddress addr) noexcept -> std::expected<void, Error>;
-  [[nodiscard]] auto realloc(VirtualAddress old_addr, std::size_t new_size) noexcept
+  [[nodiscard]] auto free(VirtualAddress addr) noexcept
+      -> std::expected<void, Error>;
+  [[nodiscard]] auto realloc(VirtualAddress old_addr,
+                             std::size_t new_size) noexcept
       -> std::expected<VirtualAddress, Error>;
-  [[nodiscard]] auto protect(VirtualAddress addr, std::size_t size_bytes, AccessFlags new_flags) noexcept
+  [[nodiscard]] auto protect(VirtualAddress addr, std::size_t size_bytes,
+                             AccessFlags new_flags) noexcept
       -> std::expected<void, Error>;
 
   auto map_mmio(PhysicalAddress phys_base, std::size_t size_bytes,
-                AccessFlags access = AccessFlags::Read | AccessFlags::Write | AccessFlags::Mmio,
-                CacheMode cache = CacheMode::Uncacheable, PageSize page_size = PageSize::Size4K, std::uint8_t pkey = 0,
-                VirtualAddress hint = VirtualAddress{}) noexcept -> std::expected<VirtualAddress, Error>;
-
-  [[nodiscard]] auto lock_memory(VirtualAddress addr, std::size_t size_bytes) noexcept -> std::expected<void, Error>;
-  [[nodiscard]] auto unlock_memory(VirtualAddress addr, std::size_t size_bytes) noexcept -> std::expected<void, Error>;
-  [[nodiscard]] auto clone_into(AddressSpace &child) noexcept -> std::expected<void, Error>;
-  [[nodiscard]] auto map_object(VMObject *existing_obj, std::size_t size_bytes, std::size_t obj_offset_pages,
-                                AccessFlags access, CacheMode cache = CacheMode::WriteBack,
-                                PageSize page_size = PageSize::Size4K, VMAType type = VMAType::SharedIPC,
-                                std::uint8_t pkey = 0, VirtualAddress hint = VirtualAddress{}) noexcept
+                AccessFlags access = AccessFlags::Read | AccessFlags::Write |
+                                     AccessFlags::Mmio,
+                CacheMode cache = CacheMode::Uncacheable,
+                PageSize page_size = PageSize::Size4K, std::uint8_t pkey = 0,
+                VirtualAddress hint = VirtualAddress{}) noexcept
       -> std::expected<VirtualAddress, Error>;
 
-  [[nodiscard]] auto create_alias(VirtualAddress addr, std::size_t size_bytes, AccessFlags alias_flags) noexcept
+  [[nodiscard]] auto lock_memory(VirtualAddress addr,
+                                 std::size_t size_bytes) noexcept
+      -> std::expected<void, Error>;
+  [[nodiscard]] auto unlock_memory(VirtualAddress addr,
+                                   std::size_t size_bytes) noexcept
+      -> std::expected<void, Error>;
+  [[nodiscard]] auto clone_into(AddressSpace& child) noexcept
+      -> std::expected<void, Error>;
+  [[nodiscard]] auto map_object(VMObject* existing_obj, std::size_t size_bytes,
+                                std::size_t obj_offset_pages,
+                                AccessFlags access,
+                                CacheMode cache = CacheMode::WriteBack,
+                                PageSize page_size = PageSize::Size4K,
+                                VMAType type = VMAType::SharedIPC,
+                                std::uint8_t pkey = 0,
+                                VirtualAddress hint = VirtualAddress{}) noexcept
       -> std::expected<VirtualAddress, Error>;
-  [[nodiscard]] auto destroy_alias(const VirtualAddress alias_addr) noexcept -> std::expected<void, Error> {
+
+  [[nodiscard]] auto create_alias(VirtualAddress addr, std::size_t size_bytes,
+                                  AccessFlags alias_flags) noexcept
+      -> std::expected<VirtualAddress, Error>;
+  [[nodiscard]] auto destroy_alias(const VirtualAddress alias_addr) noexcept
+      -> std::expected<void, Error> {
     return free(alias_addr);
   }
 
-  [[nodiscard]] auto evict_page(VirtualAddress addr) noexcept -> std::expected<void, Error>;
-  [[nodiscard]] auto handle_page_fault(VirtualAddress fault_addr, AccessFlags fault_type) noexcept
+  [[nodiscard]] auto evict_page(VirtualAddress addr) noexcept
+      -> std::expected<void, Error>;
+  [[nodiscard]] auto handle_page_fault(VirtualAddress fault_addr,
+                                       AccessFlags fault_type) noexcept
       -> std::expected<void, Error>;
 
   template <typename Func>
-    requires std::invocable<Func, const VMArea &>
-  void for_each_vma(Func &&callback) const noexcept {
+    requires std::invocable<Func, const VMArea&>
+  void for_each_vma(Func&& callback) const noexcept {
     utils::SharedPreemptGuard guard(m_as_lock);
 
-    const VMArea *curr = m_vma_list_head;
+    const VMArea* curr = m_vma_list_head;
     while (curr) {
       callback(*curr);
       curr = curr->next_vma;
@@ -143,5 +173,5 @@ public:
   }
 };
 
-AddressSpace *kernel_space() noexcept;
-} // namespace kernel::memory::vmm
+AddressSpace* kernel_space() noexcept;
+}  // namespace kernel::memory::vmm

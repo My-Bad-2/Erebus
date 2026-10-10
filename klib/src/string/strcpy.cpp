@@ -1,8 +1,10 @@
-#include "string.h"
 #include <cstddef>
 
+#include "string.h"
+
 namespace klib {
-char *strncpy(char *__restrict dest, const char *__restrict src, size_t count) noexcept {
+char* strncpy(char* __restrict dest, const char* __restrict src,
+              size_t count) noexcept {
   if (count == 0) [[unlikely]] {
     return dest;
   }
@@ -18,10 +20,10 @@ char *strncpy(char *__restrict dest, const char *__restrict src, size_t count) n
   return dest;
 }
 
-char *strcpy(char *__restrict dest, const char *__restrict src) noexcept {
+char* strcpy(char* __restrict dest, const char* __restrict src) noexcept {
   const std::size_t len = strlen(src);
 
   memcpy(dest, src, len + 1);
   return dest;
 }
-} // namespace klib
+}  // namespace klib

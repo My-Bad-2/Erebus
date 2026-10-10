@@ -50,7 +50,13 @@ enum class Error : std::uint32_t {
   OverrideLimitReached = 0x6003,
 };
 
-[[nodiscard]] constexpr bool IsSuccess(const Error e) noexcept { return e == Error::Success; }
-[[nodiscard]] constexpr bool IsError(const Error e) noexcept { return e != Error::Success; }
-[[nodiscard]] constexpr uint32_t GetErrorSubsystem(const Error e) noexcept { return static_cast<uint32_t>(e) & 0xF000; }
-} // namespace kernel
+[[nodiscard]] constexpr bool IsSuccess(const Error e) noexcept {
+  return e == Error::Success;
+}
+[[nodiscard]] constexpr bool IsError(const Error e) noexcept {
+  return e != Error::Success;
+}
+[[nodiscard]] constexpr uint32_t GetErrorSubsystem(const Error e) noexcept {
+  return static_cast<uint32_t>(e) & 0xF000;
+}
+}  // namespace kernel

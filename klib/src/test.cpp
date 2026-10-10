@@ -1,5 +1,6 @@
-#include "bmi_word.hpp"
 #include <cstdint>
+
+#include "bmi_word.hpp"
 
 int main() {
   int a = 0;

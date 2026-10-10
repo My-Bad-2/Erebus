@@ -1,9 +1,10 @@
 #pragma once
 
-#include "core/errors.hpp"
 #include <bitfield.hpp>
 #include <cstdint>
 #include <utility>
+
+#include "core/errors.hpp"
 
 namespace kernel::memory::vmm {
 enum class PageSize : std::uint8_t {
@@ -21,39 +22,52 @@ enum class AccessFlags : std::uint32_t {
   Global = 1 << 4,
   Shared = 1 << 5,
   CopyOnWrite = 1 << 6,
-  Swapped = 1 << 7, // Page is evicted
+  Swapped = 1 << 7,  // Page is evicted
   Accessed = 1 << 8,
   Dirty = 1 << 9,
-  Mmio = 1 << 10, // Memory Mapped IO (Forces Uncacheable)
+  Mmio = 1 << 10,  // Memory Mapped IO (Forces Uncacheable)
   Stack = 1 << 11,
-  Populate = 1 << 12, // Instantly allocates physical memory
+  Populate = 1 << 12,  // Instantly allocates physical memory
 };
 
-constexpr AccessFlags operator|(const AccessFlags a, const AccessFlags b) noexcept {
-  return static_cast<AccessFlags>(std::to_underlying(a) | std::to_underlying(b));
+constexpr AccessFlags operator|(const AccessFlags a,
+                                const AccessFlags b) noexcept {
+  return static_cast<AccessFlags>(std::to_underlying(a) |
+                                  std::to_underlying(b));
 }
 
-constexpr AccessFlags operator&(const AccessFlags a, const AccessFlags b) noexcept {
-  return static_cast<AccessFlags>(std::to_underlying(a) & std::to_underlying(b));
+constexpr AccessFlags operator&(const AccessFlags a,
+                                const AccessFlags b) noexcept {
+  return static_cast<AccessFlags>(std::to_underlying(a) &
+                                  std::to_underlying(b));
 }
 
 constexpr AccessFlags operator~(const AccessFlags a) noexcept {
   return static_cast<AccessFlags>(~std::to_underlying(a));
 }
 
-constexpr AccessFlags &operator|=(AccessFlags &a, const AccessFlags b) noexcept { return a = a | b; }
+constexpr AccessFlags& operator|=(AccessFlags& a,
+                                  const AccessFlags b) noexcept {
+  return a = a | b;
+}
 
-constexpr AccessFlags &operator&=(AccessFlags &a, const AccessFlags b) noexcept { return a = a & b; }
+constexpr AccessFlags& operator&=(AccessFlags& a,
+                                  const AccessFlags b) noexcept {
+  return a = a & b;
+}
 
-constexpr bool has_flag(const AccessFlags flags, const AccessFlags flag) noexcept { return (flags & flag) == flag; }
+constexpr bool has_flag(const AccessFlags flags,
+                        const AccessFlags flag) noexcept {
+  return (flags & flag) == flag;
+}
 
 enum class CacheMode : std::uint8_t {
-  WriteBack,        // Normal RAM
-  WriteThrough,     // Writes update cache and RAM synchronously
-  UncacheableMinus, // UC-, can be overridden by MTRRs to WriteCombining
-  Uncacheable,      // Strict MMIO
-  WriteCombining,   // Framebuffers
-  WriteProtected    // reads hit cache, writes go to RAM
+  WriteBack,         // Normal RAM
+  WriteThrough,      // Writes update cache and RAM synchronously
+  UncacheableMinus,  // UC-, can be overridden by MTRRs to WriteCombining
+  Uncacheable,       // Strict MMIO
+  WriteCombining,    // Framebuffers
+  WriteProtected     // reads hit cache, writes go to RAM
 };
 
 enum class ArchFlags : std::uint64_t {
@@ -74,7 +88,7 @@ enum class ArchFlags : std::uint64_t {
 class PTEntry {
   std::uint64_t m_data;
 
-public:
+ public:
   constexpr explicit PTEntry(const std::uint64_t val = 0) : m_data(val) {}
   [[nodiscard]] std::uint64_t raw() const noexcept { return m_data; }
 
@@ -93,21 +107,21 @@ public:
   BF_BIT_RW(pat_4k, 7)
   BF_BIT_RW(huge, 7)
   BF_BIT_RW(global, 8)
-  BF_BIT_RW(cow, 9)      // OS specific: Triggers Copy-on-Write
-  BF_BIT_RW(shared, 10)  // OS specific: Mapped in multiple address spaces
-  BF_BIT_RW(swapped, 11) // OS specific: Evicted to disk
+  BF_BIT_RW(cow, 9)       // OS specific: Triggers Copy-on-Write
+  BF_BIT_RW(shared, 10)   // OS specific: Mapped in multiple address spaces
+  BF_BIT_RW(swapped, 11)  // OS specific: Evicted to disk
 
   // For 2MB/1GB pages, PAT is moved to bit 12.
   BF_BIT_RW(pat_large, 12)
 
   // Page Frame Numbers
-  BF_RW(std::uint64_t, pfn_4k, 12, 40) // 4KB PFN
-  BF_RW(std::uint64_t, pfn_2m, 21, 31) // 2MB PFN
-  BF_RW(std::uint64_t, pfn_1g, 30, 22) // 1GB PFN
+  BF_RW(std::uint64_t, pfn_4k, 12, 40)  // 4KB PFN
+  BF_RW(std::uint64_t, pfn_2m, 21, 31)  // 2MB PFN
+  BF_RW(std::uint64_t, pfn_1g, 30, 22)  // 1GB PFN
 
   BF_RW(std::uint8_t, avl_high, 52, 6)
-  BF_BIT_RW(stack, 58)             // OS specific: Is stack memory
-  BF_RW(std::uint8_t, pkey, 59, 4) // Protection Keys (PKRU)
-  BF_BIT_RW(nx, 63)                // No-Execute
+  BF_BIT_RW(stack, 58)              // OS specific: Is stack memory
+  BF_RW(std::uint8_t, pkey, 59, 4)  // Protection Keys (PKRU)
+  BF_BIT_RW(nx, 63)                 // No-Execute
 };
-} // namespace kernel::memory::vmm
+}  // namespace kernel::memory::vmm

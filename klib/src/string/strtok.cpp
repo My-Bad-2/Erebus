@@ -1,9 +1,11 @@
-#include "string.h"
 #include <cstddef>
 #include <cstdint>
 
+#include "string.h"
+
 namespace klib {
-char *strtok_r(char *__restrict str, const char *__restrict delim, char **__restrict saveptr) noexcept {
+char* strtok_r(char* __restrict str, const char* __restrict delim,
+               char** __restrict saveptr) noexcept {
   if (str == nullptr) {
     str = *saveptr;
   }
@@ -19,7 +21,7 @@ char *strtok_r(char *__restrict str, const char *__restrict delim, char **__rest
   }
 
   // We have found the start of a valid token
-  char *token = str;
+  char* token = str;
   str = strpbrk(token, delim);
 
   if (str != nullptr) {
@@ -32,8 +34,8 @@ char *strtok_r(char *__restrict str, const char *__restrict delim, char **__rest
   return token;
 }
 
-char *strtok(char *__restrict str, const char *__restrict delim) noexcept {
-  static char *saved_ptr = nullptr;
+char* strtok(char* __restrict str, const char* __restrict delim) noexcept {
+  static char* saved_ptr = nullptr;
   return strtok_r(str, delim, &saved_ptr);
 }
-} // namespace klib
+}  // namespace klib

@@ -1,17 +1,24 @@
 #pragma once
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 
-#include <bit>
-
-#define READ_PCP(member) ::kernel::hw::gs::read<offsetof(PerCpu, member), decltype(PerCpu::member)>()
-#define WRITE_PCP(member, val) ::kernel::hw::gs::write<offsetof(PerCpu, member), decltype(PerCpu::member)>(val)
-#define INC_PCP(member) ::kernel::hw::gs::inc<offsetof(PerCpu, member), sizeof(decltype(PerCpu::member))>()
-#define DEC_PCP(member) ::kernel::hw::gs::dec<offsetof(PerCpu, member), sizeof(decltype(PerCpu::member))>()
+#define READ_PCP(member) \
+  ::kernel::hw::gs::read<offsetof(PerCpu, member), decltype(PerCpu::member)>()
+#define WRITE_PCP(member, val)                                                 \
+  ::kernel::hw::gs::write<offsetof(PerCpu, member), decltype(PerCpu::member)>( \
+      val)
+#define INC_PCP(member)                           \
+  ::kernel::hw::gs::inc<offsetof(PerCpu, member), \
+                        sizeof(decltype(PerCpu::member))>()
+#define DEC_PCP(member)                           \
+  ::kernel::hw::gs::dec<offsetof(PerCpu, member), \
+                        sizeof(decltype(PerCpu::member))>()
 
 namespace kernel::hw::gs {
-template <std::size_t Offset, typename T> [[nodiscard, gnu::always_inline]] T read() noexcept {
+template <std::size_t Offset, typename T>
+[[nodiscard, gnu::always_inline]] T read() noexcept {
   if constexpr (sizeof(T) == 8) {
     std::uint64_t val;
     asm volatile("movq %%gs:%c1, %0" : "=r"(val) : "i"(Offset));
@@ -31,20 +38,34 @@ template <std::size_t Offset, typename T> [[nodiscard, gnu::always_inline]] T re
   }
 }
 
-template <std::size_t Offset, typename T> [[gnu::always_inline]] void write(T value) noexcept {
+template <std::size_t Offset, typename T>
+[[gnu::always_inline]] void write(T value) noexcept {
   asm volatile("" ::: "memory");
   if constexpr (sizeof(T) == 8) {
-    asm volatile("movq %0, %%gs:%c1" : : "re"(__builtin_bit_cast(std::uint64_t, value)), "i"(Offset) : "memory");
+    asm volatile("movq %0, %%gs:%c1"
+                 :
+                 : "re"(__builtin_bit_cast(std::uint64_t, value)), "i"(Offset)
+                 : "memory");
   } else if constexpr (sizeof(T) == 4) {
-    asm volatile("movl %0, %%gs:%c1" : : "re"(__builtin_bit_cast(std::uint32_t, value)), "i"(Offset) : "memory");
+    asm volatile("movl %0, %%gs:%c1"
+                 :
+                 : "re"(__builtin_bit_cast(std::uint32_t, value)), "i"(Offset)
+                 : "memory");
   } else if constexpr (sizeof(T) == 2) {
-    asm volatile("movw %0, %%gs:%c1" : : "re"(__builtin_bit_cast(std::uint16_t, value)), "i"(Offset) : "memory");
+    asm volatile("movw %0, %%gs:%c1"
+                 :
+                 : "re"(__builtin_bit_cast(std::uint16_t, value)), "i"(Offset)
+                 : "memory");
   } else if constexpr (sizeof(T) == 1) {
-    asm volatile("movb %0, %%gs:%c1" : : "re"(__builtin_bit_cast(std::uint8_t, value)), "i"(Offset) : "memory");
+    asm volatile("movb %0, %%gs:%c1"
+                 :
+                 : "re"(__builtin_bit_cast(std::uint8_t, value)), "i"(Offset)
+                 : "memory");
   }
 }
 
-template <std::size_t Offset, std::size_t Size> [[gnu::always_inline]] void inc() noexcept {
+template <std::size_t Offset, std::size_t Size>
+[[gnu::always_inline]] void inc() noexcept {
   if constexpr (Size == 8) {
     asm volatile("incq %%gs:%c0" : : "i"(Offset) : "memory", "cc");
   } else if constexpr (Size == 4) {
@@ -56,7 +77,8 @@ template <std::size_t Offset, std::size_t Size> [[gnu::always_inline]] void inc(
   }
 }
 
-template <std::size_t Offset, std::size_t Size> [[gnu::always_inline]] void dec() noexcept {
+template <std::size_t Offset, std::size_t Size>
+[[gnu::always_inline]] void dec() noexcept {
   if constexpr (Size == 8) {
     asm volatile("decq %%gs:%c0" : : "i"(Offset) : "memory", "cc");
   } else if constexpr (Size == 4) {
@@ -68,17 +90,28 @@ template <std::size_t Offset, std::size_t Size> [[gnu::always_inline]] void dec(
   }
 }
 
-template <std::size_t Offset, std::size_t Size> [[gnu::always_inline]] void add(std::uint32_t amount) noexcept {
+template <std::size_t Offset, std::size_t Size>
+[[gnu::always_inline]] void add(std::uint32_t amount) noexcept {
   if constexpr (Size == 1) {
-    asm volatile("addb %1, %%gs:%c0" : : "i"(Offset), "i"(amount) : "memory", "cc");
+    asm volatile("addb %1, %%gs:%c0"
+                 :
+                 : "i"(Offset), "i"(amount)
+                 : "memory", "cc");
   } else if constexpr (Size == 4) {
-    asm volatile("addl %1, %%gs:%c0" : : "i"(Offset), "i"(amount) : "memory", "cc");
+    asm volatile("addl %1, %%gs:%c0"
+                 :
+                 : "i"(Offset), "i"(amount)
+                 : "memory", "cc");
   }
 }
 
-template <std::size_t Offset, std::size_t Size> [[gnu::always_inline]] void sub(std::uint32_t amount) noexcept {
+template <std::size_t Offset, std::size_t Size>
+[[gnu::always_inline]] void sub(std::uint32_t amount) noexcept {
   if constexpr (Size == 1) {
-    asm volatile("subb %1, %%gs:%c0" : : "i"(Offset), "i"(amount) : "memory", "cc");
+    asm volatile("subb %1, %%gs:%c0"
+                 :
+                 : "i"(Offset), "i"(amount)
+                 : "memory", "cc");
   }
 }
-} // namespace kernel::hw::gs
+}  // namespace kernel::hw::gs

@@ -1,6 +1,7 @@
-#include "stdlib.h"
 #include <cstdint>
 #include <type_traits>
+
+#include "stdlib.h"
 
 namespace klib {
 namespace {
@@ -28,7 +29,7 @@ constexpr DivStruct div_impl(T numer, T denom) noexcept {
       .rem = numer % denom,
   };
 }
-} // namespace
+}  // namespace
 
 int abs(int j) noexcept { return abs_impl<int>(j); }
 
@@ -36,15 +37,23 @@ long labs(long j) noexcept { return abs_impl<long>(j); }
 
 long long llabs(long long j) noexcept { return abs_impl<long long>(j); }
 
-std::intmax_t imaxabs(std::intmax_t j) noexcept { return abs_impl<std::intmax_t>(j); }
+std::intmax_t imaxabs(std::intmax_t j) noexcept {
+  return abs_impl<std::intmax_t>(j);
+}
 
-div_t div(int numer, int denom) noexcept { return div_impl<div_t, int>(numer, denom); }
+div_t div(int numer, int denom) noexcept {
+  return div_impl<div_t, int>(numer, denom);
+}
 
-ldiv_t ldiv(long numer, long denom) noexcept { return div_impl<ldiv_t, long>(numer, denom); }
+ldiv_t ldiv(long numer, long denom) noexcept {
+  return div_impl<ldiv_t, long>(numer, denom);
+}
 
-lldiv_t lldiv(long long numer, long long denom) noexcept { return div_impl<lldiv_t, long long>(numer, denom); }
+lldiv_t lldiv(long long numer, long long denom) noexcept {
+  return div_impl<lldiv_t, long long>(numer, denom);
+}
 
 imaxdiv_t imaxdiv(std::intmax_t numer, std::intmax_t denom) noexcept {
   return div_impl<imaxdiv_t, std::intmax_t>(numer, denom);
 }
-} // namespace klib
+}  // namespace klib

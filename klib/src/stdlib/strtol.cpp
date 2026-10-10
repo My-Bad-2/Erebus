@@ -8,11 +8,13 @@
 
 namespace klib {
 namespace {
-template <typename T> constexpr T strtoX(const char *__restrict nptr, char **__restrict endptr, int base) noexcept {
+template <typename T>
+constexpr T strtoX(const char* __restrict nptr, char** __restrict endptr,
+                   int base) noexcept {
   using U = std::make_unsigned_t<T>;
   constexpr bool is_signed = std::is_signed_v<T>;
 
-  const char *s = nptr;
+  const char* s = nptr;
 
   while (isspace(*s)) {
     ++s;
@@ -26,7 +28,8 @@ template <typename T> constexpr T strtoX(const char *__restrict nptr, char **__r
     ++s;
   }
 
-  if ((base == 0 || base == 16) && *s == '0' && (*(s + 1) == 'x' || *(s + 1) == 'X')) {
+  if ((base == 0 || base == 16) && *s == '0' &&
+      (*(s + 1) == 'x' || *(s + 1) == 'X')) {
     std::uint8_t c = *(s + 2);
     std::uint32_t val = c - '0';
 
@@ -53,7 +56,7 @@ template <typename T> constexpr T strtoX(const char *__restrict nptr, char **__r
 
   if (base < 2 || base > 36) {
     if (endptr) {
-      *endptr = const_cast<char *>(nptr);
+      *endptr = const_cast<char*>(nptr);
     }
 
     return 0;
@@ -108,19 +111,20 @@ template <typename T> constexpr T strtoX(const char *__restrict nptr, char **__r
 
   if (!any_digits) {
     if (endptr) {
-      *endptr = const_cast<char *>(nptr);
+      *endptr = const_cast<char*>(nptr);
     }
 
     return 0;
   }
 
   if (endptr) {
-    *endptr = const_cast<char *>(s);
+    *endptr = const_cast<char*>(s);
   }
 
   if (overflow) {
     if constexpr (is_signed) {
-      return neg ? std::numeric_limits<T>::min() : std::numeric_limits<T>::max();
+      return neg ? std::numeric_limits<T>::min()
+                 : std::numeric_limits<T>::max();
     } else {
       return std::numeric_limits<T>::max();
     }
@@ -132,21 +136,25 @@ template <typename T> constexpr T strtoX(const char *__restrict nptr, char **__r
     return neg ? -acc : acc;
   }
 }
-} // namespace
+}  // namespace
 
-long strtol(const char *__restrict str, char **__restrict endptr, int base) noexcept {
+long strtol(const char* __restrict str, char** __restrict endptr,
+            int base) noexcept {
   return strtoX<long>(str, endptr, base);
 }
 
-long long strtoll(const char *__restrict str, char **__restrict endptr, int base) noexcept {
+long long strtoll(const char* __restrict str, char** __restrict endptr,
+                  int base) noexcept {
   return strtoX<long long>(str, endptr, base);
 }
 
-unsigned long strtoul(const char *__restrict str, char **__restrict endptr, int base) noexcept {
+unsigned long strtoul(const char* __restrict str, char** __restrict endptr,
+                      int base) noexcept {
   return strtoX<unsigned long>(str, endptr, base);
 }
 
-unsigned long long strtoull(const char *__restrict str, char **__restrict endptr, int base) noexcept {
+unsigned long long strtoull(const char* __restrict str,
+                            char** __restrict endptr, int base) noexcept {
   return strtoX<unsigned long long>(str, endptr, base);
 }
-} // namespace klib
+}  // namespace klib

@@ -1,7 +1,8 @@
 #include "hal/gdt.hpp"
 
 namespace kernel::hw::gdt {
-std::array<GdtEntry, 2> GlobalDescriptorTable::make_tss_descriptors(const TaskStateSegment &tss) noexcept {
+std::array<GdtEntry, 2> GlobalDescriptorTable::make_tss_descriptors(
+    const TaskStateSegment& tss) noexcept {
   const auto base = std::bit_cast<std::uintptr_t>(&tss);
   constexpr std::size_t limit = sizeof(TaskStateSegment) - 1;
 
@@ -34,26 +35,28 @@ void GlobalDescriptorTable::load() noexcept {
   asm volatile("lgdt %0" : /* No Output */ : "m"(gdtr) : "memory");
 
   // Reset Data segments
-  asm volatile("mov %0, %%ds \n\t"
-               "mov %0, %%es \n\t"
-               "mov %0, %%ss \n\t"
-               "xor %%eax, %%eax \n\t"
-               "mov %%eax, %%fs \n\t"
-               "mov %%eax, %%gs \n\t"
-               : /* No Output */
-               : "r"(std::to_underlying(Selector::KernelData))
-               : "memory");
+  asm volatile(
+      "mov %0, %%ds \n\t"
+      "mov %0, %%es \n\t"
+      "mov %0, %%ss \n\t"
+      "xor %%eax, %%eax \n\t"
+      "mov %%eax, %%fs \n\t"
+      "mov %%eax, %%gs \n\t"
+      : /* No Output */
+      : "r"(std::to_underlying(Selector::KernelData))
+      : "memory");
 
   // Far jump to flush the Code Segment (CS) cache
-  asm volatile("pushq %0\n\t"
-               "lea 1f(%%rip), %%rax\n\t"
-               "pushq %%rax\n\t"
-               "lretq \n\t"
-               "1: \n\t"
-               : /* No Output */
-               : "i"(std::to_underlying(Selector::KernelCode))
-               : "rax", "memory");
+  asm volatile(
+      "pushq %0\n\t"
+      "lea 1f(%%rip), %%rax\n\t"
+      "pushq %%rax\n\t"
+      "lretq \n\t"
+      "1: \n\t"
+      : /* No Output */
+      : "i"(std::to_underlying(Selector::KernelCode))
+      : "rax", "memory");
 
   asm volatile("ltr %0" : : "r"(std::to_underlying(Selector::Tss)) : "memory");
 }
-} // namespace kernel::hw::gdt
+}  // namespace kernel::hw::gdt

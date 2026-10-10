@@ -1,8 +1,10 @@
 #include "hal/apic/lapic.hpp"
+
 #include "hal/cpu_info.hpp"
 
 namespace kernel::hw::apic {
-void Lapic::initialize(memory::VirtualAddress mmio_base, bool prefer_x2apic) noexcept {
+void Lapic::initialize(memory::VirtualAddress mmio_base,
+                       bool prefer_x2apic) noexcept {
   m_mmio.set_base(mmio_base);
 
   const auto cpu = profile_manager.get_current();
@@ -40,7 +42,8 @@ void Lapic::initialize(memory::VirtualAddress mmio_base, bool prefer_x2apic) noe
   m_caps.has_directed_eoi = ver.get_has_directed_eoi();
 
   if (m_caps.has_amd_ext_apic) {
-    m_caps.amd_ext_lvt_count = read<AmdExtFeatureSchema>(Reg::AmdExtFeature).get_ext_lvt_count();
+    m_caps.amd_ext_lvt_count =
+        read<AmdExtFeatureSchema>(Reg::AmdExtFeature).get_ext_lvt_count();
   }
 
   // Accept all interrupts
@@ -52,7 +55,9 @@ void Lapic::initialize(memory::VirtualAddress mmio_base, bool prefer_x2apic) noe
     write(Reg::Esr, Raw32Schema{0});
   }
 
-  auto mask_lvt = [this](const Reg reg) { write(reg, read<LvtSchema>(reg).with_masked()); };
+  auto mask_lvt = [this](const Reg reg) {
+    write(reg, read<LvtSchema>(reg).with_masked());
+  };
 
   mask_lvt(Reg::LvtTimer);
   mask_lvt(Reg::LvtThermal);
@@ -65,11 +70,12 @@ void Lapic::initialize(memory::VirtualAddress mmio_base, bool prefer_x2apic) noe
   }
 
   for (std::uint8_t i = 0; i < m_caps.amd_ext_lvt_count; ++i) {
-    mask_lvt(static_cast<Reg>(std::to_underlying(Reg::AmdExtLvtBase) + (i * 0x10)));
+    mask_lvt(
+        static_cast<Reg>(std::to_underlying(Reg::AmdExtLvtBase) + (i * 0x10)));
   }
 
   // Software enable
   const auto svr = SvrSchema{}.with_apic_enable().with_vector(0xFF);
   write(Reg::Svr, svr);
 }
-} // namespace kernel::hw::apic
+}  // namespace kernel::hw::apic

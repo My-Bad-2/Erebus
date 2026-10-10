@@ -15,11 +15,15 @@ concept CodePointer = std::is_pointer_v<T> || std::is_integral_v<T>;
 using PatchResult = std::expected<void, Error>;
 constexpr std::uint32_t FEATURE_ALWAYS = 0xFFFFFFFF;
 
-enum class PatchFlags : std::uint8_t { INLINE, OUT_OF_TRAMPOLINE, STRIP_PREFIX };
+enum class PatchFlags : std::uint8_t {
+  INLINE,
+  OUT_OF_TRAMPOLINE,
+  STRIP_PREFIX
+};
 
 struct [[gnu::packed]] AltInstr {
-  std::int32_t instr_offset; // Relative offset to original code in .text
-  std::int32_t repl_offset;  // Relative offset to replacement code
+  std::int32_t instr_offset;  // Relative offset to original code in .text
+  std::int32_t repl_offset;   // Relative offset to replacement code
   Feature feature_flag;
   std::uint8_t instr_len;
   std::uint8_t repl_len;
@@ -43,25 +47,30 @@ struct [[gnu::packed]] ExceptionTableEntry {
 };
 
 class InstructionDecoder {
-public:
-  static void pad_with_nops(std::span<std::uint8_t> buffer, std::uintptr_t target_addr) noexcept;
-  [[nodiscard]] static bool verify_boundaries(const std::uint8_t *code, std::uint8_t expected_len) noexcept;
-  [[nodiscard]] static bool relocate_rip_instructions(std::span<std::uint8_t> payload, std::uintptr_t old_rip,
-                                                      std::uintptr_t new_rip) noexcept;
+ public:
+  static void pad_with_nops(std::span<std::uint8_t> buffer,
+                            std::uintptr_t target_addr) noexcept;
+  [[nodiscard]] static bool verify_boundaries(
+      const std::uint8_t* code, std::uint8_t expected_len) noexcept;
+  [[nodiscard]] static bool relocate_rip_instructions(
+      std::span<std::uint8_t> payload, std::uintptr_t old_rip,
+      std::uintptr_t new_rip) noexcept;
 };
 
 class ExceptionTable {
-public:
-  static void sync_trampoline(std::uintptr_t old_rip, std::uintptr_t new_rip) noexcept;
+ public:
+  static void sync_trampoline(std::uintptr_t old_rip,
+                              std::uintptr_t new_rip) noexcept;
 };
 
 class BootPatcher {
-public:
-  [[nodiscard]] static PatchResult apply_patch(const AltInstr &alt) noexcept;
+ public:
+  [[nodiscard]] static PatchResult apply_patch(const AltInstr& alt) noexcept;
 
-private:
-  static bool validate_ibt(std::span<const std::uint8_t> payload, const std::uint8_t *target) noexcept;
+ private:
+  static bool validate_ibt(std::span<const std::uint8_t> payload,
+                           const std::uint8_t* target) noexcept;
 };
 
 void apply_all_boot_patches() noexcept;
-} // namespace kernel::hw::patcher
+}  // namespace kernel::hw::patcher

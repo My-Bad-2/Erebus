@@ -1,8 +1,9 @@
-#include "string.h"
 #include <cstddef>
 
+#include "string.h"
+
 namespace klib {
-char *strcat(char *__restrict dest, const char *__restrict src) noexcept {
+char* strcat(char* __restrict dest, const char* __restrict src) noexcept {
   const std::size_t dest_len = strlen(dest);
   const std::size_t src_len = strlen(src);
 
@@ -10,7 +11,8 @@ char *strcat(char *__restrict dest, const char *__restrict src) noexcept {
   return dest;
 }
 
-char *strncat(char *__restrict dest, const char *__restrict src, size_t count) noexcept {
+char* strncat(char* __restrict dest, const char* __restrict src,
+              size_t count) noexcept {
   if (count == 0) [[unlikely]] {
     return dest;
   }
@@ -22,4 +24,4 @@ char *strncat(char *__restrict dest, const char *__restrict src, size_t count) n
 
   return dest;
 }
-} // namespace klib
+}  // namespace klib

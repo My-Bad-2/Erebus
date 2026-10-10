@@ -1,19 +1,18 @@
-#include "utils/lock.hpp"
-
 #include "hal/percpu.hpp"
+#include "utils/lock.hpp"
 
 namespace kernel::utils {
 namespace {
 constexpr std::uint32_t QLOCK_LOCKED = 1 << 0;
 constexpr std::uint32_t QLOCK_PENDING = 1 << 1;
 constexpr std::uint32_t QLOCK_QUEUED = 1 << 2;
-} // namespace
+}  // namespace
 
 void CLHQueue::wait_in_queue() noexcept {
-  CLHNode *my_node = hw::percpu::get_curr_node();
+  CLHNode* my_node = hw::percpu::get_curr_node();
   my_node->locked.store(1, std::memory_order_relaxed);
 
-  CLHNode *my_pred = m_tail.exchange(my_node, std::memory_order_acq_rel);
+  CLHNode* my_pred = m_tail.exchange(my_node, std::memory_order_acq_rel);
   hw::percpu::set_prev_node(my_pred);
 
   if (my_pred->locked.load(std::memory_order_acquire) == 1) {
@@ -22,20 +21,23 @@ void CLHQueue::wait_in_queue() noexcept {
 }
 
 void CLHQueue::release() noexcept {
-  CLHNode *my_node = hw::percpu::get_curr_node();
+  CLHNode* my_node = hw::percpu::get_curr_node();
   my_node->locked.store(0, std::memory_order_release);
 }
 
 void QSpinlock::lock() noexcept {
   std::uint32_t expected = 0;
-  if (m_val.compare_exchange_strong(expected, QLOCK_LOCKED, std::memory_order_acquire, std::memory_order_relaxed))
-      [[likely]] {
-    return; // Lock acquired
+  if (m_val.compare_exchange_strong(expected, QLOCK_LOCKED,
+                                    std::memory_order_acquire,
+                                    std::memory_order_relaxed)) [[likely]] {
+    return;  // Lock acquired
   }
 
-  // If the lock is held, but nobody is pending and the queue is empty, we can take the pending slot.
+  // If the lock is held, but nobody is pending and the queue is empty, we can
+  // take the pending slot.
   if ((expected & (QLOCK_PENDING | QLOCK_QUEUED)) == 0) {
-    if (m_val.compare_exchange_strong(expected, expected | QLOCK_PENDING, std::memory_order_acquire,
+    if (m_val.compare_exchange_strong(expected, expected | QLOCK_PENDING,
+                                      std::memory_order_acquire,
                                       std::memory_order_relaxed)) {
       // We are the pending owner. Wait for the primary lock to clear.
       while (m_val.load(std::memory_order_relaxed) & QLOCK_LOCKED) {
@@ -44,7 +46,8 @@ void QSpinlock::lock() noexcept {
 
       // Take ownership over the lock.
       const std::uint32_t curr = m_val.load(std::memory_order_relaxed);
-      m_val.store((curr & ~QLOCK_PENDING) | QLOCK_LOCKED, std::memory_order_acquire);
+      m_val.store((curr & ~QLOCK_PENDING) | QLOCK_LOCKED,
+                  std::memory_order_acquire);
       return;
     }
   }
@@ -53,7 +56,8 @@ void QSpinlock::lock() noexcept {
 }
 
 void QSpinlock::unlock() noexcept {
-  const std::uint32_t prev = m_val.fetch_and(~QLOCK_LOCKED, std::memory_order_release);
+  const std::uint32_t prev =
+      m_val.fetch_and(~QLOCK_LOCKED, std::memory_order_release);
 
   if (prev & QLOCK_QUEUED) {
     m_clh_queue.release();
@@ -77,4 +81,4 @@ void QSpinlock::slow_path_lock() noexcept {
     hw::pause();
   }
 }
-} // namespace kernel::utils
+}  // namespace kernel::utils

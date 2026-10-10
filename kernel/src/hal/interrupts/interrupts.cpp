@@ -1,4 +1,4 @@
-#include "hal/interrupts.hpp"
+#include "hal/interrupts/interrupts.hpp"
 
 #include "hal/gdt.hpp"
 #include "hal/hal.hpp"
@@ -10,31 +10,31 @@ namespace kernel::hw::interrupts {
 namespace {
 namespace fred_config {
 enum class FredMsr : std::uint32_t {
-  Rsp0 = 0x1CC,    // Ring 0 Stack Pointer
-  Rsp1 = 0x1CD,    // Ring 1 Stack Pointer
-  Rsp2 = 0x1CE,    // Ring 2 Stack Pointer
-  Rsp3 = 0x1CF,    // Ring 3 Stack Pointer
-  Stklvls = 0x1D0, // Exception Stack Levels
-  Config = 0x1D4   // Master Configuration
+  Rsp0 = 0x1CC,     // Ring 0 Stack Pointer
+  Rsp1 = 0x1CD,     // Ring 1 Stack Pointer
+  Rsp2 = 0x1CE,     // Ring 2 Stack Pointer
+  Rsp3 = 0x1CF,     // Ring 3 Stack Pointer
+  Stklvls = 0x1D0,  // Exception Stack Levels
+  Config = 0x1D4    // Master Configuration
 };
 
 enum class FredStackLevel : std::uint8_t {
-  Level0 = 0, // Default Kernel Stack
-  Level1 = 1, // Critical Rescue Stack (#DF, #MC, NMI)
-  Level2 = 2, // Unused/Reserved
-  Level3 = 3  // Unused/Reserved
+  Level0 = 0,  // Default Kernel Stack
+  Level1 = 1,  // Critical Rescue Stack (#DF, #MC, NMI)
+  Level2 = 2,  // Unused/Reserved
+  Level3 = 3   // Unused/Reserved
 };
 
 enum class FredRedzone : std::uint8_t {
-  Disabled = 0,     // Used by default
-  SystemV_128B = 2, // 128 bytes = Two 64-byte cache lines
+  Disabled = 0,      // Used by default
+  SystemV_128B = 2,  // 128 bytes = Two 64-byte cache lines
 };
 
 struct FredConfig {
-private:
+ private:
   std::uint64_t m_data{0};
 
-public:
+ public:
   std::uint64_t raw() const noexcept { return m_data; }
 
   BF_RW(FredStackLevel, software_event_stack_level, 0, 2)
@@ -45,13 +45,14 @@ public:
 };
 
 struct FredStklvls {
-private:
+ private:
   std::uint64_t m_data{0};
 
-public:
+ public:
   std::uint64_t raw() const noexcept { return m_data; }
 
-  [[nodiscard]] constexpr uint8_t get_exception_level(const InterruptVector vector) const noexcept {
+  [[nodiscard]] constexpr uint8_t get_exception_level(
+      const InterruptVector vector) const noexcept {
     if (vector >= InterruptVector::ExternalInterruptStart) [[unlikely]] {
       return 0;
     }
@@ -59,11 +60,13 @@ public:
     return (m_data >> (std::to_underlying(vector) * 2)) & 0b11;
   }
 
-  constexpr auto with_exception_level(const InterruptVector vector, const FredStackLevel level) const noexcept {
+  constexpr auto with_exception_level(
+      const InterruptVector vector, const FredStackLevel level) const noexcept {
     FredStklvls copy = *this;
     if (vector < InterruptVector::ExternalInterruptStart) [[likely]] {
       const std::uint64_t shift = std::to_underlying(vector) * 2;
-      copy.m_data = (copy.m_data & ~(3ul << shift)) | ((static_cast<uint64_t>(level) & 0x3) << shift);
+      copy.m_data = (copy.m_data & ~(3ul << shift)) |
+                    ((static_cast<uint64_t>(level) & 0x3) << shift);
     }
 
     return copy;
@@ -71,20 +74,22 @@ public:
 };
 
 struct FredPointer {
-private:
+ private:
   std::uint64_t m_data{0};
 
-public:
+ public:
   std::uint64_t raw() const noexcept { return m_data; }
   BF_RW(std::uint64_t, ptr, 0, 63);
 };
 
-void initialize(const memory::VirtualAddress ring0_rsp, memory::VirtualAddress ring0_critical_rsp) noexcept {
+void initialize(const memory::VirtualAddress ring0_rsp,
+                memory::VirtualAddress ring0_critical_rsp) noexcept {
   FredConfig config{};
 
   const auto entrypoint_addr = memory::VirtualAddress{&fred_entrypoint};
   if (!entrypoint_addr.is_aligned(memory::PAGE_SIZE)) [[unlikely]] {
-    utils::logger::fatal("FRED entrypoint address is not aligned to page size!\n");
+    utils::logger::fatal(
+        "FRED entrypoint address is not aligned to page size!\n");
   }
 
   config.set_entrypoint_base(entrypoint_addr.value() >> memory::PAGE_SHIFT_4KB);
@@ -96,9 +101,12 @@ void initialize(const memory::VirtualAddress ring0_rsp, memory::VirtualAddress r
   write::msr(std::to_underlying(FredMsr::Config), config.raw());
 
   FredStklvls stklvls{};
-  stklvls = stklvls.with_exception_level(InterruptVector::NonMaskableInterrupt, FredStackLevel::Level1);
-  stklvls = stklvls.with_exception_level(InterruptVector::DoubleFault, FredStackLevel::Level1);
-  stklvls = stklvls.with_exception_level(InterruptVector::MachineCheck, FredStackLevel::Level1);
+  stklvls = stklvls.with_exception_level(InterruptVector::NonMaskableInterrupt,
+                                         FredStackLevel::Level1);
+  stklvls = stklvls.with_exception_level(InterruptVector::DoubleFault,
+                                         FredStackLevel::Level1);
+  stklvls = stklvls.with_exception_level(InterruptVector::MachineCheck,
+                                         FredStackLevel::Level1);
   write::msr(std::to_underlying(FredMsr::Stklvls), stklvls.raw());
 
   FredPointer rsp0{};
@@ -116,12 +124,12 @@ void initialize(const memory::VirtualAddress ring0_rsp, memory::VirtualAddress r
   cr4.set_fred(true);
   write::cr4(cr4);
 }
-} // namespace fred_config
+}  // namespace fred_config
 
 namespace legacy {
 enum class GateType : std::uint8_t {
-  Interrupt = 0xE, // Clears RFLAGS.IF
-  Trap = 0xF,      // Leaves RFLAGS.IF unchanged
+  Interrupt = 0xE,  // Clears RFLAGS.IF
+  Trap = 0xF,       // Leaves RFLAGS.IF unchanged
 };
 
 struct [[gnu::packed]] IDTEntry {
@@ -133,7 +141,8 @@ struct [[gnu::packed]] IDTEntry {
   std::uint32_t offset_high;
   std::uint32_t reserved;
 
-  constexpr void set_handler(void *handler, gdt::Selector sel, const GateType type, const EventCpl dpl,
+  constexpr void set_handler(void* handler, gdt::Selector sel,
+                             const GateType type, const EventCpl dpl,
                              const std::uint8_t ist_idx = 0) {
     const auto addr = reinterpret_cast<std::uint64_t>(handler);
 
@@ -146,7 +155,8 @@ struct [[gnu::packed]] IDTEntry {
     reserved = 0;
 
     constexpr std::uint8_t PRESENT_BIT = 1 << 7;
-    type_attr = PRESENT_BIT | (std::to_underlying(dpl) << 5) | std::to_underlying(type);
+    type_attr =
+        PRESENT_BIT | (std::to_underlying(dpl) << 5) | std::to_underlying(type);
   }
 };
 
@@ -160,7 +170,7 @@ alignas(16) std::array<IDTEntry, IDT_SIZE> g_idt_table{};
 void initialize() noexcept {
   static auto once = [] {
     for (std::size_t vec = 0; vec < IDT_SIZE; ++vec) {
-      const auto handler = reinterpret_cast<void *>(legacy_idt_stubs[vec]);
+      const auto handler = reinterpret_cast<void*>(legacy_idt_stubs[vec]);
       constexpr auto dpl = EventCpl::Ring0;
 
       std::uint8_t ist_idx = 0;
@@ -170,7 +180,8 @@ void initialize() noexcept {
         ist_idx = 1;
       }
 
-      g_idt_table[vec].set_handler(handler, gdt::Selector::KernelCode, GateType::Interrupt, dpl, ist_idx);
+      g_idt_table[vec].set_handler(handler, gdt::Selector::KernelCode,
+                                   GateType::Interrupt, dpl, ist_idx);
     }
 
     return true;
@@ -183,14 +194,15 @@ void initialize() noexcept {
 
   asm volatile("lidt %0" : /* No Output */ : "m"(idtr) : "memory");
 }
-} // namespace legacy
-} // namespace
+}  // namespace legacy
+}  // namespace
 
-void initialize(memory::VirtualAddress ring0_stack, memory::VirtualAddress critical_stack) noexcept {
+void initialize(memory::VirtualAddress ring0_stack,
+                memory::VirtualAddress critical_stack) noexcept {
   if (profile_manager.get_current()->has<Feature::FRED>()) {
     fred_config::initialize(ring0_stack, critical_stack);
   } else {
     legacy::initialize();
   }
 }
-} // namespace kernel::hw::interrupts
+}  // namespace kernel::hw::interrupts

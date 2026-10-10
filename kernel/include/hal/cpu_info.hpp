@@ -1,19 +1,91 @@
 #pragma once
 
+#include <cpuid.h>
+
 #include <array>
 #include <atomic>
-#include <cpuid.h>
 #include <cstdint>
 #include <span>
 #include <string_view>
 
 namespace kernel::hw {
 enum class Vendor : std::uint8_t { Unknown, Intel, Amd };
-enum class Hypervisor : std::uint8_t { None, Unknown, Kvm, Vmware, HyperV, Xen, Parallels, VirtualBox, Qemu, Bhyve };
+
+enum class UArch : std::uint16_t {
+  Unknown = 0,
+
+  // Intel
+  Nehalem,
+  Westmere,
+  SandyBridge,
+  IvyBridge,
+  Haswell,
+  Broadwell,
+  Skylake,
+  KabyLake_CoffeeLake,
+  IceLake,
+  TigerLake,
+  AlderLake,
+  RaptorLake,
+  MeteorLake,
+  ArrowLake_LunarLake,
+
+  // Intel HEDT / Server
+  CascadeLake,
+  SapphireRapids,
+  EmeraldRapids,
+
+  // Intel Atom / E-Core Lines
+  Silvermont,
+  Goldmont,
+  Tremont,
+  Gracemont,
+
+  // AMD
+  K10,
+  BulldozerFamily,
+  Jaguar_Puma,
+  Zen1,
+  Zen2,
+  Zen3,
+  Zen4,
+  Zen5
+};
+
+enum class Hypervisor : std::uint8_t {
+  None,
+  Unknown,
+  Kvm,
+  Vmware,
+  HyperV,
+  Xen,
+  Parallels,
+  VirtualBox,
+  Qemu,
+  Bhyve
+};
+
 enum class CoreType : std::uint8_t { Unknown = 0, Atom = 0x20, Core = 0x40 };
-enum class CacheType : std::uint8_t { Null = 0, Data = 1, Instruction = 2, Unified = 3 };
+
+enum class CacheType : std::uint8_t {
+  Null = 0,
+  Data = 1,
+  Instruction = 2,
+  Unified = 3
+};
+
 enum class PageSize : std::uint8_t { Size4K, Size2M, Size4M, Size1G, Unknown };
-enum class TopoLevel : std::uint8_t { Invalid = 0, SMT = 1, Core = 2, Module = 3, Tile = 4, Die = 5, Package = 6 };
+
+enum class TopoLevel : std::uint8_t {
+  Invalid = 0,
+  SMT = 1,
+  Core = 2,
+  Module = 3,
+  Tile = 4,
+  Die = 5,
+  Package = 6
+};
+
 enum class Reg : std::uint32_t { EAX = 0, EBX = 1, ECX = 2, EDX = 3 };
 
 struct CacheInfo {
@@ -29,7 +101,7 @@ struct TlbInfo {
   CacheType type;
   PageSize page_size;
   std::uint32_t entries;
-  std::uint32_t ways; // 0xFF = Fully Associative
+  std::uint32_t ways;  // 0xFF = Fully Associative
 };
 
 struct TopologyInfo {
@@ -38,14 +110,17 @@ struct TopologyInfo {
   std::uint32_t id_shift;
 };
 
-consteval std::uint32_t make_feat(const std::uint32_t leaf, const std::uint32_t subleaf, const Reg reg,
+consteval std::uint32_t make_feat(const std::uint32_t leaf,
+                                  const std::uint32_t subleaf, const Reg reg,
                                   const std::uint32_t bit) {
   const std::uint32_t is_ext = (leaf & 0x80000000) ? 1 : 0;
   const std::uint32_t base_id = leaf & 0xff;
-  return bit | (static_cast<std::uint32_t>(reg) << 5) | (subleaf << 7) | (base_id << 15) | (is_ext << 23);
+  return bit | (static_cast<std::uint32_t>(reg) << 5) | (subleaf << 7) |
+         (base_id << 15) | (is_ext << 23);
 }
 
-constexpr std::uint32_t map_leaf_to_index(const std::uint32_t leaf, const std::uint32_t subleaf) {
+constexpr std::uint32_t map_leaf_to_index(const std::uint32_t leaf,
+                                          const std::uint32_t subleaf) {
   if (leaf == 1 && subleaf == 0) {
     return 0;
   }
@@ -66,7 +141,7 @@ constexpr std::uint32_t map_leaf_to_index(const std::uint32_t leaf, const std::u
     return 4;
   }
 
-  return 0xFFFFFFFF; // Leaf is not pre-cached
+  return 0xFFFFFFFF;  // Leaf is not pre-cached
 }
 
 enum class Feature : std::uint32_t {
@@ -172,9 +247,7 @@ class alignas(std::hardware_destructive_interference_size) CpuInfo {
 
   Vendor m_vendor = Vendor::Unknown;
   Hypervisor m_hypervisor = Hypervisor::None;
-  bool m_is_virtualized{false};
-
-  std::uint8_t m_stepping{0};
+  UArch m_uarch = UArch::Unknown;
 
   std::uint32_t m_apic_id{0};
   std::uint32_t m_clflush_size{0};
@@ -182,6 +255,9 @@ class alignas(std::hardware_destructive_interference_size) CpuInfo {
   std::uint32_t m_max_leaf{0};
   std::uint32_t m_max_ext_leaf{0};
   std::uint8_t m_apic_id_core_id_size{0};
+
+  bool m_is_virtualized{false};
+  std::uint8_t m_stepping{0};
 
   std::uint32_t m_phys_addr_bits{0};
   std::uint32_t m_virt_addr_bits{0};
@@ -206,7 +282,8 @@ class alignas(std::hardware_destructive_interference_size) CpuInfo {
   std::size_t m_num_topology{0};
   std::array<TopologyInfo, 8> m_topology{};
 
-  static Registers query(const std::uint32_t leaf, const std::uint32_t subleaf = 0) noexcept {
+  static Registers query(const std::uint32_t leaf,
+                         const std::uint32_t subleaf = 0) noexcept {
     Registers r;
     __cpuid_count(leaf, subleaf, r.eax, r.ebx, r.ecx, r.edx);
     return r;
@@ -220,40 +297,75 @@ class alignas(std::hardware_destructive_interference_size) CpuInfo {
   void parse_topology() noexcept;
   void parse_hypervisor() noexcept;
 
-public:
+  UArch decode_uarch();
+
+ public:
   [[nodiscard]] Vendor vendor() const noexcept { return m_vendor; }
   [[nodiscard]] Hypervisor hypervisor() const noexcept { return m_hypervisor; }
-  [[nodiscard]] std::string_view vendor_string() const noexcept { return {m_vendor_string.data()}; }
-  [[nodiscard]] std::string_view brand_string() const noexcept { return {m_brand_string.data()}; }
+  [[nodiscard]] UArch microarchitecture() const noexcept { return m_uarch; }
+  [[nodiscard]] std::string_view vendor_string() const noexcept {
+    return {m_vendor_string.data()};
+  }
 
-  [[nodiscard]] bool is_virtualized() const noexcept { return m_is_virtualized; }
+  [[nodiscard]] std::string_view brand_string() const noexcept {
+    return {m_brand_string.data()};
+  }
+
+  [[nodiscard]] bool is_virtualized() const noexcept {
+    return m_is_virtualized;
+  }
+
   [[nodiscard]] std::uint32_t apic_id() const noexcept { return m_apic_id; }
-  [[nodiscard]] std::uint32_t clflush_size() const noexcept { return m_clflush_size; }
-  [[nodiscard]] std::uint32_t phys_addr_bits() const noexcept { return m_phys_addr_bits; }
-  [[nodiscard]] std::uint32_t virt_addr_bits() const noexcept { return m_virt_addr_bits; }
+  [[nodiscard]] std::uint32_t clflush_size() const noexcept {
+    return m_clflush_size;
+  }
+
+  [[nodiscard]] std::uint32_t phys_addr_bits() const noexcept {
+    return m_phys_addr_bits;
+  }
+
+  [[nodiscard]] std::uint32_t virt_addr_bits() const noexcept {
+    return m_virt_addr_bits;
+  }
 
   [[nodiscard]] std::uint32_t family() const noexcept { return m_family; }
   [[nodiscard]] std::uint32_t model() const noexcept { return m_model; }
   [[nodiscard]] std::uint32_t stepping() const noexcept { return m_stepping; }
-  [[nodiscard]] std::uint32_t processor_type() const noexcept { return m_processor_type; }
+  [[nodiscard]] std::uint32_t processor_type() const noexcept {
+    return m_processor_type;
+  }
 
   [[nodiscard]] std::uint32_t base_mhz() const noexcept { return m_base_mhz; }
   [[nodiscard]] std::uint32_t max_mhz() const noexcept { return m_max_mhz; }
   [[nodiscard]] std::uint32_t bus_mhz() const noexcept { return m_bus_mhz; }
 
-  [[nodiscard]] std::span<const CacheInfo> caches() const noexcept { return {m_caches.data(), m_num_caches}; }
-  [[nodiscard]] std::span<const TlbInfo> tlbs() const noexcept { return {m_tlbs.data(), m_num_tlbs}; }
-  [[nodiscard]] std::span<const TopologyInfo> topology() const noexcept { return {m_topology.data(), m_num_topology}; }
+  [[nodiscard]] std::span<const CacheInfo> caches() const noexcept {
+    return {m_caches.data(), m_num_caches};
+  }
+
+  [[nodiscard]] std::span<const TlbInfo> tlbs() const noexcept {
+    return {m_tlbs.data(), m_num_tlbs};
+  }
+
+  [[nodiscard]] std::span<const TopologyInfo> topology() const noexcept {
+    return {m_topology.data(), m_num_topology};
+  }
 
   [[nodiscard]] std::uint32_t max_leaf() const noexcept { return m_max_leaf; }
-  [[nodiscard]] std::uint32_t max_ext_leaf() const noexcept { return m_max_ext_leaf; }
-  [[nodiscard]] std::uint8_t apic_id_core_id_size() const noexcept { return m_apic_id_core_id_size; }
+  [[nodiscard]] std::uint32_t max_ext_leaf() const noexcept {
+    return m_max_ext_leaf;
+  }
 
-  template <Feature F> [[nodiscard]] constexpr bool has() const noexcept {
+  [[nodiscard]] std::uint8_t apic_id_core_id_size() const noexcept {
+    return m_apic_id_core_id_size;
+  }
+
+  template <Feature F>
+  [[nodiscard]] constexpr bool has() const noexcept {
     constexpr auto val = static_cast<std::uint32_t>(F);
     constexpr std::uint32_t leaf_base = (val >> 15) & 0xFF;
     constexpr std::uint32_t is_ext = (val >> 23) & 0x1;
-    constexpr std::uint32_t leaf = is_ext ? (leaf_base | 0x80000000) : leaf_base;
+    constexpr std::uint32_t leaf = is_ext ? leaf_base | 0x80000000 : leaf_base;
     constexpr std::uint32_t subleaf = (val >> 7) & 0xFF;
 
     constexpr std::uint32_t bit = val & 0x1F;
@@ -264,25 +376,20 @@ public:
       return (m_leaves[cache_idx][reg] & (1u << bit)) != 0;
     } else {
       if (is_ext) {
-        if (leaf > m_max_ext_leaf) {
-          return false;
-        }
+        if (leaf > m_max_ext_leaf) return false;
       } else {
-        if (leaf > m_max_leaf) {
-          return false;
-        }
+        if (leaf > m_max_leaf) return false;
       }
 
       const auto [eax, ebx, ecx, edx] = query(leaf, subleaf);
-      if constexpr (reg == static_cast<std::uint32_t>(Reg::EAX)) {
+      if constexpr (reg == static_cast<std::uint32_t>(Reg::EAX))
         return (eax & (1u << bit)) != 0;
-      } else if constexpr (reg == static_cast<std::uint32_t>(Reg::EBX)) {
+      else if constexpr (reg == static_cast<std::uint32_t>(Reg::EBX))
         return (ebx & (1u << bit)) != 0;
-      } else if constexpr (reg == static_cast<std::uint32_t>(Reg::ECX)) {
+      else if constexpr (reg == static_cast<std::uint32_t>(Reg::ECX))
         return (ecx & (1u << bit)) != 0;
-      } else {
+      else
         return (edx & (1u << bit)) != 0;
-      }
     }
   }
 
@@ -345,10 +452,10 @@ class CpuProfileManager {
 
   static std::uint64_t generate_fingerprint() noexcept;
 
-public:
-  const CpuInfo *register_cpu() noexcept;
-  [[nodiscard]] const CpuInfo *get_current() const noexcept;
+ public:
+  const CpuInfo* register_cpu() noexcept;
+  [[nodiscard]] const CpuInfo* get_current() const noexcept;
 };
 
 inline CpuProfileManager profile_manager;
-} // namespace kernel::hw
+}  // namespace kernel::hw

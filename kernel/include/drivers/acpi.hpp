@@ -4,4 +4,4 @@
 
 namespace kernel::drivers::acpi {
 void early_initialize() noexcept;
-} // namespace kernel::drivers::acpi
+}  // namespace kernel::drivers::acpi

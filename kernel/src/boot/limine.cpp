@@ -1,9 +1,13 @@
 #include "boot/boot.hpp"
 
 namespace kernel::boot {
-[[gnu::section(".limine_requests_start")]] volatile std::uint64_t start_marker[] = LIMINE_REQUESTS_START_MARKER;
-[[gnu::section(".limine_requests_end")]] volatile std::uint64_t end_marker[] = LIMINE_REQUESTS_END_MARKER;
-[[gnu::section(".limine_requests")]] volatile std::uint64_t base_revision[] = LIMINE_BASE_REVISION(6);
+[[gnu::section(
+    ".limine_requests_start")]] volatile std::uint64_t start_marker[] =
+    LIMINE_REQUESTS_START_MARKER;
+[[gnu::section(".limine_requests_end")]] volatile std::uint64_t end_marker[] =
+    LIMINE_REQUESTS_END_MARKER;
+[[gnu::section(".limine_requests")]] volatile std::uint64_t base_revision[] =
+    LIMINE_BASE_REVISION(6);
 
 [[gnu::section(".limine_requests")]]
 volatile limine_rsdp_request rsdp_request = {
@@ -47,4 +51,4 @@ volatile limine_executable_file_request executable_file_request = {
     .revision = 0,
     .response = nullptr,
 };
-} // namespace kernel::boot
+}  // namespace kernel::boot

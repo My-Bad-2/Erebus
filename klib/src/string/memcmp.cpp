@@ -2,7 +2,7 @@
 #include "string.h"
 
 namespace klib {
-int memcmp(const void *s1, const void *s2, size_t count) noexcept {
+int memcmp(const void* s1, const void* s2, size_t count) noexcept {
   if (count == 0 || s1 == s2) [[unlikely]] {
     return 0;
   }
@@ -99,4 +99,4 @@ int memcmp(const void *s1, const void *s2, size_t count) noexcept {
 
   return 0;
 }
-} // namespace klib
+}  // namespace klib

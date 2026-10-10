@@ -1,13 +1,14 @@
-#include "ctype.h"
-#include "stdlib.h"
 #include <cstdint>
 #include <type_traits>
+
+#include "ctype.h"
+#include "stdlib.h"
 
 namespace klib {
 namespace {
 template <typename T>
   requires std::is_integral_v<T> && std::is_signed_v<T>
-[[gnu::always_inline]] constexpr T atoX(const char *str) noexcept {
+[[gnu::always_inline]] constexpr T atoX(const char* str) noexcept {
   while (isspace(*str)) {
     ++str;
   }
@@ -31,11 +32,11 @@ template <typename T>
 
   return static_cast<T>(neg ? -res : res);
 }
-} // namespace
+}  // namespace
 
-int atoi(const char *str) noexcept { return atoX<int>(str); }
+int atoi(const char* str) noexcept { return atoX<int>(str); }
 
-long atol(const char *str) noexcept { return atoX<long>(str); }
+long atol(const char* str) noexcept { return atoX<long>(str); }
 
-long long atoll(const char *str) noexcept { return atoX<long long>(str); }
-} // namespace klib
+long long atoll(const char* str) noexcept { return atoX<long long>(str); }
+}  // namespace klib

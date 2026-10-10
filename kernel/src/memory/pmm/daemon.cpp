@@ -1,25 +1,27 @@
 #include "memory/pmm/daemon.hpp"
+
 #include "memory/pmm/router.hpp"
 #include "utils/logger.hpp"
 
 namespace kernel::memory::pmm {
 namespace {
 constexpr std::uint32_t COMPACTION_FRAG_THRESHOLD = 85;
-constexpr std::array RECLAIMABLE_ZONES = {PageMobility::Unmovable, PageMobility::Movable, PageMobility::Reclaimable};
+constexpr std::array RECLAIMABLE_ZONES = {
+    PageMobility::Unmovable, PageMobility::Movable, PageMobility::Reclaimable};
 
 struct alignas(64) DaemonControlBlock {
   std::atomic<bool> reclaim_pending{false};
   std::atomic<bool> compact_pending{false};
 
-  void *reclaim_thread{nullptr};
-  void *compact_thread{nullptr};
+  void* reclaim_thread{nullptr};
+  void* compact_thread{nullptr};
 };
 
-DaemonControlBlock *g_dcbs = nullptr;
+DaemonControlBlock* g_dcbs = nullptr;
 
 void reclaim_worker_loop(const std::uint32_t node_id) noexcept {
-  DaemonControlBlock &dcb = g_dcbs[node_id];
-  NumaNode &node = g_router.get_node(node_id);
+  DaemonControlBlock& dcb = g_dcbs[node_id];
+  NumaNode& node = g_router.get_node(node_id);
 
   while (true) {
     dcb.reclaim_pending.exchange(false, std::memory_order_acquire);
@@ -27,7 +29,7 @@ void reclaim_worker_loop(const std::uint32_t node_id) noexcept {
     bool pressure_resolved = true;
 
     for (const PageMobility mobility : RECLAIMABLE_ZONES) {
-      MobilityZone &zone = node.get_zone(mobility);
+      MobilityZone& zone = node.get_zone(mobility);
       const auto [min, low, high] = zone.get_watermarks();
 
       if (zone.get_free_pages() < high) {
@@ -49,12 +51,12 @@ void reclaim_worker_loop(const std::uint32_t node_id) noexcept {
 }
 
 void compaction_worker_loop(const std::uint32_t node_id) noexcept {
-  DaemonControlBlock &dcb = g_dcbs[node_id];
-  NumaNode &node = g_router.get_node(node_id);
+  DaemonControlBlock& dcb = g_dcbs[node_id];
+  NumaNode& node = g_router.get_node(node_id);
 
   while (true) {
     dcb.compact_pending.exchange(false, std::memory_order_acquire);
-    MobilityZone &zone = node.get_zone(PageMobility::Movable);
+    MobilityZone& zone = node.get_zone(PageMobility::Movable);
 
     if (zone.calculate_fragmentation_index() > COMPACTION_FRAG_THRESHOLD) {
       // Isolate a 2MB phys block which has few 4KB pages in use.
@@ -69,10 +71,11 @@ void compaction_worker_loop(const std::uint32_t node_id) noexcept {
     }
   }
 }
-} // namespace
+}  // namespace
 
 void wake_reclaim_daemon(const std::uint32_t node_id) noexcept {
-  // if (g_dcbs && !g_dcbs[node_id].reclaim_pending.exchange(true, std::memory_order_release)) {
+  // if (g_dcbs && !g_dcbs[node_id].reclaim_pending.exchange(true,
+  // std::memory_order_release)) {
   //   // TODO: Wake up thread via scheduler
   // }
 
@@ -80,10 +83,11 @@ void wake_reclaim_daemon(const std::uint32_t node_id) noexcept {
 }
 
 void wake_compaction_daemon(const std::uint32_t node_id) noexcept {
-  // if (g_dcbs && !g_dcbs[node_id].compact_pending.exchange(true, std::memory_order_release)) {
+  // if (g_dcbs && !g_dcbs[node_id].compact_pending.exchange(true,
+  // std::memory_order_release)) {
   //   // TODO: Wake up thread via scheduler
   // }
 
   utils::logger::fatal("Compaction Daemon not implemented yet!\n");
 }
-} // namespace kernel::memory::pmm
+}  // namespace kernel::memory::pmm

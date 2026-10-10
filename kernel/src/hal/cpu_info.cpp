@@ -6,35 +6,35 @@ namespace kernel::hw {
 namespace {
 constexpr std::uint32_t decode_amd_l2_assoc(std::uint32_t encoded) noexcept {
   switch (encoded) {
-  case 0x0:
-    return 0; // Disabled
-  case 0x1:
-    return 1; // Direct mapped
-  case 0x2:
-    return 2; // 2-way
-  case 0x4:
-    return 4; // 4-way
-  case 0x6:
-    return 8; // 8-way
-  case 0x8:
-    return 16; // 16-way
-  case 0xA:
-    return 32; // 32-way
-  case 0xB:
-    return 48; // 48-way
-  case 0xC:
-    return 64; // 64-way
-  case 0xD:
-    return 96; // 96-way
-  case 0xE:
-    return 128; // 128-way
-  case 0xF:
-    return 0xFF; // Fully associative
-  default:
-    return 0;
+    case 0x0:
+      return 0;  // Disabled
+    case 0x1:
+      return 1;  // Direct mapped
+    case 0x2:
+      return 2;  // 2-way
+    case 0x4:
+      return 4;  // 4-way
+    case 0x6:
+      return 8;  // 8-way
+    case 0x8:
+      return 16;  // 16-way
+    case 0xA:
+      return 32;  // 32-way
+    case 0xB:
+      return 48;  // 48-way
+    case 0xC:
+      return 64;  // 64-way
+    case 0xD:
+      return 96;  // 96-way
+    case 0xE:
+      return 128;  // 128-way
+    case 0xF:
+      return 0xFF;  // Fully associative
+    default:
+      return 0;
   }
 }
-} // namespace
+}  // namespace
 
 void CpuInfo::parse_brand() noexcept {
   if (m_max_ext_leaf >= 0x80000004) {
@@ -46,7 +46,8 @@ void CpuInfo::parse_brand() noexcept {
 }
 
 void CpuInfo::parse_caches() noexcept {
-  const std::uint32_t cache_leaf = (m_vendor == Vendor::Amd) ? 0x8000001D : 0x04;
+  const std::uint32_t cache_leaf =
+      (m_vendor == Vendor::Amd) ? 0x8000001D : 0x04;
 
   if ((m_vendor == Vendor::Amd && m_max_ext_leaf >= cache_leaf) ||
       (m_vendor == Vendor::Intel && m_max_leaf >= cache_leaf)) {
@@ -76,7 +77,7 @@ void CpuInfo::parse_tlb() noexcept {
     for (uint32_t i = 0; i < m_tlbs.size(); ++i) {
       const auto r = query(0x18, i);
       if ((r.edx & 0x1F) == 0) {
-        break; // Type 0 = Null
+        break;  // Type 0 = Null
       }
 
       TlbInfo t{};
@@ -104,15 +105,18 @@ void CpuInfo::parse_tlb() noexcept {
   }
 
   if (m_vendor == Vendor::Amd) {
-    auto push = [this](const std::uint32_t reg, const PageSize size, const bool is_l2) {
+    auto push = [this](const std::uint32_t reg, const PageSize size,
+                       const bool is_l2) {
       if (m_num_tlbs < m_tlbs.size()) {
-        const std::uint32_t d_entries = is_l2 ? ((reg >> 16) & 0xFFF) : ((reg >> 16) & 0xFF);
+        const std::uint32_t d_entries =
+            is_l2 ? ((reg >> 16) & 0xFFF) : ((reg >> 16) & 0xFF);
         if (d_entries > 0) {
           m_tlbs[m_num_tlbs++] = {
               .type = CacheType::Data,
               .page_size = size,
               .entries = d_entries,
-              .ways = is_l2 ? decode_amd_l2_assoc((reg >> 28) * 0xF) : ((reg >> 24) & 0xFF),
+              .ways = is_l2 ? decode_amd_l2_assoc((reg >> 28) * 0xF)
+                            : ((reg >> 24) & 0xFF),
           };
         }
       }
@@ -124,7 +128,8 @@ void CpuInfo::parse_tlb() noexcept {
               .type = CacheType::Instruction,
               .page_size = size,
               .entries = i_entries,
-              .ways = is_l2 ? decode_amd_l2_assoc((reg >> 12) & 0xF) : ((reg >> 8) & 0xFF),
+              .ways = is_l2 ? decode_amd_l2_assoc((reg >> 12) & 0xF)
+                            : ((reg >> 8) & 0xFF),
           };
         }
       }
@@ -154,7 +159,8 @@ void CpuInfo::parse_tlb() noexcept {
 }
 
 void CpuInfo::parse_topology() noexcept {
-  const std::uint32_t topo_leaf = (m_max_leaf >= 0x1F) ? 0x1F : ((m_max_leaf >= 0xB) ? 0xB : 0);
+  const std::uint32_t topo_leaf =
+      (m_max_leaf >= 0x1F) ? 0x1F : ((m_max_leaf >= 0xB) ? 0xB : 0);
 
   if (topo_leaf != 0) {
     for (std::uint32_t i = 0; i < m_topology.size(); ++i) {
@@ -299,6 +305,114 @@ void CpuInfo::initialize() noexcept {
   parse_tlb();
   parse_topology();
   parse_hypervisor();
+  decode_uarch();
+}
+
+UArch CpuInfo::decode_uarch() {
+  if (m_vendor == Vendor::Intel) {
+    if (m_family == 6) {
+      switch (m_model) {
+        case 0x1A:
+        case 0x1E:
+        case 0x1F:
+        case 0x2E:
+          return UArch::Nehalem;
+        case 0x25:
+        case 0x2C:
+        case 0x2F:
+          return UArch::Westmere;
+        case 0x2A:
+        case 0x2D:
+          return UArch::SandyBridge;
+        case 0x3A:
+        case 0x3E:
+          return UArch::IvyBridge;
+        case 0x3C:
+        case 0x3F:
+        case 0x45:
+        case 0x46:
+          return UArch::Haswell;
+        case 0x3D:
+        case 0x47:
+        case 0x4F:
+        case 0x56:
+          return UArch::Broadwell;
+        case 0x4E:
+        case 0x5E:
+          return UArch::Skylake;
+        case 0x55:
+          return UArch::CascadeLake;
+        case 0x8E:
+        case 0x9E:
+          return UArch::KabyLake_CoffeeLake;
+        case 0x7D:
+        case 0x7E:
+        case 0x9D:
+        case 0x6A:
+        case 0x6C:
+          return UArch::IceLake;
+        case 0x8C:
+        case 0x8D:
+          return UArch::TigerLake;
+        case 0x97:
+        case 0x9A:
+          return UArch::AlderLake;
+        case 0xB7:
+        case 0xBA:
+        case 0xBF:
+          return UArch::RaptorLake;
+        case 0xAA:
+        case 0xAC:
+          return UArch::MeteorLake;
+        case 0xC5:
+        case 0xC6:
+        case 0xBD:
+          return UArch::ArrowLake_LunarLake;
+        case 0x8F:
+          return UArch::SapphireRapids;
+        case 0xCF:
+          return UArch::EmeraldRapids;
+        case 0x37:
+        case 0x4A:
+        case 0x4D:
+        case 0x5A:
+        case 0x5D:
+          return UArch::Silvermont;
+        case 0x4C:
+        case 0x5C:
+        case 0x5F:
+        case 0x7A:
+          return UArch::Goldmont;
+        case 0x86:
+        case 0x96:
+          return UArch::Tremont;
+        case 0xBE:
+          return UArch::Gracemont;
+        default:
+          break;
+      }
+    }
+  } else if (m_vendor == Vendor::Amd) {
+    switch (m_family) {
+      case 0x10:
+        return UArch::K10;
+      case 0x15:
+        return UArch::BulldozerFamily;  // Bulldozer, Piledriver, Excavator
+      case 0x16:
+        return UArch::Jaguar_Puma;
+      case 0x17:
+        if (m_model < 0x30) return UArch::Zen1;  // Zen / Zen+
+        return UArch::Zen2;
+      case 0x19:
+        if (m_model < 0x10 || (m_model >= 0x20 && m_model < 0x60))
+          return UArch::Zen3;
+        return UArch::Zen4;  // Genoa, Raphael
+      case 0x1A:
+        return UArch::Zen5;
+    }
+  }
+
+  return UArch::Unknown;
 }
 
 namespace {
@@ -320,12 +434,13 @@ std::uint64_t CpuProfileManager::generate_fingerprint() noexcept {
   return (core_type << 32) | fms;
 }
 
-const CpuInfo *CpuProfileManager::register_cpu() noexcept {
+const CpuInfo* CpuProfileManager::register_cpu() noexcept {
   const std::uint64_t fingerprint = generate_fingerprint();
 
   const std::size_t active = m_active_profiles.load(std::memory_order_acquire);
   for (std::size_t i = 0; i < active; ++i) {
-    if (m_profiles[i].fingerprint.load(std::memory_order_relaxed) == fingerprint) {
+    if (m_profiles[i].fingerprint.load(std::memory_order_relaxed) ==
+        fingerprint) {
       return &m_profiles[i].info;
     }
   }
@@ -333,12 +448,14 @@ const CpuInfo *CpuProfileManager::register_cpu() noexcept {
   {
     utils::IrqSaveGuard guard(cpu_profile_lock);
 
-    const std::size_t curr_active = m_active_profiles.load(std::memory_order_relaxed);
+    const std::size_t curr_active =
+        m_active_profiles.load(std::memory_order_relaxed);
 
     const std::size_t new_idx = curr_active;
     if (new_idx < MAX_ARCH_PROFILES) {
       m_profiles[new_idx].info.initialize();
-      m_profiles[new_idx].fingerprint.store(fingerprint, std::memory_order_relaxed);
+      m_profiles[new_idx].fingerprint.store(fingerprint,
+                                            std::memory_order_relaxed);
       m_active_profiles.store(new_idx + 1, std::memory_order_release);
 
       return &m_profiles[new_idx].info;
@@ -348,16 +465,17 @@ const CpuInfo *CpuProfileManager::register_cpu() noexcept {
   return &m_profiles[0].info;
 }
 
-const CpuInfo *CpuProfileManager::get_current() const noexcept {
+const CpuInfo* CpuProfileManager::get_current() const noexcept {
   const std::uint64_t fingerprint = generate_fingerprint();
   const std::size_t active = m_active_profiles.load(std::memory_order_relaxed);
 
   for (std::size_t i = 0; i < active; ++i) {
-    if (m_profiles[i].fingerprint.load(std::memory_order_relaxed) == fingerprint) {
+    if (m_profiles[i].fingerprint.load(std::memory_order_relaxed) ==
+        fingerprint) {
       return &m_profiles[i].info;
     }
   }
 
   return nullptr;
 }
-} // namespace kernel::hw
+}  // namespace kernel::hw

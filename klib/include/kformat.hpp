@@ -1,179 +1,261 @@
+/**
+ * @file kformat.hpp
+ * @brief Main frontend and parser for the string formatting engine.
+ *
+ * This file coordinates the formatting pipeline by parsing runtime format
+ * specifiers, matching them with the compile-time verified `format_string`
+ * indices, and safely dispatching the corresponding arguments to their
+ * respective type formatters.
+ */
+
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
 
-#include "kformat/format_buffer.hpp"
 #include "kformat/format_string.hpp"
-#include "kformat/formatter.hpp"
+#include "kformat/formatters.hpp"
+#include "kformat/string_buffer.hpp"
 
 namespace klib {
-	namespace detail {
-		constexpr const char *parse_spec(const char *p, FormatSpec &spec) noexcept {
-			// If there's no format specifier, fast forward and exit.
-			if (*p != ':') {
-				while (*p != '\0' && *p != '}') {
-					++p;
-				}
+namespace detail {
+/**
+ * @brief Parses formatting directives inside a curly-brace placeholder.
+ *
+ * @param view The full format string view.
+ * @param pos The current index positioned immediately after the parsed argument
+ * index or `{`.
+ * @param spec The `FormatSpec` instance to populate with parsed directives.
+ * @return The advanced string index positioned exactly after the closing `}`.
+ *
+ * @note Syntax rules: `[[fill]align][sign][#][0][width][.precision][type]`
+ */
+constexpr std::size_t parse_spec(const std::string_view view, std::size_t pos,
+                                 FormatSpec& spec) noexcept {
+  // If there's no format specifier (e.g. `{0}` or `{}`), fast forward to
+  // closing brace.
+  if (pos >= view.size() || view[pos] != ':') {
+    while (pos < view.size() && view[pos] != '}') {
+      ++pos;
+    }
 
-				if (*p == '}') {
-					++p;
-				}
+    return (pos < view.size() && view[pos] == '}') ? pos + 1 : pos;
+  }
 
-				return p;
-			}
+  ++pos;  // Skip ':'
+  const std::size_t spec_start = pos;
 
-			const char *spec_start = p + 1;
-			const char *spec_end = spec_start;
-			while (*spec_end != '\0' && *spec_end != '}') {
-				spec_end++;
-			}
+  // Find the end of the specifier block boundary
+  std::size_t spec_end = pos;
+  while (spec_end < view.size() && view[spec_end] != '}') {
+    ++spec_end;
+  }
 
-			spec.custom = std::string_view(spec_start, static_cast<std::size_t>(spec_end - spec_start));
+  // Capture the entire raw specifier block in case formatters need it
+  spec.custom = view.substr(spec_start, spec_end - spec_start);
 
-			p++; // skip ':'
+  // Parse Fill and Alignment
+  if (pos + 1 < spec_end &&
+      (view[pos + 1] == '<' || view[pos + 1] == '>' || view[pos + 1] == '^')) {
+    spec.fill = view[pos];
+    spec.align = view[pos + 1];
+    pos += 2;
+  } else if (pos < spec_end &&
+             (view[pos] == '<' || view[pos] == '>' || view[pos] == '^')) {
+    spec.align = view[pos++];
+  }
 
-			// Lookahead to see if the next character is an alignment char
-			if (*p != '\0' && *(p + 1) != '\0' && (*(p + 1) == '<' || *(p + 1) == '>' || *(p + 1) == '^')) {
-				spec.fill = *p;
-				spec.align = *(p + 1);
-				p += 2;
-			} else if (*p == '<' || *p == '>' || *p == '^') {
-				spec.align = *p++;
-			}
+  // Parse Sign Prefix
+  if (pos < spec_end &&
+      (view[pos] == '+' || view[pos] == '-' || view[pos] == ' ')) {
+    spec.sign = view[pos++];
+  }
 
-			// Parse Alternate Form [#]
-			if (*p == '#') {
-				spec.alt_form = true;
-				p++;
-			}
+  // Parse Alternate Form
+  if (pos < spec_end && view[pos] == '#') {
+    spec.alt_form = true;
+    ++pos;
+  }
 
-			//	Parse Implicit Zero-Padding [0]
-			if (*p == '0' && spec.align == 0) {
-				spec.fill = '0';
-				spec.align = '>'; // Zero-padding implies right-alignment
-				p++;
-			}
+  // Parse Implicit Zero-Padding
+  if (pos < spec_end && view[pos] == '0' && spec.align == '\0') {
+    spec.fill = '0';
+    // Zero-padding inherently implies right-alignment for numbers
+    spec.align = '>';
+    ++pos;
+  }
 
-			// Parse width
-			while (*p >= '0' && *p <= '9') {
-				spec.width = (spec.width * 10) + (*p - '0');
-				p++;
-			}
+  // Parse Width
+  while (pos < spec_end && view[pos] >= '0' && view[pos] <= '9') {
+    spec.width = (spec.width * 10) + (view[pos] - '0');
+    ++pos;
+  }
 
-			// Parse precision
-			if (*p == '.') {
-				p++;
-				spec.precision = 0;
+  // Parse Precision
+  if (pos < spec_end && view[pos] == '.') {
+    ++pos;
+    spec.precision = 0;
 
-				while (*p >= '0' && *p <= '9') {
-					spec.precision = (spec.precision * 10) + (*p - '0');
-					p++;
-				}
-			}
+    while (pos < spec_end && view[pos] >= '0' && view[pos] <= '9') {
+      spec.precision = (spec.precision * 10) + (view[pos] - '0');
+      ++pos;
+    }
+  }
 
-			// Parse type
-			switch (*p) {
-				case 'x': {
-					spec.base = 16;
-					spec.uppercase = false;
-					p++;
-					break;
-				}
-				case 'X': {
-					spec.base = 16;
-					spec.uppercase = true;
-					p++;
-					break;
-				}
-				case 'p': {
-					spec.base = 16;
-					spec.uppercase = false;
-					p++;
-					break;
-				}
-				case 'b': {
-					spec.base = 2;
-					p++;
-					break;
-				}
-				case 'o': {
-					spec.base = 8;
-					p++;
-					break;
-				}
-				default:
-					break;
-			}
+  // Parse Type Code
+  if (pos < spec_end) {
+    switch (view[pos++]) {
+      case 'x':
+        spec.base = 16;
+        spec.uppercase = false;
+        break;
+      case 'X':
+        spec.base = 16;
+        spec.uppercase = true;
+        break;
+      case 'p':
+        spec.base = 16;
+        spec.uppercase = false;
+        spec.alt_form = true;
+        break;
+      case 'b':
+        spec.base = 2;
+        spec.uppercase = false;
+        break;
+      case 'B':
+        spec.base = 2;
+        spec.uppercase = true;
+        break;
+      case 'o':
+        spec.base = 8;
+        break;
+      default:
+        break;
+    }
+  }
 
-			// forward past the specifier block
-			p = spec_end;
-			if (*p == '}') {
-				p++;
-			}
+  return spec_end < view.size() ? spec_end + 1 : spec_end;
+}
 
-			return p;
-		}
-	} // namespace detail
+/**
+ * @brief Dispatcher resolving a runtime index to a variadic template argument.
+ *
+ * @tparam CurrentIdx The recursion counter.
+ * @param target_idx The resolved runtime format positional index.
+ * @param sink The buffer output sink.
+ * @param spec The format specifications.
+ * @param arg The active head argument.
+ * @param args The remaining argument tail.
+ */
+template <std::size_t CurrentIdx = 0, typename Sink, typename T, typename... Ts>
+constexpr void dispatch_arg(std::size_t target_idx, Sink& sink,
+                            const FormatSpec& spec, T&& arg,
+                            Ts&&... args) noexcept {
+  if (target_idx == CurrentIdx) {
+    formatter<std::decay_t<T>>::format(sink, arg, spec);
+    return;
+  }
 
-	template<typename Sink, typename... Args>
-	constexpr void format_to(Sink &sink, format_string<Args...> fmt, Args &&...args) noexcept {
-		const char *p = fmt;
-		std::size_t auto_idx = 0;
+  if constexpr (sizeof...(Ts) > 0)
+    dispatch_arg<CurrentIdx + 1>(target_idx, sink, spec,
+                                 std::forward<Ts>(args)...);
+}
 
-		auto print_arg = [&](std::size_t target_idx, const FormatSpec &spec) {
-			std::size_t curr = 0;
-			bool found = false;
+// No-op dispatcher when parameter pack is empty
+template <std::size_t CurrentIdx = 0, typename Sink>
+constexpr void dispatch_arg(std::size_t, Sink&, const FormatSpec&) noexcept {}
+}  // namespace detail
 
-			auto check = [&]<typename T0>(T0 &&arg) {
-				if (curr == target_idx && !found) {
-					using Type = std::decay_t<T0>;
-					formatter<Type>::format(sink, arg, spec);
-					found = true;
-				}
+/**
+ * @brief Processes a verified format string and dispatches outputs to a sink
+ * buffer.
+ *
+ * @param sink The target sink object exposing `.push(char)` and
+ * `.append(string_view)`.
+ * @param fmt The compile-time validated format string struct.
+ * @param args Variadic payload containing formatting values.
+ */
+template <typename Sink, typename... Args>
+constexpr void format_to(Sink& sink, format_string<Args...> fmt,
+                         Args&&... args) noexcept {
+  const std::string_view view = fmt.get();
+  std::size_t pos = 0;
+  std::size_t auto_idx = 0;
 
-				++curr;
-			};
+  while (pos < view.size()) {
+    if (view[pos] == '{') {
+      // Escaped '{'
+      if (pos + 1 < view.size() && view[pos + 1] == '{') {
+        sink.push('{');
+        pos += 2;
+        continue;
+      }
 
-			(check(std::forward<Args>(args)), ...);
-		};
+      ++pos;  // Skip '{'
+      std::size_t arg_idx = 0;
 
-		while (*p) {
-			if (*p == '{' && *(p + 1) == '{') {
-				sink.push('{');
-				p += 2;
-			} else if (*p == '}' && *(p + 1) == '}') {
-				sink.push('}');
-				p += 2;
-			} else if (*p == '{') {
-				++p;
-				std::size_t arg_idx = 0;
+      // Parse positional argument index
+      if (pos < view.size() && view[pos] >= '0' && view[pos] <= '9') {
+        while (pos < view.size() && view[pos] >= '0' && view[pos] <= '9') {
+          arg_idx = (arg_idx * 10) + (view[pos] - '0');
+          ++pos;
+        }
+      } else {
+        arg_idx = auto_idx++;
+      }
 
-				if (*p >= '0' && *p <= '9') {
-					while (*p >= '0' && *p <= '9') {
-						arg_idx = (arg_idx * 10) + (*p - '0');
-						++p;
-					}
-				} else {
-					arg_idx = auto_idx++;
-				}
+      FormatSpec spec;
+      pos = detail::parse_spec(view, pos, spec);
 
-				FormatSpec spec;
-				p = detail::parse_spec(p, spec);
+      detail::dispatch_arg(arg_idx, sink, spec, std::forward<Args>(args)...);
+    } else if (view[pos] == '}') {
+      // Escaped '}'
+      if (pos + 1 < view.size() && view[pos + 1] == '}') {
+        sink.push('}');
+        pos += 2;
+      } else {
+        ++pos;  // Malformed unescaped brace.
+      }
+    } else {
+      sink.push(view[pos++]);
+    }
+  }
+}
 
-				print_arg(arg_idx, spec);
-			} else {
-				sink.push(*p++);
-			}
-		}
-	}
+/**
+ * @brief Pointer-and-size wrapper for formatted printing into a memory block.
+ *
+ * @param buffer Raw char pointer to target block.
+ * @param max_size Absolute bound of the target memory array (including
+ * terminator).
+ * @param fmt Verified formatting payload.
+ * @param args Target variables.
+ * @return Total number of bytes written (or attempted, if truncated).
+ */
+template <typename... Args>
+constexpr std::size_t kprint(char* buffer, const std::size_t max_size,
+                             format_string<Args...> fmt,
+                             Args&&... args) noexcept {
+  StringBuffer buf(buffer, max_size);
+  format_to(buf, fmt, std::forward<Args>(args)...);
+  return buf.finish();
+}
 
-	template<typename... Args>
-	constexpr std::size_t kprint(char *buffer, const std::size_t max_size, format_string<Args...> fmt,
-															 Args &&...args) noexcept {
-		StringBuffer buf(buffer, max_size);
-		format_to(buf, fmt, std::forward<Args>(args)...);
-		return buf.finish();
-	}
-} // namespace klib
+/**
+ * @brief Span-based wrapper for formatted printing into a memory block.
+ *
+ * @param buffer Bounds-checked span describing the memory payload.
+ * @param fmt Verified formatting payload.
+ * @param args Target variables.
+ * @return Total number of bytes written (or attempted, if truncated).
+ */
+template <typename... Args>
+constexpr std::size_t kprint(const std::span<char> buffer,
+                             format_string<Args...> fmt,
+                             Args&&... args) noexcept {
+  StringBuffer buf(buffer);
+  format_to(buf, fmt, std::forward<Args>(args)...);
+  return buf.finish();
+}
+}  // namespace klib

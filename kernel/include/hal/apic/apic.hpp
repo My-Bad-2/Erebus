@@ -53,4 +53,4 @@ enum class TimerDivide : std::uint8_t {
   Div128 = 0b1010,
   Div1 = 0b1011,
 };
-} // namespace kernel::hw::apic
+}  // namespace kernel::hw::apic

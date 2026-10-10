@@ -1,9 +1,10 @@
-#include "../include/string.hpp"
-#include "string.h"
 #include <bitset>
 
+#include "../include/string.hpp"
+#include "string.h"
+
 namespace klib {
-void *memset(void *dest, const int ch, const size_t count) noexcept {
+void* memset(void* dest, const int ch, const size_t count) noexcept {
   using namespace string;
 
   if (count == 0) [[unlikely]] {
@@ -15,11 +16,12 @@ void *memset(void *dest, const int ch, const size_t count) noexcept {
   const auto byte_val = static_cast<std::uint8_t>(ch);
   const std::uint64_t v8 = broadcast_byte(byte_val);
 
-  const auto base = reinterpret_cast<std::uintptr_t>(dest); // NOLINT(*-pro-type-reinterpret-cast)
+  const auto base = reinterpret_cast<std::uintptr_t>(
+      dest);  // NOLINT(*-pro-type-reinterpret-cast)
 
   auto store = [base]<typename T>(T val, const std::size_t offset) {
     // NOLINTNEXTLINE(*-pro-type-reinterpret-cast, *-no-int-to-ptr)
-    unaligned_store<T>(reinterpret_cast<void *>(base + offset), val);
+    unaligned_store<T>(reinterpret_cast<void*>(base + offset), val);
   };
 
   if (count <= 16) [[likely]] {
@@ -62,4 +64,4 @@ void *memset(void *dest, const int ch, const size_t count) noexcept {
   hw_rep_stosb(dest, byte_val, count);
   return dest;
 }
-} // namespace klib
+}  // namespace klib

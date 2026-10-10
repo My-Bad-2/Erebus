@@ -1,22 +1,25 @@
 #include "memory/vmm/vma/vma.hpp"
 
 namespace kernel::memory::vmm {
-std::expected<void, Error> AddressSpace::protect(const VirtualAddress addr, const std::size_t size_bytes,
-                                                 const AccessFlags new_flags) noexcept {
-  if (!addr.is_aligned(PAGE_SIZE) || !utils::maths::is_aligned(size_bytes, PAGE_SIZE)) {
+std::expected<void, Error> AddressSpace::protect(
+    const VirtualAddress addr, const std::size_t size_bytes,
+    const AccessFlags new_flags) noexcept {
+  if (!addr.is_aligned(PAGE_SIZE) ||
+      !utils::maths::is_aligned(size_bytes, PAGE_SIZE)) {
     return std::unexpected(Error::InvalidAlignment);
   }
 
   utils::ExclusivePreemptGuard guard(m_as_lock);
 
   std::uint64_t floor_key;
-  VMArea *first_vma = nullptr;
-  if (!m_vma_tree.get_floor(addr.value(), floor_key, first_vma) || addr < first_vma->start) {
+  VMArea* first_vma = nullptr;
+  if (!m_vma_tree.get_floor(addr.value(), floor_key, first_vma) ||
+      addr < first_vma->start) {
     return std::unexpected(Error::NotMapped);
   }
 
   const VirtualAddress end_addr = addr + size_bytes;
-  VMArea *validate_vma = first_vma;
+  VMArea* validate_vma = first_vma;
   VirtualAddress validate_addr = addr;
 
   while (validate_addr < end_addr) {
@@ -26,7 +29,8 @@ std::expected<void, Error> AddressSpace::protect(const VirtualAddress addr, cons
 
     const auto p_size = validate_vma->flags.get_page_size();
     const std::size_t bpp = get_page_bytes(p_size);
-    const auto chunk_end = VirtualAddress{std::min(validate_vma->end.value(), end_addr.value())};
+    const auto chunk_end =
+        VirtualAddress{std::min(validate_vma->end.value(), end_addr.value())};
 
     if (!validate_addr.is_aligned(bpp) || !chunk_end.is_aligned(bpp)) {
       return std::unexpected(Error::InvalidAlignment);
@@ -36,7 +40,7 @@ std::expected<void, Error> AddressSpace::protect(const VirtualAddress addr, cons
     validate_vma = validate_vma->next_vma;
   }
 
-  VMArea *curr_vma = first_vma;
+  VMArea* curr_vma = first_vma;
   VirtualAddress curr_addr = addr;
 
   while (curr_addr < end_addr) {
@@ -50,7 +54,8 @@ std::expected<void, Error> AddressSpace::protect(const VirtualAddress addr, cons
       curr_vma = *res;
     }
 
-    const auto chunk_end = VirtualAddress{std::min(curr_vma->end.value(), end_addr.value())};
+    const auto chunk_end =
+        VirtualAddress{std::min(curr_vma->end.value(), end_addr.value())};
 
     // Split Tail
     if (chunk_end < curr_vma->end) {
@@ -63,7 +68,9 @@ std::expected<void, Error> AddressSpace::protect(const VirtualAddress addr, cons
     curr_vma->flags.set_access(new_flags);
 
     const std::size_t chunk_size = chunk_end.value() - curr_addr.value();
-    if (auto res = m_pagemap.protect_virtual_range(curr_addr, chunk_size, new_flags); !res) {
+    if (auto res =
+            m_pagemap.protect_virtual_range(curr_addr, chunk_size, new_flags);
+        !res) {
       return std::unexpected(res.error());
     }
 
@@ -75,21 +82,24 @@ std::expected<void, Error> AddressSpace::protect(const VirtualAddress addr, cons
   return {};
 }
 
-std::expected<void, Error> AddressSpace::lock_memory(VirtualAddress addr, std::size_t size_bytes) noexcept {
-  if (!addr.is_aligned(PAGE_SIZE) || !utils::maths::is_aligned(size_bytes, PAGE_SIZE)) {
+std::expected<void, Error> AddressSpace::lock_memory(
+    VirtualAddress addr, std::size_t size_bytes) noexcept {
+  if (!addr.is_aligned(PAGE_SIZE) ||
+      !utils::maths::is_aligned(size_bytes, PAGE_SIZE)) {
     return std::unexpected(Error::InvalidAlignment);
   }
 
   utils::ExclusivePreemptGuard guard(m_as_lock);
 
   std::uint64_t key;
-  VMArea *first_vma = nullptr;
-  if (!m_vma_tree.get_floor(addr.value(), key, first_vma) || addr < first_vma->start || addr >= first_vma->end) {
+  VMArea* first_vma = nullptr;
+  if (!m_vma_tree.get_floor(addr.value(), key, first_vma) ||
+      addr < first_vma->start || addr >= first_vma->end) {
     return std::unexpected(Error::NotMapped);
   }
 
   const VirtualAddress end_addr = addr + size_bytes;
-  const VMArea *validate_vma = first_vma;
+  const VMArea* validate_vma = first_vma;
   VirtualAddress validate_addr = addr;
   while (validate_addr < end_addr) {
     if (!validate_vma || validate_vma->start > validate_addr) {
@@ -98,7 +108,8 @@ std::expected<void, Error> AddressSpace::lock_memory(VirtualAddress addr, std::s
 
     const PageSize p_size = validate_vma->flags.get_page_size();
     const std::size_t bpp = get_page_bytes(p_size);
-    const auto chunk_end = VirtualAddress{std::min(validate_vma->end.value(), end_addr.value())};
+    const auto chunk_end =
+        VirtualAddress{std::min(validate_vma->end.value(), end_addr.value())};
 
     if (!validate_addr.is_aligned(bpp) || !chunk_end.is_aligned(bpp)) {
       return std::unexpected(Error::InvalidAlignment);
@@ -108,7 +119,7 @@ std::expected<void, Error> AddressSpace::lock_memory(VirtualAddress addr, std::s
     validate_vma = validate_vma->next_vma;
   }
 
-  VMArea *curr_vma = first_vma;
+  VMArea* curr_vma = first_vma;
   VirtualAddress curr_addr = addr;
 
   while (curr_addr < end_addr) {
@@ -121,7 +132,8 @@ std::expected<void, Error> AddressSpace::lock_memory(VirtualAddress addr, std::s
       curr_vma = *res;
     }
 
-    const auto chunk_end = VirtualAddress{std::min(curr_vma->end.value(), end_addr.value())};
+    const auto chunk_end =
+        VirtualAddress{std::min(curr_vma->end.value(), end_addr.value())};
     if (chunk_end < curr_vma->end) {
       auto res = split_vma(curr_vma, chunk_end);
       if (!res) {
@@ -142,7 +154,8 @@ std::expected<void, Error> AddressSpace::lock_memory(VirtualAddress addr, std::s
       const VirtualAddress fault_page = curr_addr + i;
 
       if (!m_pagemap.translate(fault_page)) {
-        const auto fault_res = resolve_vma_fault_locked(curr_vma, fault_page, fault_type);
+        const auto fault_res =
+            resolve_vma_fault_locked(curr_vma, fault_page, fault_type);
         if (!fault_res) {
           return std::unexpected(fault_res.error());
         }
@@ -157,23 +170,26 @@ std::expected<void, Error> AddressSpace::lock_memory(VirtualAddress addr, std::s
   return {};
 }
 
-auto AddressSpace::unlock_memory(const VirtualAddress addr, const std::size_t size_bytes) noexcept
+auto AddressSpace::unlock_memory(const VirtualAddress addr,
+                                 const std::size_t size_bytes) noexcept
     -> std::expected<void, Error> {
-  if (!addr.is_aligned(PAGE_SIZE) || !utils::maths::is_aligned(size_bytes, PAGE_SIZE)) {
+  if (!addr.is_aligned(PAGE_SIZE) ||
+      !utils::maths::is_aligned(size_bytes, PAGE_SIZE)) {
     return std::unexpected(Error::InvalidAlignment);
   }
 
   utils::ExclusivePreemptGuard guard(m_as_lock);
 
   std::uint64_t floor_key;
-  VMArea *first_vma = nullptr;
-  if (!m_vma_tree.get_floor(addr.value(), floor_key, first_vma) || addr < first_vma->start) {
+  VMArea* first_vma = nullptr;
+  if (!m_vma_tree.get_floor(addr.value(), floor_key, first_vma) ||
+      addr < first_vma->start) {
     return std::unexpected(Error::NotMapped);
   }
 
   const VirtualAddress end_addr = addr + size_bytes;
 
-  VMArea *validate_vma = first_vma;
+  VMArea* validate_vma = first_vma;
   VirtualAddress validate_addr = addr;
   while (validate_addr < end_addr) {
     if (!validate_vma || validate_vma->start > validate_addr) {
@@ -182,7 +198,8 @@ auto AddressSpace::unlock_memory(const VirtualAddress addr, const std::size_t si
 
     const PageSize p_size = validate_vma->flags.get_page_size();
     const std::size_t bpp = get_page_bytes(p_size);
-    const auto chunk_end = VirtualAddress{std::min(validate_vma->end.value(), end_addr.value())};
+    const auto chunk_end =
+        VirtualAddress{std::min(validate_vma->end.value(), end_addr.value())};
 
     if (!validate_addr.is_aligned(bpp) || !chunk_end.is_aligned(bpp)) {
       return std::unexpected(Error::InvalidAlignment);
@@ -192,7 +209,7 @@ auto AddressSpace::unlock_memory(const VirtualAddress addr, const std::size_t si
     validate_vma = validate_vma->next_vma;
   }
 
-  VMArea *curr_vma = first_vma;
+  VMArea* curr_vma = first_vma;
   VirtualAddress curr_addr = addr;
 
   while (curr_addr < end_addr) {
@@ -205,7 +222,8 @@ auto AddressSpace::unlock_memory(const VirtualAddress addr, const std::size_t si
       curr_vma = *res;
     }
 
-    const VirtualAddress chunk_end = VirtualAddress{std::min(curr_vma->end.value(), end_addr.value())};
+    const VirtualAddress chunk_end =
+        VirtualAddress{std::min(curr_vma->end.value(), end_addr.value())};
 
     if (chunk_end < curr_vma->end) {
       auto res = split_vma(curr_vma, chunk_end);
@@ -224,12 +242,14 @@ auto AddressSpace::unlock_memory(const VirtualAddress addr, const std::size_t si
   return {};
 }
 
-auto AddressSpace::evict_page(VirtualAddress addr) noexcept -> std::expected<void, Error> {
+auto AddressSpace::evict_page(VirtualAddress addr) noexcept
+    -> std::expected<void, Error> {
   utils::ExclusivePreemptGuard guard(m_as_lock);
 
   std::uint64_t floor_key;
-  VMArea *vma = nullptr;
-  if (!m_vma_tree.get_floor(addr.value(), floor_key, vma) || addr < vma->start || addr >= vma->end) {
+  VMArea* vma = nullptr;
+  if (!m_vma_tree.get_floor(addr.value(), floor_key, vma) ||
+      addr < vma->start || addr >= vma->end) {
     return std::unexpected(Error::NotMapped);
   }
 
@@ -246,8 +266,9 @@ auto AddressSpace::evict_page(VirtualAddress addr) noexcept -> std::expected<voi
   }
 
   const bool is_huge = (page_size != PageSize::Size4K);
-  tlb::ShootdownCoordinator::broadcast(&m_pagemap, aligned_addr, bytes_per_page, is_huge);
+  tlb::ShootdownCoordinator::broadcast(&m_pagemap, aligned_addr, bytes_per_page,
+                                       is_huge);
 
   return {};
 }
-} // namespace kernel::memory::vmm
+}  // namespace kernel::memory::vmm

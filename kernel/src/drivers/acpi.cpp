@@ -1,9 +1,10 @@
 #include "drivers/acpi.hpp"
-#include "utils/logger.hpp"
 
 #include <uacpi/uacpi.h>
 
 #include <cstddef>
+
+#include "utils/logger.hpp"
 
 namespace kernel::drivers::acpi {
 namespace {
@@ -25,10 +26,10 @@ void setup_spcr() {
     return;
   }
 
-  const acpi_spcr *table = *spcr;
-  utils::logger::get_debug_console(table);
+  const acpi_spcr* table = *spcr;
+  utils::logger::initialize(table);
 }
-} // namespace
+}  // namespace
 
 void early_initialize() noexcept {
   uacpi_setup_early_table_access(&early_buf, sizeof(early_buf));
@@ -36,4 +37,4 @@ void early_initialize() noexcept {
   // Setup SPCR console if available
   setup_spcr();
 }
-} // namespace kernel::drivers::acpi
+}  // namespace kernel::drivers::acpi

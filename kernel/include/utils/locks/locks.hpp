@@ -12,7 +12,8 @@ namespace detail {
 constexpr std::uint32_t BASE_PAUSE_LOOPS = 64;
 constexpr std::uint32_t BASE_WAIT_TSC = 2000;
 
-[[gnu::always_inline]] inline void wait_monitor(std::atomic<std::uint32_t> *addr, std::uint32_t curr) noexcept {
+[[gnu::always_inline]] inline void wait_monitor(
+    std::atomic<std::uint32_t>* addr, std::uint32_t curr) noexcept {
   if (EREBUS_STATIC_BRANCH_UNLIKELY(hw::detail::use_waitpkg)) {
     hw::umonitor(addr);
     if (addr->load(std::memory_order_relaxed) == curr) {
@@ -39,17 +40,19 @@ constexpr std::uint32_t BASE_WAIT_TSC = 2000;
     }
   }
 }
-} // namespace detail
+}  // namespace detail
 
 class TicketSpinlock {
-  alignas(std::hardware_destructive_interference_size) std::atomic<std::uint32_t> m_next_ticket{0};
-  alignas(std::hardware_destructive_interference_size) std::atomic<std::uint32_t> m_now_serving{0};
+  alignas(std::hardware_destructive_interference_size)
+      std::atomic<std::uint32_t> m_next_ticket{0};
+  alignas(std::hardware_destructive_interference_size)
+      std::atomic<std::uint32_t> m_now_serving{0};
 
-public:
+ public:
   constexpr TicketSpinlock() noexcept = default;
 
-  TicketSpinlock(const TicketSpinlock &) = delete;
-  TicketSpinlock &operator=(const TicketSpinlock &) = delete;
+  TicketSpinlock(const TicketSpinlock&) = delete;
+  TicketSpinlock& operator=(const TicketSpinlock&) = delete;
 
   void lock() noexcept;
   void unlock() noexcept;
@@ -66,13 +69,15 @@ union RWState {
 };
 
 class alignas(std::hardware_destructive_interference_size) RWLock {
-  alignas(std::hardware_destructive_interference_size) TicketSpinlock m_write_queue;
-  alignas(std::hardware_destructive_interference_size) std::atomic<std::uint32_t> m_rw_state{0};
+  alignas(std::hardware_destructive_interference_size)
+      TicketSpinlock m_write_queue;
+  alignas(std::hardware_destructive_interference_size)
+      std::atomic<std::uint32_t> m_rw_state{0};
 
-public:
+ public:
   constexpr RWLock() noexcept = default;
-  RWLock(const RWLock &) = delete;
-  RWLock &operator=(const RWLock &) = delete;
+  RWLock(const RWLock&) = delete;
+  RWLock& operator=(const RWLock&) = delete;
 
   void read_lock() noexcept;
   void read_unlock() noexcept;
@@ -86,10 +91,10 @@ struct alignas(std::hardware_destructive_interference_size) CLHNode {
 };
 
 class CLHQueue {
-  std::atomic<CLHNode *> m_tail;
+  std::atomic<CLHNode*> m_tail;
   CLHNode m_dummy_node{};
 
-public:
+ public:
   constexpr CLHQueue() noexcept : m_tail(&m_dummy_node) {}
 
   void wait_in_queue() noexcept;
@@ -102,12 +107,12 @@ class alignas(std::hardware_destructive_interference_size) QSpinlock {
 
   [[gnu::cold]] void slow_path_lock() noexcept;
 
-public:
+ public:
   constexpr QSpinlock() noexcept = default;
-  QSpinlock(const QSpinlock &) = delete;
-  QSpinlock &operator=(const QSpinlock &) = delete;
+  QSpinlock(const QSpinlock&) = delete;
+  QSpinlock& operator=(const QSpinlock&) = delete;
 
   void lock() noexcept;
   void unlock() noexcept;
 };
-} // namespace kernel::utils
+}  // namespace kernel::utils

@@ -29,7 +29,7 @@ enum class PatMemoryType : std::uint64_t {
 class PatMsr {
   std::uint64_t m_data;
 
-public:
+ public:
   constexpr explicit PatMsr(const std::uint64_t val = 0) : m_data(val) {}
   [[nodiscard]] std::uint64_t raw() const noexcept { return m_data; }
 
@@ -43,9 +43,11 @@ public:
   BF_RW(std::uint8_t, pat7, 56, 8)
 };
 
-void free_table_recursive(const PhysicalAddress table_phys, const std::uint8_t lvl) noexcept {
+void free_table_recursive(const PhysicalAddress table_phys,
+                          const std::uint8_t lvl) noexcept {
   if (lvl > 1) {
-    const auto *table = DirectMap::phys_to_virt(table_phys).as<PageTableEntry>();
+    const auto* table =
+        DirectMap::phys_to_virt(table_phys).as<PageTableEntry>();
     for (std::uint32_t i = 0; i < 512; ++i) {
       if (table[i].is_present() && !table[i].is_huge()) {
         if (auto child_phys = table[i].extract_address(PageSize::Size4K)) {
@@ -57,9 +59,9 @@ void free_table_recursive(const PhysicalAddress table_phys, const std::uint8_t l
 
   pmm::free_pages(table_phys, 0);
 }
-} // namespace
+}  // namespace
 
-AccessFlags PageMap::extract_flags(const PTEntry &s) noexcept {
+AccessFlags PageMap::extract_flags(const PTEntry& s) noexcept {
   auto flags = AccessFlags::None;
 
   if (s.get_rw()) {
@@ -93,7 +95,8 @@ AccessFlags PageMap::extract_flags(const PTEntry &s) noexcept {
   return flags | AccessFlags::Read;
 }
 
-CacheMode PageMap::extract_cache(const PTEntry &s, const bool is_huge) noexcept {
+CacheMode PageMap::extract_cache(const PTEntry& s,
+                                 const bool is_huge) noexcept {
   const bool pwt = s.get_pwt() == 1;
   const bool pcd = s.get_pcd() == 1;
 
@@ -123,7 +126,8 @@ CacheMode PageMap::extract_cache(const PTEntry &s, const bool is_huge) noexcept 
 }
 
 PageMap::PageMap() noexcept : m_lvls{max_lvls} {
-  const auto root_res = pmm::alloc_pages_zeroed(pmm::PageMobility::Unmovable, 0);
+  const auto root_res =
+      pmm::alloc_pages_zeroed(pmm::PageMobility::Unmovable, 0);
   if (!root_res) {
     utils::logger::fatal("Unable to allocate page for top pml table!\n");
   }
@@ -132,8 +136,9 @@ PageMap::PageMap() noexcept : m_lvls{max_lvls} {
   m_root_phys = root_phys;
 
   if (s_kernel_root) [[likely]] {
-    auto *new_root_table = DirectMap::phys_to_virt(root_phys).as<PageTableEntry>();
-    auto *kernel_root_table = s_kernel_root.as<PageTableEntry>();
+    auto* new_root_table =
+        DirectMap::phys_to_virt(root_phys).as<PageTableEntry>();
+    auto* kernel_root_table = s_kernel_root.as<PageTableEntry>();
 
     for (std::size_t i = MAX_PAGE_ENTRIES / 2; i < MAX_PAGE_ENTRIES; ++i) {
       PTEntry k_entry = kernel_root_table[i].load(std::memory_order_relaxed);
@@ -147,7 +152,7 @@ PageMap::PageMap() noexcept : m_lvls{max_lvls} {
 PageMap::~PageMap() noexcept { free_table_recursive(m_root_phys, m_lvls); }
 
 void early_initialize_hw() noexcept {
-  const hw::CpuInfo *info = hw::profile_manager.get_current();
+  const hw::CpuInfo* info = hw::profile_manager.get_current();
 
   tlb::initialize();
 
@@ -173,11 +178,11 @@ void initialize_hw() noexcept {
   hw::write::efer(efer);
 
   hw::CR0 cr0 = hw::read::cr0()
-                    .without_em()   // emulation off
-                    .with_mp(true)  // monitor co-processor on
-                    .with_ne(true)  // native exceptions on
-                    .with_wp(true)  // kernel write protection on
-                    .with_pg(true); // paging on
+                    .without_em()    // emulation off
+                    .with_mp(true)   // monitor co-processor on
+                    .with_ne(true)   // native exceptions on
+                    .with_wp(true)   // kernel write protection on
+                    .with_pg(true);  // paging on
   hw::write::cr0(cr0);
 
   hw::CR4 cr4 = hw::read::cr4();
@@ -203,4 +208,4 @@ void initialize_hw() noexcept {
   pat.set_pat7(std::to_underlying(PatMemoryType::Uncacheable));
   hw::write::msr(MSR_PAT, pat.raw());
 }
-} // namespace kernel::memory::vmm
+}  // namespace kernel::memory::vmm

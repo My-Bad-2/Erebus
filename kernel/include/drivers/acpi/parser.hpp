@@ -8,7 +8,8 @@ using Status = uacpi_status;
 template <typename T>
 concept AcpiStruct = std::is_standard_layout_v<T> && std::is_trivial_v<T>;
 
-template <std::size_t N> struct Signature {
+template <std::size_t N>
+struct Signature {
   char data[5]{};
 
   consteval Signature(const char (&s)[N]) noexcept {
@@ -20,4 +21,4 @@ template <std::size_t N> struct Signature {
   }
 };
 
-} // namespace kernel::drivers::acpi
+}  // namespace kernel::drivers::acpi

@@ -1,4 +1,5 @@
 #include "memory/vmm/pagemap/tlb.hpp"
+
 #include "hal/percpu.hpp"
 #include "memory/vmm/pagemap/active_pcid.hpp"
 #include "utils/logger.hpp"
@@ -13,9 +14,11 @@ hw::patcher::StaticKeyDef invlpgb_supported{false};
 namespace pcid {
 void context(const std::uint16_t pcid) noexcept {
   if (pcid == 0) {
-    hw::invpcid(hw::InvpcidType::AllContextsRetainGlobals, {.pcid = 0, .reserved = 0, .address = 0});
+    hw::invpcid(hw::InvpcidType::AllContextsRetainGlobals,
+                {.pcid = 0, .reserved = 0, .address = 0});
   } else {
-    hw::invpcid(hw::InvpcidType::SingleContext, {.pcid = pcid, .reserved = 0, .address = 0});
+    hw::invpcid(hw::InvpcidType::SingleContext,
+                {.pcid = pcid, .reserved = 0, .address = 0});
   }
 }
 
@@ -36,7 +39,8 @@ void context_legacy(const std::uint16_t target_pcid) noexcept {
   }
 }
 
-void single_legacy(const std::uint16_t target_pcid, const std::uintptr_t addr) noexcept {
+void single_legacy(const std::uint16_t target_pcid,
+                   const std::uintptr_t addr) noexcept {
   const hw::CR3 cr3 = hw::read::cr3();
 
   if (target_pcid == cr3.get_pcid()) {
@@ -45,18 +49,18 @@ void single_legacy(const std::uint16_t target_pcid, const std::uintptr_t addr) n
     context_legacy(0);
   }
 }
-} // namespace pcid
+}  // namespace pcid
 
 namespace legacy {
 void context() noexcept { hw::write::cr3(hw::read::cr3()); }
 void single(const std::uintptr_t addr) noexcept { hw::invlpg(addr); }
-} // namespace legacy
+}  // namespace legacy
 
 void context(const std::uint16_t pcid) {
   if (EREBUS_STATIC_BRANCH_UNLIKELY(invpcid_supported)) {
     pcid::context(pcid);
   } else if (EREBUS_STATIC_BRANCH_UNLIKELY(pcid_supported)) {
-    pcid::context_legacy(pcid); // pcid is supported but not invpcid
+    pcid::context_legacy(pcid);  // pcid is supported but not invpcid
   } else {
     legacy::context();
   }
@@ -71,21 +75,22 @@ void single(const std::uint16_t pcid, std::uintptr_t addr) noexcept {
     legacy::single(addr);
   }
 }
-} // namespace flush
+}  // namespace flush
 
-void load_cr3(const PhysicalAddress addr, const std::uint16_t pcid, const bool no_flush = false) noexcept {
+void load_cr3(const PhysicalAddress addr, const std::uint16_t pcid,
+              const bool no_flush = false) noexcept {
   if (EREBUS_STATIC_BRANCH_UNLIKELY(flush::pcid_supported)) {
     hw::write::cr3(hw::CR3::build_pcid(addr, pcid, no_flush));
   } else {
     hw::write::cr3(hw::CR3::build_legacy(addr));
   }
 }
-} // namespace
+}  // namespace
 
 void PcidManager::rollover_epoch() noexcept {
   const std::uint32_t my_cpu = hw::percpu::id();
 
-  for (auto &[pmap, pcid, epoch] : m_table) {
+  for (auto& [pmap, pcid, epoch] : m_table) {
     if (epoch == m_curr_epoch && pmap != nullptr) {
       pmap->cpu_tracker().unmark(my_cpu);
     }
@@ -96,12 +101,12 @@ void PcidManager::rollover_epoch() noexcept {
   flush::context(0);
 }
 
-void PcidManager::load(PageMap *pagemap) noexcept {
+void PcidManager::load(PageMap* pagemap) noexcept {
   std::size_t idx = hash(pagemap);
   const std::uint32_t my_cpu = hw::percpu::id();
 
   while (true) {
-    auto &[pmap, pcid, epoch] = m_table[idx];
+    auto& [pmap, pcid, epoch] = m_table[idx];
 
     // Fast-path: Already loaded in this epoch
     if (epoch == m_curr_epoch && pmap == pagemap) [[likely]] {
@@ -126,7 +131,7 @@ void PcidManager::load(PageMap *pagemap) noexcept {
       pcid = assigned_pcid;
       epoch = m_curr_epoch;
 
-      hw::ActivePcidTracker &tracker = pagemap->cpu_tracker();
+      hw::ActivePcidTracker& tracker = pagemap->cpu_tracker();
       tracker.mark(my_cpu, assigned_pcid);
       load_cr3(pagemap->root_phys(), assigned_pcid, false);
       return;
@@ -136,11 +141,12 @@ void PcidManager::load(PageMap *pagemap) noexcept {
   }
 }
 
-std::uint16_t PcidManager::get_active_pcid(const PageMap *pagemap) const noexcept {
+std::uint16_t PcidManager::get_active_pcid(
+    const PageMap* pagemap) const noexcept {
   std::size_t idx = hash(pagemap);
 
   while (true) {
-    const auto &[pmap, pcid, epoch] = m_table[idx];
+    const auto& [pmap, pcid, epoch] = m_table[idx];
     if (epoch != m_curr_epoch) {
       return 0;
     }
@@ -153,12 +159,12 @@ std::uint16_t PcidManager::get_active_pcid(const PageMap *pagemap) const noexcep
   }
 }
 
-void PcidManager::invalidate_active_pcid(const PageMap *pagemap) noexcept {
+void PcidManager::invalidate_active_pcid(const PageMap* pagemap) noexcept {
   std::size_t idx = hash(pagemap);
   const std::uint32_t my_cpu = hw::percpu::id();
 
   while (true) {
-    auto &[pmap, _, epoch] = m_table[idx];
+    auto& [pmap, _, epoch] = m_table[idx];
     if (epoch != m_curr_epoch) {
       return;
     }
@@ -173,9 +179,11 @@ void PcidManager::invalidate_active_pcid(const PageMap *pagemap) noexcept {
   }
 }
 
-void ShootdownCoordinator::local_invalidate(const PageMap *pmap, const VirtualAddress virt, const std::size_t size,
+void ShootdownCoordinator::local_invalidate(const PageMap* pmap,
+                                            const VirtualAddress virt,
+                                            const std::size_t size,
                                             const bool is_huge) noexcept {
-  const PcidManager &local_tlb = hw::percpu::pcid_manager();
+  const PcidManager& local_tlb = hw::percpu::pcid_manager();
   const std::uint16_t pcid = local_tlb.get_active_pcid(pmap);
 
   if (size == std::numeric_limits<std::uint64_t>::max()) {
@@ -190,14 +198,16 @@ void ShootdownCoordinator::local_invalidate(const PageMap *pmap, const VirtualAd
   }
 }
 
-void ShootdownCoordinator::queue_invlpgb(const VirtualAddress virt, const std::size_t size_bytes,
-                                         const std::uint16_t target_pcid, const bool is_huge) noexcept {
+void ShootdownCoordinator::queue_invlpgb(const VirtualAddress virt,
+                                         const std::size_t size_bytes,
+                                         const std::uint16_t target_pcid,
+                                         const bool is_huge) noexcept {
   hw::InvlpgbCount ecx{0};
 
   const std::uintptr_t virt_addr = virt.value();
   auto rax = hw::InvlpgbAddress{}
-                 .with_va_valid()    // Flush only the specific virtual address
-                 .with_pcid_valid(); // Flush specific pcid value
+                 .with_va_valid()     // Flush only the specific virtual address
+                 .with_pcid_valid();  // Flush specific pcid value
   rax.set_include_global(virt_addr >= DirectMap::s_hhdm_base);
 
   hw::InvlpgbContext edx{0};
@@ -221,7 +231,8 @@ void ShootdownCoordinator::queue_invlpgb(const VirtualAddress virt, const std::s
   }
 }
 
-void ShootdownCoordinator::broadcast(PageMap *pmap, const VirtualAddress virt, const std::size_t size_bytes,
+void ShootdownCoordinator::broadcast(PageMap* pmap, const VirtualAddress virt,
+                                     const std::size_t size_bytes,
                                      const bool is_huge) noexcept {
   const std::uint32_t my_cpu = hw::percpu::id();
 
@@ -232,15 +243,19 @@ void ShootdownCoordinator::broadcast(PageMap *pmap, const VirtualAddress virt, c
       bool sent_broadcast = false;
       std::uint64_t broadcasted_pcids[64] = {0};
 
-      pmap->cpu_tracker().for_each_active_cpu([&](const std::uint32_t cpu, const std::uint16_t remote_pcid) noexcept {
-        if (cpu != my_cpu) {
-          if ((broadcasted_pcids[remote_pcid / 64] & (1ull << (remote_pcid % 64))) == 0) {
-            queue_invlpgb(virt, size_bytes, remote_pcid, is_huge);
-            broadcasted_pcids[remote_pcid / 64] |= (1ull << (remote_pcid % 64));
-            sent_broadcast = true;
-          }
-        }
-      });
+      pmap->cpu_tracker().for_each_active_cpu(
+          [&](const std::uint32_t cpu,
+              const std::uint16_t remote_pcid) noexcept {
+            if (cpu != my_cpu) {
+              if ((broadcasted_pcids[remote_pcid / 64] &
+                   (1ull << (remote_pcid % 64))) == 0) {
+                queue_invlpgb(virt, size_bytes, remote_pcid, is_huge);
+                broadcasted_pcids[remote_pcid / 64] |=
+                    (1ull << (remote_pcid % 64));
+                sent_broadcast = true;
+              }
+            }
+          });
 
       if (sent_broadcast) {
         hw::tlbsync();
@@ -251,11 +266,12 @@ void ShootdownCoordinator::broadcast(PageMap *pmap, const VirtualAddress virt, c
 
   std::uint32_t target_count = 0;
 
-  pmap->cpu_tracker().for_each_active_cpu([&](const std::uint32_t cpu_id, std::uint16_t) noexcept {
-    if (cpu_id != my_cpu) {
-      target_count++;
-    }
-  });
+  pmap->cpu_tracker().for_each_active_cpu(
+      [&](const std::uint32_t cpu_id, std::uint16_t) noexcept {
+        if (cpu_id != my_cpu) {
+          target_count++;
+        }
+      });
 
   if (target_count == 0) [[likely]] {
     return;
@@ -268,28 +284,30 @@ void ShootdownCoordinator::broadcast(PageMap *pmap, const VirtualAddress virt, c
       .pending_count = target_count,
   };
 
-  pmap->cpu_tracker().for_each_active_cpu([&](const std::uint32_t cpu_id, std::uint16_t) noexcept {
-    if (cpu_id != my_cpu) {
-      // hw::smp::ipi_send(cpu_id, hw::smp::IpiVector::TlbShootdown, &req);
-    }
-  });
+  pmap->cpu_tracker().for_each_active_cpu(
+      [&](const std::uint32_t cpu_id, std::uint16_t) noexcept {
+        if (cpu_id != my_cpu) {
+          // hw::smp::ipi_send(cpu_id, hw::smp::IpiVector::TlbShootdown, &req);
+        }
+      });
 
   while (req.pending_count.load(std::memory_order_acquire) > 0) {
     hw::pause();
   }
 }
 
-void ShootdownCoordinator::handle_ipi(ShootdownRequest *req) noexcept {
-  const bool is_huge = (req->size_bytes == PAGE_SIZE_2MB || req->size_bytes == PAGE_SIZE_1GB);
+void ShootdownCoordinator::handle_ipi(ShootdownRequest* req) noexcept {
+  const bool is_huge =
+      (req->size_bytes == PAGE_SIZE_2MB || req->size_bytes == PAGE_SIZE_1GB);
   local_invalidate(req->pmap, req->base_virt, req->size_bytes, is_huge);
   req->pending_count.fetch_sub(1, std::memory_order_release);
 }
 
 void initialize() noexcept {
-  const hw::CpuInfo *cpu_info = hw::profile_manager.get_current();
+  const hw::CpuInfo* cpu_info = hw::profile_manager.get_current();
 
   flush::invpcid_supported.enabled = cpu_info->has<hw::Feature::INVPCID>();
   flush::pcid_supported.enabled = cpu_info->has<hw::Feature::PCID>();
   flush::invlpgb_supported.enabled = cpu_info->has<hw::Feature::INVLPGB>();
 }
-} // namespace kernel::memory::vmm::tlb
+}  // namespace kernel::memory::vmm::tlb

@@ -1,10 +1,10 @@
 #pragma once
 
-#include "utils/hashmap.hpp"
-
 #include <atomic>
 #include <cstdint>
 #include <new>
+
+#include "utils/hashmap.hpp"
 
 namespace kernel::memory::vmm {
 class RefCount {
@@ -15,12 +15,12 @@ class RefCount {
   utils::FastHashMap<std::uint64_t, LocalNode> m_nodes;
   std::atomic<bool> m_is_dying{false};
 
-public:
+ public:
   ~RefCount() {
-    m_nodes.for_each([](std::uint64_t, const LocalNode *node) { delete node; });
+    m_nodes.for_each([](std::uint64_t, const LocalNode* node) { delete node; });
   }
 
   void add_ref() noexcept;
   [[nodiscard]] bool drop_ref() noexcept;
 };
-} // namespace kernel::memory::vmm
+}  // namespace kernel::memory::vmm

@@ -2,7 +2,8 @@
 #include "string.h"
 
 namespace klib {
-void *memcpy(void *__restrict dest, const void *__restrict src, size_t count) noexcept {
+void* memcpy(void* __restrict dest, const void* __restrict src,
+             size_t count) noexcept {
   using namespace string;
 
   if (count == 0) [[unlikely]] {
@@ -60,4 +61,4 @@ void *memcpy(void *__restrict dest, const void *__restrict src, size_t count) no
   hw_rep_movsb(dest, src, count);
   return dest;
 }
-} // namespace klib
+}  // namespace klib

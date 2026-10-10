@@ -22,23 +22,25 @@ concept ExclusiveLockable = requires(T a) {
   { a.write_unlock() } noexcept -> std::same_as<void>;
 };
 
-template <BasicLockable LockType> class [[nodiscard]] NakedGuard {
-  LockType &m_lock;
+template <BasicLockable LockType>
+class [[nodiscard]] NakedGuard {
+  LockType& m_lock;
 
-public:
-  explicit NakedGuard(LockType &lock) noexcept : m_lock(lock) { m_lock.lock(); }
+ public:
+  explicit NakedGuard(LockType& lock) noexcept : m_lock(lock) { m_lock.lock(); }
 
   ~NakedGuard() noexcept { m_lock.unlock(); }
 
-  NakedGuard(const NakedGuard &) = delete;
-  NakedGuard &operator=(const NakedGuard &) = delete;
+  NakedGuard(const NakedGuard&) = delete;
+  NakedGuard& operator=(const NakedGuard&) = delete;
 };
 
-template <BasicLockable LockType> class [[nodiscard]] PreemptGuard {
-  LockType &m_lock;
+template <BasicLockable LockType>
+class [[nodiscard]] PreemptGuard {
+  LockType& m_lock;
 
-public:
-  explicit PreemptGuard(LockType &lock) noexcept : m_lock(lock) {
+ public:
+  explicit PreemptGuard(LockType& lock) noexcept : m_lock(lock) {
     hw::percpu::preempt_disable();
     m_lock.lock();
   }
@@ -48,16 +50,17 @@ public:
     hw::percpu::preempt_enable();
   }
 
-  PreemptGuard(const PreemptGuard &) = delete;
-  PreemptGuard &operator=(const PreemptGuard &) = delete;
+  PreemptGuard(const PreemptGuard&) = delete;
+  PreemptGuard& operator=(const PreemptGuard&) = delete;
 };
 
-template <BasicLockable LockType> class [[nodiscard]] IrqSaveGuard {
-  LockType &m_lock;
+template <BasicLockable LockType>
+class [[nodiscard]] IrqSaveGuard {
+  LockType& m_lock;
   std::uint64_t m_saved_flags;
 
-public:
-  explicit IrqSaveGuard(LockType &lock) noexcept : m_lock(lock) {
+ public:
+  explicit IrqSaveGuard(LockType& lock) noexcept : m_lock(lock) {
     m_saved_flags = hw::irq::read_flags();
     hw::irq::disable();
 
@@ -72,15 +75,16 @@ public:
     hw::irq::write_flags(m_saved_flags);
   }
 
-  IrqSaveGuard(const IrqSaveGuard &) = delete;
-  IrqSaveGuard &operator=(const IrqSaveGuard &) = delete;
+  IrqSaveGuard(const IrqSaveGuard&) = delete;
+  IrqSaveGuard& operator=(const IrqSaveGuard&) = delete;
 };
 
-template <SharedLockable LockType> class [[nodiscard]] SharedPreemptGuard {
-  LockType &m_lock;
+template <SharedLockable LockType>
+class [[nodiscard]] SharedPreemptGuard {
+  LockType& m_lock;
 
-public:
-  explicit SharedPreemptGuard(LockType &lock) noexcept : m_lock(lock) {
+ public:
+  explicit SharedPreemptGuard(LockType& lock) noexcept : m_lock(lock) {
     hw::percpu::preempt_disable();
     m_lock.read_lock();
   }
@@ -90,16 +94,17 @@ public:
     hw::percpu::preempt_enable();
   }
 
-  SharedPreemptGuard(const SharedPreemptGuard &) = delete;
-  SharedPreemptGuard &operator=(const SharedPreemptGuard &) = delete;
+  SharedPreemptGuard(const SharedPreemptGuard&) = delete;
+  SharedPreemptGuard& operator=(const SharedPreemptGuard&) = delete;
 };
 
-template <SharedLockable LockType> class [[nodiscard]] SharedIrqSaveGuard {
-  LockType &m_lock;
+template <SharedLockable LockType>
+class [[nodiscard]] SharedIrqSaveGuard {
+  LockType& m_lock;
   std::uint64_t m_saved_flags;
 
-public:
-  explicit SharedIrqSaveGuard(LockType &lock) noexcept : m_lock(lock) {
+ public:
+  explicit SharedIrqSaveGuard(LockType& lock) noexcept : m_lock(lock) {
     m_saved_flags = hw::irq::read_flags();
     hw::irq::disable();
 
@@ -113,27 +118,31 @@ public:
     hw::irq::write_flags(m_saved_flags);
   }
 
-  SharedIrqSaveGuard(const SharedIrqSaveGuard &) = delete;
-  SharedIrqSaveGuard &operator=(const SharedIrqSaveGuard &) = delete;
+  SharedIrqSaveGuard(const SharedIrqSaveGuard&) = delete;
+  SharedIrqSaveGuard& operator=(const SharedIrqSaveGuard&) = delete;
 };
 
-template <ExclusiveLockable LockType> class [[nodiscard]] ExclusiveNakedGuard {
-  LockType &m_lock;
+template <ExclusiveLockable LockType>
+class [[nodiscard]] ExclusiveNakedGuard {
+  LockType& m_lock;
 
-public:
-  explicit ExclusiveNakedGuard(LockType &lock) noexcept : m_lock(lock) { m_lock.write_lock(); }
+ public:
+  explicit ExclusiveNakedGuard(LockType& lock) noexcept : m_lock(lock) {
+    m_lock.write_lock();
+  }
 
   ~ExclusiveNakedGuard() noexcept { m_lock.write_unlock(); }
 
-  ExclusiveNakedGuard(const ExclusiveNakedGuard &) = delete;
-  ExclusiveNakedGuard &operator=(const ExclusiveNakedGuard &) = delete;
+  ExclusiveNakedGuard(const ExclusiveNakedGuard&) = delete;
+  ExclusiveNakedGuard& operator=(const ExclusiveNakedGuard&) = delete;
 };
 
-template <ExclusiveLockable LockType> class [[nodiscard]] ExclusivePreemptGuard {
-  LockType &m_lock;
+template <ExclusiveLockable LockType>
+class [[nodiscard]] ExclusivePreemptGuard {
+  LockType& m_lock;
 
-public:
-  explicit ExclusivePreemptGuard(LockType &lock) noexcept : m_lock(lock) {
+ public:
+  explicit ExclusivePreemptGuard(LockType& lock) noexcept : m_lock(lock) {
     hw::percpu::preempt_disable();
     m_lock.write_lock();
   }
@@ -143,16 +152,17 @@ public:
     hw::percpu::preempt_enable();
   }
 
-  ExclusivePreemptGuard(const ExclusivePreemptGuard &) = delete;
-  ExclusivePreemptGuard &operator=(const ExclusivePreemptGuard &) = delete;
+  ExclusivePreemptGuard(const ExclusivePreemptGuard&) = delete;
+  ExclusivePreemptGuard& operator=(const ExclusivePreemptGuard&) = delete;
 };
 
-template <ExclusiveLockable LockType> class [[nodiscard]] ExclusiveIrqSaveGuard {
-  LockType &m_lock;
+template <ExclusiveLockable LockType>
+class [[nodiscard]] ExclusiveIrqSaveGuard {
+  LockType& m_lock;
   std::uint64_t m_saved_flags;
 
-public:
-  explicit ExclusiveIrqSaveGuard(LockType &lock) noexcept : m_lock(lock) {
+ public:
+  explicit ExclusiveIrqSaveGuard(LockType& lock) noexcept : m_lock(lock) {
     m_saved_flags = hw::irq::read_flags();
     hw::irq::disable();
 
@@ -166,14 +176,14 @@ public:
     hw::irq::write_flags(m_saved_flags);
   }
 
-  ExclusiveIrqSaveGuard(const ExclusiveIrqSaveGuard &) = delete;
-  ExclusiveIrqSaveGuard &operator=(const ExclusiveIrqSaveGuard &) = delete;
+  ExclusiveIrqSaveGuard(const ExclusiveIrqSaveGuard&) = delete;
+  ExclusiveIrqSaveGuard& operator=(const ExclusiveIrqSaveGuard&) = delete;
 };
 
 class [[nodiscard]] IrqDisableGuard {
   std::uint64_t m_saved_flags;
 
-public:
+ public:
   explicit IrqDisableGuard() noexcept {
     m_saved_flags = hw::irq::read_flags();
     hw::irq::disable();
@@ -185,7 +195,7 @@ public:
     hw::irq::write_flags(m_saved_flags);
   }
 
-  IrqDisableGuard(const IrqDisableGuard &) = delete;
-  IrqDisableGuard &operator=(const IrqDisableGuard &) = delete;
+  IrqDisableGuard(const IrqDisableGuard&) = delete;
+  IrqDisableGuard& operator=(const IrqDisableGuard&) = delete;
 };
-} // namespace kernel::utils
+}  // namespace kernel::utils

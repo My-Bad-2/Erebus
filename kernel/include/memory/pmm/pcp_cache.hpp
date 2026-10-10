@@ -22,10 +22,11 @@ class PcpList {
   static constexpr std::uint16_t MAX_CAPACITY = 256;
   static constexpr std::uint16_t MASK = MAX_CAPACITY - 1;
 
-  Page *m_pages[MAX_CAPACITY]{};
+  Page* m_pages[MAX_CAPACITY]{};
 
-public:
-  void tune(const std::uint64_t zone_free_pages, const std::uint8_t order) noexcept {
+ public:
+  void tune(const std::uint64_t zone_free_pages,
+            const std::uint8_t order) noexcept {
     // Base limits: Order 0 gets 256. Order 3 gets 32.
     const std::uint16_t base_high = 256 >> order;
     const std::uint16_t base_batch = 32 >> order;
@@ -50,14 +51,20 @@ public:
     }
   }
 
-  [[nodiscard]] constexpr std::uint16_t size() const noexcept { return m_count; }
+  [[nodiscard]] constexpr std::uint16_t size() const noexcept {
+    return m_count;
+  }
   [[nodiscard]] constexpr bool empty() const noexcept { return m_count == 0; }
 
-  [[nodiscard]] constexpr bool needs_drain() const noexcept { return m_count >= m_high; }
-  [[nodiscard]] constexpr std::uint16_t batch_size() const noexcept { return m_batch; }
+  [[nodiscard]] constexpr bool needs_drain() const noexcept {
+    return m_count >= m_high;
+  }
+  [[nodiscard]] constexpr std::uint16_t batch_size() const noexcept {
+    return m_batch;
+  }
 
   // Push to tail
-  [[gnu::always_inline]] void push_hot(Page *p) noexcept {
+  [[gnu::always_inline]] void push_hot(Page* p) noexcept {
     if (m_count >= MAX_CAPACITY) [[unlikely]] {
       return;
     }
@@ -68,7 +75,7 @@ public:
   }
 
   // Pop from tail (LIFO ensures the hottest pages stay in L1 Cache)
-  [[nodiscard, gnu::always_inline]] Page *pop_hot() noexcept {
+  [[nodiscard, gnu::always_inline]] Page* pop_hot() noexcept {
     if (m_count == 0) [[unlikely]] {
       return nullptr;
     }
@@ -79,12 +86,12 @@ public:
   }
 
   // Pop from head (FIFO flushes the oldest/coldest pages to global buddy
-  [[nodiscard, gnu::always_inline]] Page *pop_cold() noexcept {
+  [[nodiscard, gnu::always_inline]] Page* pop_cold() noexcept {
     if (m_count == 0) [[unlikely]] {
       return nullptr;
     }
 
-    Page *p = m_pages[m_head];
+    Page* p = m_pages[m_head];
     m_head = (m_head + 1) & MASK;
     m_count--;
     return p;
@@ -94,4 +101,4 @@ public:
 struct alignas(std::hardware_destructive_interference_size) PcpCache {
   std::array<PcpList, PCP_MAX_ORDER + 1> lists;
 };
-} // namespace kernel::memory::pmm
+}  // namespace kernel::memory::pmm
