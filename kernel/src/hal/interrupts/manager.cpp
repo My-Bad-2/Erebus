@@ -1,12 +1,12 @@
 #include "hal/apic/ioapic.hpp"
 #include "hal/interrupts/interrupt_manager.hpp"
+#include "hal/smp/percpu.hpp"
 #include "utils/lock.hpp"
 #include "utils/logger.hpp"
 
 namespace kernel::hw::interrupts {
 namespace {
-[[nodiscard]] constexpr const char* to_string(
-    const EventClass category) noexcept {
+[[nodiscard]] constexpr const char* to_string(const EventClass category) noexcept {
   switch (category) {
     case EventClass::Interrupt:
       return "Interrupt (External)";
@@ -22,54 +22,48 @@ namespace {
 }
 
 void dump_event(const Event& event) noexcept {
-  utils::logger::debug(
-      "================== CPU EVENT DUMP ==================\n");
+  utils::logger::debug("================== CPU EVENT DUMP ==================\n");
 
   utils::logger::debug("Category:   {}\n", to_string(event.category));
-  utils::logger::debug("Vector:     {} ({:#04x})\n", event.vector,
-                       event.vector);
+  utils::logger::debug("Vector:     {} ({:#04x})\n", event.vector, event.vector);
   utils::logger::debug("CPL:        Ring {}\n", std::to_underlying(event.cpl));
   utils::logger::debug("Error Code: {:#06x}\n", event.error_code);
 
   utils::logger::debug("Payload:    {:#018x}\n", event.payload);
-  utils::logger::debug(
-      "----------------------------------------------------\n");
+  utils::logger::debug("----------------------------------------------------\n");
 
   utils::logger::debug("RIP:        {:#018x}\n", event.rip);
   utils::logger::debug("RSP:        {:#018x}\n", event.rsp);
   utils::logger::debug("RFLAGS:     {:#018x}\n", event.rflags);
 
   if (event.gprs != nullptr) {
-    utils::logger::debug(
-        "--------------------- GPR STATE --------------------\n");
-    utils::logger::debug("RAX: {:#018x}  RBX: {:#018x}  RCX: {:#018x}\n",
-                         event.gprs->rax, event.gprs->rbx, event.gprs->rcx);
-    utils::logger::debug("RDX: {:#018x}  RSI: {:#018x}  RDI: {:#018x}\n",
-                         event.gprs->rdx, event.gprs->rsi, event.gprs->rdi);
-    utils::logger::debug("RBP: {:#018x}  R8:  {:#018x}  R9:  {:#018x}\n",
-                         event.gprs->rbp, event.gprs->r8, event.gprs->r9);
-    utils::logger::debug("R10: {:#018x}  R11: {:#018x}  R12: {:#018x}\n",
-                         event.gprs->r10, event.gprs->r11, event.gprs->r12);
-    utils::logger::debug("R13: {:#018x}  R14: {:#018x}  R15: {:#018x}\n",
-                         event.gprs->r13, event.gprs->r14, event.gprs->r15);
+    utils::logger::debug("--------------------- GPR STATE --------------------\n");
+    utils::logger::debug("RAX: {:#018x}  RBX: {:#018x}  RCX: {:#018x}\n", event.gprs->rax,
+                         event.gprs->rbx, event.gprs->rcx);
+    utils::logger::debug("RDX: {:#018x}  RSI: {:#018x}  RDI: {:#018x}\n", event.gprs->rdx,
+                         event.gprs->rsi, event.gprs->rdi);
+    utils::logger::debug("RBP: {:#018x}  R8:  {:#018x}  R9:  {:#018x}\n", event.gprs->rbp,
+                         event.gprs->r8, event.gprs->r9);
+    utils::logger::debug("R10: {:#018x}  R11: {:#018x}  R12: {:#018x}\n", event.gprs->r10,
+                         event.gprs->r11, event.gprs->r12);
+    utils::logger::debug("R13: {:#018x}  R14: {:#018x}  R15: {:#018x}\n", event.gprs->r13,
+                         event.gprs->r14, event.gprs->r15);
   }
 
-  utils::logger::debug(
-      "====================================================\n");
+  utils::logger::debug("====================================================\n");
 }
 }  // namespace
 
-void InterruptManager::set_eoi_strategy(
-    const std::uint8_t vector, const bool is_lvl,
-    apic::IoApicController* controller) noexcept {
+void InterruptManager::set_eoi_strategy(const std::uint8_t vector, const bool is_lvl,
+                                        apic::IoApicController* controller) noexcept {
   s_slots[vector].is_level_triggered = is_lvl;
   s_slots[vector].ioapic_controller = controller;
 }
 
 void InterruptManager::register_handler(const std::uint8_t vector,
                                         InterruptRegistration* reg) noexcept {
-  auto& [lock, direct_callback, direct_dpc, direct_ctx, list, lvl_triggered,
-         ioapic] = s_slots[vector];
+  auto& [lock, direct_callback, direct_dpc, direct_ctx, list, lvl_triggered, ioapic] =
+      s_slots[vector];
 
   utils::IrqSaveGuard guard(lock);
 
@@ -87,12 +81,12 @@ void InterruptManager::register_handler(const std::uint8_t vector,
 
 void InterruptManager::unregister_handler(const std::uint8_t vector,
                                           InterruptRegistration* reg) noexcept {
-  auto& [lock, direct_callback, direct_dpc, direct_ctx, list, lvl_triggered,
-         ioapic] = s_slots[vector];
+  auto& [lock, direct_callback, direct_dpc, direct_ctx, list, lvl_triggered, ioapic] =
+      s_slots[vector];
   utils::IrqSaveGuard guard(lock);
   list.remove(*reg);
 
-  auto it = list.begin();
+  const auto it = list.begin();
   if (it != list.end()) {
     auto next = it;
     ++next;
@@ -110,8 +104,8 @@ void InterruptManager::unregister_handler(const std::uint8_t vector,
 
 void InterruptManager::route_event(const Event& event) noexcept {
   if (event.category == EventClass::Interrupt) [[likely]] {
-    auto& [lock, direct_callback, direct_dpc, direct_ctx, list, lvl_triggered,
-           ioapic] = s_slots[event.vector];
+    auto& [lock, direct_callback, direct_dpc, direct_ctx, list, lvl_triggered, ioapic] =
+        s_slots[event.vector];
 
     bool handled = false;
     bool yield = false;
@@ -132,8 +126,7 @@ void InterruptManager::route_event(const Event& event) noexcept {
         for (auto& reg : list) {
           InterruptStatus status = reg.m_callback(event, reg.m_ctx);
 
-          if (status == InterruptStatus::ScheduleDPC && reg.m_dpc)
-              [[unlikely]] {
+          if (status == InterruptStatus::ScheduleDPC && reg.m_dpc) [[unlikely]] {
             // Queue a DPC
             handled = true;
             continue;
@@ -147,11 +140,8 @@ void InterruptManager::route_event(const Event& event) noexcept {
 
     percpu::lapic().eoi();
 
-    if (lvl_triggered) [[unlikely]] {
-      if (ioapic) {
-        ioapic->send_eoi(event.vector);
-      }
-    }
+    if (lvl_triggered) [[unlikely]]
+      if (ioapic) ioapic->send_eoi(event.vector);
 
     if (!handled && list.empty()) [[unlikely]] {
       // Spurious interrupt
@@ -175,17 +165,13 @@ void InterruptManager::route_event(const Event& event) noexcept {
 }
 
 void InterruptManager::handle_exception(const Event& event) noexcept {
-  auto& slot = s_slots[event.vector];
-
   {
+    auto& slot = s_slots[event.vector];
     utils::NakedGuard guard(slot.lock);
-    auto it = slot.list.begin();
 
-    if (it != slot.list.end()) {
-      if (it->m_callback(event, it->m_ctx) != InterruptStatus::Unhandled) {
-        return;
-      }
-    }
+    const auto it = slot.list.begin();
+    if (it != slot.list.end())
+      if (it->m_callback(event, it->m_ctx) != InterruptStatus::Unhandled) return;
   }
 
   dump_event(event);

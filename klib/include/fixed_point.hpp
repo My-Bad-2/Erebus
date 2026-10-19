@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cstdint>
 
-#include "kformat/formatter.hpp"
+#include "kformat/formatters.hpp"
 
 namespace klib {
 template <std::uint64_t Scale, typename T>

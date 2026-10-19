@@ -150,15 +150,12 @@ class SerialPort {
   constexpr explicit SerialPort(const hw::IoResource io) noexcept : m_io(io) {}
 
   [[nodiscard]] std::expected<void, std::string_view> initialize(
-      std::uint32_t baud_rate = 115200,
-      std::uint32_t base_clock_hz = 1843200) noexcept;
+      std::uint32_t baud_rate = 115200, std::uint32_t base_clock_hz = 1843200) noexcept;
 
   [[nodiscard]] bool is_transmit_fifo_empty() const noexcept {
     return read<Lsr>().get_thr_empty() != 0;
   }
-  [[nodiscard]] bool has_data() const noexcept {
-    return read<Lsr>().get_data_ready() != 0;
-  }
+  [[nodiscard]] bool has_data() const noexcept { return read<Lsr>().get_data_ready() != 0; }
 
   void append(std::string_view str) const noexcept;
   void push(char c) const noexcept;
@@ -172,8 +169,7 @@ class SerialPort {
   }
 
   [[nodiscard]] std::expected<char, ReceiveError> read_char() const noexcept;
-  [[nodiscard]] std::expected<char, ReceiveError> try_read_char()
-      const noexcept {
+  [[nodiscard]] std::expected<char, ReceiveError> try_read_char() const noexcept {
     if (!has_data()) {
       return '\0';
     }

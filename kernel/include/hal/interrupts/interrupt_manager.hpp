@@ -70,13 +70,10 @@ class InterruptManager {
     }
   }
 
-  static void set_eoi_strategy(
-      std::uint8_t vector, bool is_lvl,
-      apic::IoApicController* controller = nullptr) noexcept;
-  static void register_handler(std::uint8_t vector,
-                               InterruptRegistration* reg) noexcept;
-  static void unregister_handler(std::uint8_t vector,
-                                 InterruptRegistration* reg) noexcept;
+  static void set_eoi_strategy(std::uint8_t vector, bool is_lvl,
+                               apic::IoApicController* controller = nullptr) noexcept;
+  static void register_handler(std::uint8_t vector, InterruptRegistration* reg) noexcept;
+  static void unregister_handler(std::uint8_t vector, InterruptRegistration* reg) noexcept;
   static void route_event(const Event& event) noexcept;
 };
 }  // namespace kernel::hw::interrupts

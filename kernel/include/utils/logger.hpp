@@ -4,7 +4,6 @@
 #include <source_location>
 #include <utility>
 
-#include "drivers/uart.hpp"
 #include "hal/hal.hpp"
 #include "lock.hpp"
 
@@ -25,9 +24,8 @@ struct log_loc_str {
   std::source_location loc;
 
   template <std::size_t N>
-  consteval log_loc_str(
-      const char (&s)[N],
-      const std::source_location l = std::source_location::current()) noexcept
+  consteval log_loc_str(const char (&s)[N],
+                        const std::source_location l = std::source_location::current()) noexcept
       : fmt(s), loc(l) {}
 };
 
@@ -116,8 +114,7 @@ void initialize(const void* spcr = nullptr) noexcept;
 void write_console(std::string_view msg) noexcept;
 
 template <Level Lvl, typename... Args>
-constexpr void log(log_loc_str<std::type_identity_t<Args>...> fmt,
-                   Args&&... args) noexcept {
+constexpr void log(log_loc_str<std::type_identity_t<Args>...> fmt, Args&&... args) noexcept {
   if constexpr (Lvl < ACTIVE_LOG_LEVEL) {
     return;
   }
@@ -130,8 +127,8 @@ constexpr void log(log_loc_str<std::type_identity_t<Args>...> fmt,
   const char* lvl_name = detail::level_name(Lvl);
   const auto file_name = detail::basename(fmt.loc.file_name());
 
-  klib::format_to(buf, "[{}] {}:{} | ", klib::styled(lvl_name, f, b, s),
-                  klib::dyn(file_name, 14), klib::dyn(fmt.loc.line(), 4));
+  klib::format_to(buf, "[{}] {}:{} | ", klib::styled(lvl_name, f, b, s), klib::dyn(file_name, 14),
+                  klib::dyn(fmt.loc.line(), 4));
 
   klib::format_to(buf, fmt.fmt, std::forward<Args>(args)...);
 
@@ -145,38 +142,33 @@ constexpr void log(log_loc_str<std::type_identity_t<Args>...> fmt,
 }
 
 template <typename... Args>
-constexpr void trace(log_loc_str<std::type_identity_t<Args>...> fmt,
-                     Args&&... args) noexcept {
+constexpr void trace(log_loc_str<std::type_identity_t<Args>...> fmt, Args&&... args) noexcept {
   log<Level::Trace>(fmt, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr void debug(log_loc_str<std::type_identity_t<Args>...> fmt,
-                     Args&&... args) noexcept {
+constexpr void debug(log_loc_str<std::type_identity_t<Args>...> fmt, Args&&... args) noexcept {
   log<Level::Debug>(fmt, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr void info(log_loc_str<std::type_identity_t<Args>...> fmt,
-                    Args&&... args) noexcept {
+constexpr void info(log_loc_str<std::type_identity_t<Args>...> fmt, Args&&... args) noexcept {
   log<Level::Info>(fmt, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr void warn(log_loc_str<std::type_identity_t<Args>...> fmt,
-                    Args&&... args) noexcept {
+constexpr void warn(log_loc_str<std::type_identity_t<Args>...> fmt, Args&&... args) noexcept {
   log<Level::Warn>(fmt, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-constexpr void error(log_loc_str<std::type_identity_t<Args>...> fmt,
-                     Args&&... args) noexcept {
+constexpr void error(log_loc_str<std::type_identity_t<Args>...> fmt, Args&&... args) noexcept {
   log<Level::Error>(fmt, std::forward<Args>(args)...);
 }
 
 template <typename... Args>
-[[noreturn]] constexpr void fatal(
-    log_loc_str<std::type_identity_t<Args>...> fmt, Args&&... args) noexcept {
+[[noreturn]] constexpr void fatal(log_loc_str<std::type_identity_t<Args>...> fmt,
+                                  Args&&... args) noexcept {
   log<Level::Fatal>(fmt, std::forward<Args>(args)...);
   hw::dead_loop();
 }

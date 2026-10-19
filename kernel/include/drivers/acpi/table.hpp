@@ -34,9 +34,7 @@ class SubtableView {
     Iterator(const std::uint8_t* curr, const std::uint8_t* end) noexcept
         : m_current(curr), m_end(end) {}
 
-    value_type operator*() const noexcept {
-      return reinterpret_cast<value_type>(m_current);
-    }
+    value_type operator*() const noexcept { return reinterpret_cast<value_type>(m_current); }
 
     Iterator& operator++() noexcept {
       auto* hdr = reinterpret_cast<value_type>(m_current);
@@ -53,14 +51,10 @@ class SubtableView {
       return *this;
     }
 
-    bool operator!=(const Iterator& other) const noexcept {
-      return m_current < other.m_current;
-    }
+    bool operator!=(const Iterator& other) const noexcept { return m_current < other.m_current; }
   };
 
-  [[nodiscard]] Iterator begin() const noexcept {
-    return Iterator(m_begin, m_end);
-  }
+  [[nodiscard]] Iterator begin() const noexcept { return Iterator(m_begin, m_end); }
 
   [[nodiscard]] Iterator end() const noexcept { return Iterator(m_end, m_end); }
 };
@@ -76,8 +70,7 @@ class Table {
   Table(const Table&) = delete;
   Table& operator=(const Table&) = delete;
 
-  Table(Table&& other) noexcept
-      : m_table(std::exchange(other.m_table, nullptr)) {}
+  Table(Table&& other) noexcept : m_table(std::exchange(other.m_table, nullptr)) {}
 
   Table& operator=(Table&& other) noexcept {
     if (this != &other) {
@@ -113,13 +106,10 @@ class Table {
   }
 
   template <AcpiStruct T>
-  [[nodiscard]] std::expected<SubtableView, uacpi_status> payload()
-      const noexcept {
+  [[nodiscard]] std::expected<SubtableView, uacpi_status> payload() const noexcept {
     return as<T>().transform([this](const T* base_struct) {
-      const auto* start =
-          reinterpret_cast<const std::uint8_t*>(base_struct) + sizeof(T);
-      const auto* end = reinterpret_cast<const std::uint8_t*>(m_table->hdr) +
-                        m_table->hdr->length;
+      const auto* start = reinterpret_cast<const std::uint8_t*>(base_struct) + sizeof(T);
+      const auto* end = reinterpret_cast<const std::uint8_t*>(m_table->hdr) + m_table->hdr->length;
       return SubtableView{start, end};
     });
   }

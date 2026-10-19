@@ -4,12 +4,11 @@
 #include "memory/vmm/pagemap/tlb.hpp"
 
 namespace kernel::memory::vmm {
-std::expected<void, Error> PageMap::remap_1gb_as_2mb(
-    const VirtualAddress virt, const PhysicalAddress new_phys,
-    const AccessFlags flags, const CacheMode cache,
-    const std::uint8_t pkey) noexcept {
-  if (!virt.is_aligned(PAGE_SIZE_1GB) || !new_phys.is_aligned(PAGE_SIZE_1GB))
-      [[unlikely]] {
+std::expected<void, Error> PageMap::remap_1gb_as_2mb(const VirtualAddress virt,
+                                                     const PhysicalAddress new_phys,
+                                                     const AccessFlags flags, const CacheMode cache,
+                                                     const std::uint8_t pkey) noexcept {
+  if (!virt.is_aligned(PAGE_SIZE_1GB) || !new_phys.is_aligned(PAGE_SIZE_1GB)) [[unlikely]] {
     return std::unexpected(Error::InvalidAlignment);
   }
 
@@ -20,20 +19,18 @@ std::expected<void, Error> PageMap::remap_1gb_as_2mb(
 
   PageTableEntry* pdpte = *pdpte_res;
 
-  const auto new_page_res =
-      pmm::alloc_pages_zeroed(pmm::PageMobility::Unmovable, 0);
+  const auto new_page_res = pmm::alloc_pages_zeroed(pmm::PageMobility::Unmovable, 0);
   if (!new_page_res) [[unlikely]] {
     return std::unexpected(Error::OutOfMemory);
   }
 
   const PhysicalAddress new_pml2_phys{*new_page_res};
-  auto* pml2_table =
-      DirectMap::phys_to_virt(new_pml2_phys).as<PageTableEntry>();
+  auto* pml2_table = DirectMap::phys_to_virt(new_pml2_phys).as<PageTableEntry>();
 
   for (std::uint32_t i = 0; i < MAX_PAGE_ENTRIES; ++i) {
     const PhysicalAddress offset_phys = new_phys + (i * PAGE_SIZE_2MB);
-    const PTEntry child_schema = PageTableEntry::build_schema(
-        offset_phys, flags, cache, PageSize::Size2M, pkey);
+    const PTEntry child_schema =
+        PageTableEntry::build_schema(offset_phys, flags, cache, PageSize::Size2M, pkey);
 
     pml2_table[i].store(child_schema, std::memory_order_relaxed);
   }
@@ -52,12 +49,11 @@ std::expected<void, Error> PageMap::remap_1gb_as_2mb(
       return std::unexpected(Error::InvalidFlags);
     }
 
-    if (pdpte->cas(expected, desired, std::memory_order_release,
-                   std::memory_order_acquire)) [[likely]] {
+    if (pdpte->cas(expected, desired, std::memory_order_release, std::memory_order_acquire))
+        [[likely]] {
       tlb::ShootdownCoordinator::broadcast(this, virt, PAGE_SIZE_1GB, true);
 
-      const PhysicalAddress old_pml2_phys{expected.get_pfn_4k()
-                                          << PAGE_SHIFT_4KB};
+      const PhysicalAddress old_pml2_phys{expected.get_pfn_4k() << PAGE_SHIFT_4KB};
       // TODO: RCU deferred free.
       pmm::free_pages(old_pml2_phys, 0);
 
@@ -66,12 +62,9 @@ std::expected<void, Error> PageMap::remap_1gb_as_2mb(
   }
 }
 
-std::expected<void, Error> PageMap::remap(const VirtualAddress virt,
-                                          const PhysicalAddress new_phys,
-                                          const AccessFlags flags,
-                                          const CacheMode cache,
-                                          const std::uint8_t pkey,
-                                          const PageSize size) noexcept {
+std::expected<void, Error> PageMap::remap(const VirtualAddress virt, const PhysicalAddress new_phys,
+                                          const AccessFlags flags, const CacheMode cache,
+                                          const std::uint8_t pkey, const PageSize size) noexcept {
   const bool is_kernel_addr = (virt.value() >= DirectMap::s_hhdm_base);
   if (is_kernel_addr && has_flag(flags, AccessFlags::User)) [[unlikely]] {
     return std::unexpected(Error::SecurityViolation);
@@ -79,8 +72,7 @@ std::expected<void, Error> PageMap::remap(const VirtualAddress virt,
 
   const std::size_t page_size_bytes = size_to_bytes(size);
 
-  if (!virt.is_aligned(page_size_bytes) ||
-      !new_phys.is_aligned(page_size_bytes)) [[unlikely]] {
+  if (!virt.is_aligned(page_size_bytes) || !new_phys.is_aligned(page_size_bytes)) [[unlikely]] {
     return std::unexpected(Error::InvalidAlignment);
   }
 
@@ -101,13 +93,11 @@ std::expected<void, Error> PageMap::remap(const VirtualAddress virt,
       return std::unexpected(Error::NotMapped);
     }
 
-    const PTEntry desired =
-        PageTableEntry::build_schema(new_phys, flags, cache, size, pkey);
-    if (pte->cas(expected, desired, std::memory_order_release,
-                 std::memory_order_acquire)) [[likely]] {
+    const PTEntry desired = PageTableEntry::build_schema(new_phys, flags, cache, size, pkey);
+    if (pte->cas(expected, desired, std::memory_order_release, std::memory_order_acquire))
+        [[likely]] {
       const bool is_huge = (size != PageSize::Size4K);
-      tlb::ShootdownCoordinator::broadcast(this, virt, page_size_bytes,
-                                           is_huge);
+      tlb::ShootdownCoordinator::broadcast(this, virt, page_size_bytes, is_huge);
       return {};
     }
   }
@@ -163,10 +153,11 @@ struct RollbackGuard {
   }
 };
 
-std::expected<void, Error> PageMap::remap_range(
-    const VirtualAddress start_virt, const PhysicalAddress start_phys,
-    const std::size_t size_bytes, const AccessFlags flags,
-    const CacheMode cache, const std::uint8_t pkey) noexcept {
+std::expected<void, Error> PageMap::remap_range(const VirtualAddress start_virt,
+                                                const PhysicalAddress start_phys,
+                                                const std::size_t size_bytes,
+                                                const AccessFlags flags, const CacheMode cache,
+                                                const std::uint8_t pkey) noexcept {
   const bool is_kernel_addr = (start_virt.value() >= DirectMap::s_hhdm_base);
   if (is_kernel_addr && has_flag(flags, AccessFlags::User)) [[unlikely]] {
     return std::unexpected(Error::SecurityViolation);
@@ -200,26 +191,21 @@ std::expected<void, Error> PageMap::remap_range(
     std::size_t region_coverage = PAGE_SIZE_2MB;
 
     if (trans->mapped_size == PageSize::Size1G && remaining >= PAGE_SIZE_1GB &&
-        curr_virt.is_aligned(PAGE_SIZE_1GB) &&
-        curr_phys.is_aligned(PAGE_SIZE_1GB)) {
+        curr_virt.is_aligned(PAGE_SIZE_1GB) && curr_phys.is_aligned(PAGE_SIZE_1GB)) {
       target_size = PageSize::Size1G;
       step_size = PAGE_SIZE_1GB;
       region_coverage = 512ul * PAGE_SIZE_1GB;
-    } else if (trans->mapped_size >= PageSize::Size2M &&
-               remaining >= PAGE_SIZE_2MB &&
-               curr_virt.is_aligned(PAGE_SIZE_2MB) &&
-               curr_phys.is_aligned(PAGE_SIZE_2MB)) {
+    } else if (trans->mapped_size >= PageSize::Size2M && remaining >= PAGE_SIZE_2MB &&
+               curr_virt.is_aligned(PAGE_SIZE_2MB) && curr_phys.is_aligned(PAGE_SIZE_2MB)) {
       target_size = PageSize::Size2M;
       step_size = PAGE_SIZE_2MB;
       region_coverage = PAGE_SIZE_1GB;
     }
 
-    const std::size_t bytes_to_boundary =
-        region_coverage - curr_virt.page_offset(region_coverage);
+    const std::size_t bytes_to_boundary = region_coverage - curr_virt.page_offset(region_coverage);
     const std::size_t max_log_bytes = MAX_LOG_PTES * step_size;
 
-    const std::size_t batch_bytes =
-        std::min({remaining, bytes_to_boundary, max_log_bytes});
+    const std::size_t batch_bytes = std::min({remaining, bytes_to_boundary, max_log_bytes});
     const std::size_t pages_in_batch = batch_bytes / step_size;
 
     auto pt_res = walk(curr_virt, false, target_size);
@@ -232,8 +218,7 @@ std::expected<void, Error> PageMap::remap_range(
       return std::unexpected(Error::OutOfMemory);
     }
 
-    UndoLogNode* current_log =
-        DirectMap::phys_to_virt(*log_page).as<UndoLogNode>();
+    UndoLogNode* current_log = DirectMap::phys_to_virt(*log_page).as<UndoLogNode>();
     current_log->prev = guard.tail_log;
     current_log->base_virt = curr_virt;
     current_log->count = 0;
@@ -253,10 +238,10 @@ std::expected<void, Error> PageMap::remap_range(
         current_log->original_ptes[current_log->count] = expected;
 
         const PhysicalAddress offset_phys = curr_phys + (i * step_size);
-        const PTEntry desired = PageTableEntry::build_schema(
-            offset_phys, flags, cache, target_size, pkey);
-        if (pte[i].cas(expected, desired, std::memory_order_release,
-                       std::memory_order_acquire)) [[likely]] {
+        const PTEntry desired =
+            PageTableEntry::build_schema(offset_phys, flags, cache, target_size, pkey);
+        if (pte[i].cas(expected, desired, std::memory_order_release, std::memory_order_acquire))
+            [[likely]] {
           current_log->count++;
           break;
         }
@@ -270,22 +255,21 @@ std::expected<void, Error> PageMap::remap_range(
   }
 
   guard.success = true;
-  tlb::ShootdownCoordinator::broadcast(this, start_virt, size_bytes,
-                                       size_bytes >= PAGE_SIZE_2MB);
+  tlb::ShootdownCoordinator::broadcast(this, start_virt, size_bytes, size_bytes >= PAGE_SIZE_2MB);
 
   return {};
 }
 
-std::expected<void, Error> PageMap::protect_virtual_range(
-    VirtualAddress start_virt, std::size_t size_bytes,
-    const AccessFlags flags) noexcept {
+std::expected<void, Error> PageMap::protect_virtual_range(VirtualAddress start_virt,
+                                                          std::size_t size_bytes,
+                                                          const AccessFlags flags) noexcept {
   const bool is_kernel_addr = (start_virt.value() >= DirectMap::s_hhdm_base);
   if (is_kernel_addr && has_flag(flags, AccessFlags::User)) [[unlikely]] {
     return std::unexpected(Error::SecurityViolation);
   }
 
-  if (!start_virt.is_aligned(PAGE_SIZE) ||
-      !utils::maths::is_aligned(size_bytes, PAGE_SIZE)) [[unlikely]] {
+  if (!start_virt.is_aligned(PAGE_SIZE) || !utils::maths::is_aligned(size_bytes, PAGE_SIZE))
+      [[unlikely]] {
     return std::unexpected(Error::InvalidAlignment);
   }
 
@@ -317,20 +301,17 @@ std::expected<void, Error> PageMap::protect_virtual_range(
       target_size = PageSize::Size1G;
       step_size = PAGE_SIZE_1GB;
       region_coverage = 512ul * PAGE_SIZE_1GB;
-    } else if (trans->mapped_size >= PageSize::Size2M &&
-               remaining >= PAGE_SIZE_2MB &&
+    } else if (trans->mapped_size >= PageSize::Size2M && remaining >= PAGE_SIZE_2MB &&
                curr_virt.is_aligned(PAGE_SIZE_2MB)) {
       target_size = PageSize::Size2M;
       step_size = PAGE_SIZE_2MB;
       region_coverage = PAGE_SIZE_1GB;
     }
 
-    const std::size_t bytes_to_boundary =
-        region_coverage - curr_virt.page_offset(region_coverage);
+    const std::size_t bytes_to_boundary = region_coverage - curr_virt.page_offset(region_coverage);
     const std::size_t max_log_bytes = MAX_LOG_PTES * step_size;
 
-    const std::size_t batch_bytes =
-        std::min({remaining, bytes_to_boundary, max_log_bytes});
+    const std::size_t batch_bytes = std::min({remaining, bytes_to_boundary, max_log_bytes});
     const std::size_t pages_in_batch = batch_bytes / step_size;
 
     auto pt_res = walk(curr_virt, false, target_size);
@@ -347,8 +328,7 @@ std::expected<void, Error> PageMap::protect_virtual_range(
       return std::unexpected(Error::OutOfMemory);
     }
 
-    UndoLogNode* current_log =
-        DirectMap::phys_to_virt(*log_page).as<UndoLogNode>();
+    UndoLogNode* current_log = DirectMap::phys_to_virt(*log_page).as<UndoLogNode>();
     current_log->prev = guard.tail_log;
     current_log->base_virt = curr_virt;
     current_log->count = 0;
@@ -372,8 +352,8 @@ std::expected<void, Error> PageMap::protect_virtual_range(
         modified_leaf.set_user(has_flag(flags, AccessFlags::User));
 
         const PTEntry desired = modified_leaf;
-        if (pte[i].cas(expected, desired, std::memory_order_release,
-                       std::memory_order_acquire)) [[likely]] {
+        if (pte[i].cas(expected, desired, std::memory_order_release, std::memory_order_acquire))
+            [[likely]] {
           current_log->count++;
           break;
         }
@@ -386,8 +366,7 @@ std::expected<void, Error> PageMap::protect_virtual_range(
   }
 
   guard.success = true;
-  tlb::ShootdownCoordinator::broadcast(this, start_virt, size_bytes,
-                                       size_bytes >= PAGE_SIZE_2MB);
+  tlb::ShootdownCoordinator::broadcast(this, start_virt, size_bytes, size_bytes >= PAGE_SIZE_2MB);
 
   return {};
 }

@@ -4,49 +4,17 @@
 #include <cstdint>
 #include <new>
 
-#include "hal/hal.hpp"
-#include "hal/patch.h"
+#include "patch/static_call.hpp"
 
 namespace kernel::utils {
 namespace detail {
-constexpr std::uint32_t BASE_PAUSE_LOOPS = 64;
-constexpr std::uint32_t BASE_WAIT_TSC = 2000;
-
-[[gnu::always_inline]] inline void wait_monitor(
-    std::atomic<std::uint32_t>* addr, std::uint32_t curr) noexcept {
-  if (EREBUS_STATIC_BRANCH_UNLIKELY(hw::detail::use_waitpkg)) {
-    hw::umonitor(addr);
-    if (addr->load(std::memory_order_relaxed) == curr) {
-      hw::umwait(0, hw::read_tsc() + BASE_WAIT_TSC);
-    }
-  } else if (EREBUS_STATIC_BRANCH_UNLIKELY(hw::detail::use_moniterx)) {
-    hw::monitorx(addr, 0, 0);
-    if (addr->load(std::memory_order_relaxed) == curr) {
-      hw::mwaitx(0, 0, BASE_WAIT_TSC);
-    }
-  } else {
-    hw::pause();
-  }
-}
-
-[[gnu::always_inline]] inline void wait_time(std::uint32_t distance) noexcept {
-  if (EREBUS_STATIC_BRANCH_UNLIKELY(hw::detail::use_waitpkg)) {
-    std::uint64_t deadline = hw::read_tsc() + (distance * BASE_WAIT_TSC);
-    hw::tpause(0, deadline);
-  } else {
-    std::uint32_t delay = distance * BASE_PAUSE_LOOPS;
-    while (delay--) {
-      hw::pause();
-    }
-  }
-}
+DECLARE_STATIC_CALL(void, wait_monitor, std::atomic<std::uint32_t>*, std::uint32_t);
+DECLARE_STATIC_CALL(void, wait_time, std::uint32_t);
 }  // namespace detail
 
 class TicketSpinlock {
-  alignas(std::hardware_destructive_interference_size)
-      std::atomic<std::uint32_t> m_next_ticket{0};
-  alignas(std::hardware_destructive_interference_size)
-      std::atomic<std::uint32_t> m_now_serving{0};
+  alignas(std::hardware_destructive_interference_size) std::atomic<std::uint32_t> m_next_ticket{0};
+  alignas(std::hardware_destructive_interference_size) std::atomic<std::uint32_t> m_now_serving{0};
 
  public:
   constexpr TicketSpinlock() noexcept = default;
@@ -69,10 +37,8 @@ union RWState {
 };
 
 class alignas(std::hardware_destructive_interference_size) RWLock {
-  alignas(std::hardware_destructive_interference_size)
-      TicketSpinlock m_write_queue;
-  alignas(std::hardware_destructive_interference_size)
-      std::atomic<std::uint32_t> m_rw_state{0};
+  alignas(std::hardware_destructive_interference_size) TicketSpinlock m_write_queue;
+  alignas(std::hardware_destructive_interference_size) std::atomic<std::uint32_t> m_rw_state{0};
 
  public:
   constexpr RWLock() noexcept = default;

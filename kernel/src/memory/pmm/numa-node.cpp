@@ -11,13 +11,11 @@ Page* NumaNode::alloc_pages(const PageMobility requested_mobility,
     return page;
   }
 
-  const auto& fallbacks =
-      s_fallback_hierarchy[std::to_underlying(requested_mobility)];
+  const auto& fallbacks = s_fallback_hierarchy[std::to_underlying(requested_mobility)];
   for (const PageMobility fallback_mobility : fallbacks) {
     MobilityZone& fallback_zone = get_zone(fallback_mobility);
 
-    Page* stolen_block =
-        fallback_zone.extract_largest_block_for_steal(requested_order);
+    Page* stolen_block = fallback_zone.extract_largest_block_for_steal(requested_order);
     if (!stolen_block) {
       continue;
     }
@@ -29,8 +27,7 @@ Page* NumaNode::alloc_pages(const PageMobility requested_mobility,
 
     while (stolen_order > requested_order) {
       stolen_order--;
-      const std::uint64_t buddy_pfn =
-          page_to_pfn(stolen_block) ^ (1ul << stolen_order);
+      const std::uint64_t buddy_pfn = page_to_pfn(stolen_block) ^ (1ul << stolen_order);
       Page* buddy = pfn_to_page(buddy_pfn);
 
       buddy->set_state(PageState::Free);
@@ -46,15 +43,12 @@ Page* NumaNode::alloc_pages(const PageMobility requested_mobility,
     stolen_block->set_mobility(requested_mobility);
     stolen_block->set_order(requested_order);
 
-    const std::uint64_t added_capacity =
-        (1ul << original_stolen_order) - (1ul << requested_order);
+    const std::uint64_t added_capacity = (1ul << original_stolen_order) - (1ul << requested_order);
     if (added_capacity > 0) {
-      primary_zone.m_total_free_pages.fetch_add(added_capacity,
-                                                std::memory_order_relaxed);
+      primary_zone.m_total_free_pages.fetch_add(added_capacity, std::memory_order_relaxed);
     }
 
-    fallback_zone.evaluate_watermarks(fallback_zone.get_free_pages(),
-                                      original_stolen_order, false);
+    fallback_zone.evaluate_watermarks(fallback_zone.get_free_pages(), original_stolen_order, false);
     return stolen_block;
   }
 

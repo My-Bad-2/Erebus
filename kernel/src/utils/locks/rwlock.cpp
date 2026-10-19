@@ -10,8 +10,7 @@ constexpr uint32_t READER_MASK = 0xFFFFFF00;
 
 void RWLock::read_lock() noexcept {
   while (true) {
-    std::uint32_t state =
-        m_rw_state.fetch_add(READER_INC, std::memory_order_acquire);
+    std::uint32_t state = m_rw_state.fetch_add(READER_INC, std::memory_order_acquire);
 
     // If no writer is waiting and no write is locked, we are safe to proceed.
     if ((state & (WRITER_LOCKED | WRITER_WAITING)) == 0) [[likely]] {
@@ -29,9 +28,7 @@ void RWLock::read_lock() noexcept {
   }
 }
 
-void RWLock::read_unlock() noexcept {
-  m_rw_state.fetch_sub(READER_INC, std::memory_order_release);
-}
+void RWLock::read_unlock() noexcept { m_rw_state.fetch_sub(READER_INC, std::memory_order_release); }
 
 void RWLock::write_lock() noexcept {
   m_write_queue.lock();

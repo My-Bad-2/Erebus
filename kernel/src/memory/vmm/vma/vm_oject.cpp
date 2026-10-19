@@ -4,8 +4,7 @@
 
 namespace kernel::memory::vmm {
 VMObject* VMObject::create_shadow_clone() noexcept {
-  auto* clone = new VMObject(this->m_type,
-                             this->m_max_pages.load(std::memory_order_relaxed));
+  auto* clone = new VMObject(this->m_type, this->m_max_pages.load(std::memory_order_relaxed));
   if (!clone) {
     return nullptr;
   }
@@ -15,8 +14,8 @@ VMObject* VMObject::create_shadow_clone() noexcept {
   return clone;
 }
 
-std::expected<PhysicalAddress, Error> VMObject::get_page(
-    const std::size_t page_offset, const PageSize page_size) noexcept {
+std::expected<PhysicalAddress, Error> VMObject::get_page(const std::size_t page_offset,
+                                                         const PageSize page_size) noexcept {
   if (page_offset >= m_max_pages.load(std::memory_order_acquire)) [[unlikely]] {
     return std::unexpected(Error::OutOfBounds);
   }
@@ -38,8 +37,7 @@ std::expected<PhysicalAddress, Error> VMObject::get_page(
   if (m_type == VMAType::Anonymous) {
     const std::uint8_t order = get_page_order(page_size);
 
-    const auto phys_res =
-        pmm::alloc_pages_zeroed(pmm::PageMobility::Movable, order);
+    const auto phys_res = pmm::alloc_pages_zeroed(pmm::PageMobility::Movable, order);
     if (!phys_res) [[unlikely]] {
       return std::unexpected(Error::OutOfMemory);
     }
@@ -56,8 +54,8 @@ std::expected<PhysicalAddress, Error> VMObject::get_page(
   return std::unexpected(Error::NotImplemented);
 }
 
-std::expected<PhysicalAddress, Error> VMObject::resolve_cow_fault(
-    const std::size_t page_offset, const PageSize size) noexcept {
+std::expected<PhysicalAddress, Error> VMObject::resolve_cow_fault(const std::size_t page_offset,
+                                                                  const PageSize size) noexcept {
   const std::uint8_t order = get_page_order(size);
   const std::size_t bytes_to_copy = get_page_bytes(size);
 

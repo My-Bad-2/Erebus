@@ -16,22 +16,17 @@ class alignas(std::hardware_destructive_interference_size) NumaNode {
   std::uint32_t m_bandwidth_mbps;
   std::uint32_t m_latency_ns;
 
-  static constexpr std::array<std::array<PageMobility, 2>, 3>
-      s_fallback_hierarchy = {{
-          {PageMobility::Reclaimable,
-           PageMobility::Movable},  // Unmovable starved
-          {PageMobility::Reclaimable,
-           PageMobility::Unmovable},  // Movable starved
-          {PageMobility::Unmovable,
-           PageMobility::Movable},  // Reclaimable starved
-      }};
+  static constexpr std::array<std::array<PageMobility, 2>, 3> s_fallback_hierarchy = {{
+      {PageMobility::Reclaimable, PageMobility::Movable},    // Unmovable starved
+      {PageMobility::Reclaimable, PageMobility::Unmovable},  // Movable starved
+      {PageMobility::Unmovable, PageMobility::Movable},      // Reclaimable starved
+  }};
 
   MobilityZone m_zones[3];
 
  public:
   explicit NumaNode(const std::uint32_t id, const MemoryTier tier,
-                    const std::uint32_t bandwidth_mbps,
-                    const std::uint32_t latency_ns) noexcept
+                    const std::uint32_t bandwidth_mbps, const std::uint32_t latency_ns) noexcept
       : m_node_id(id),
         m_tier(tier),
         m_bandwidth_mbps(bandwidth_mbps),
@@ -45,12 +40,8 @@ class alignas(std::hardware_destructive_interference_size) NumaNode {
 
   [[nodiscard]] std::uint32_t get_id() const noexcept { return m_node_id; }
   [[nodiscard]] MemoryTier get_tier() const noexcept { return m_tier; }
-  [[nodiscard]] std::uint32_t get_bandwidth() const noexcept {
-    return m_bandwidth_mbps;
-  }
-  [[nodiscard]] std::uint32_t get_latency() const noexcept {
-    return m_latency_ns;
-  }
+  [[nodiscard]] std::uint32_t get_bandwidth() const noexcept { return m_bandwidth_mbps; }
+  [[nodiscard]] std::uint32_t get_latency() const noexcept { return m_latency_ns; }
   [[nodiscard]] MobilityZone& get_zone(const PageMobility m) noexcept {
     return m_zones[std::to_underlying(m)];
   }

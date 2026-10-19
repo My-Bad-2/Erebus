@@ -27,20 +27,18 @@ std::expected<PhysicalAddress, Error> PageMap::unmap_1gb_as_2mb(
 
     const PTEntry desired;
 
-    if (pdpte->cas(expected, desired, std::memory_order_release,
-                   std::memory_order_acquire)) [[likely]] {
+    if (pdpte->cas(expected, desired, std::memory_order_release, std::memory_order_acquire))
+        [[likely]] {
       tlb::ShootdownCoordinator::broadcast(this, virt, PAGE_SIZE_1GB, true);
 
       const PhysicalAddress pml2_phys{expected.get_pfn_4k() << PAGE_SHIFT_4KB};
-      auto* pml2_table =
-          DirectMap::phys_to_virt(pml2_phys).as<PageTableEntry>();
+      auto* pml2_table = DirectMap::phys_to_virt(pml2_phys).as<PageTableEntry>();
 
       PhysicalAddress user_base_phys{};
       const PTEntry first_pde = pml2_table[0].load(std::memory_order_acquire);
       if (first_pde.get_present()) [[likely]] {
         const PageTableEntry first_pte{first_pde.raw()};
-        if (auto phys_res = first_pte.extract_address(PageSize::Size2M))
-            [[likely]] {
+        if (auto phys_res = first_pte.extract_address(PageSize::Size2M)) [[likely]] {
           user_base_phys = *phys_res;
         }
       }
@@ -51,8 +49,8 @@ std::expected<PhysicalAddress, Error> PageMap::unmap_1gb_as_2mb(
   }
 }
 
-std::expected<PhysicalAddress, Error> PageMap::unmap(
-    const VirtualAddress virt, const PageSize size) noexcept {
+std::expected<PhysicalAddress, Error> PageMap::unmap(const VirtualAddress virt,
+                                                     const PageSize size) noexcept {
   const std::size_t page_size_bytes = size_to_bytes(size);
   if (!virt.is_aligned(page_size_bytes)) [[unlikely]] {
     return std::unexpected(Error::InvalidAlignment);
@@ -76,8 +74,8 @@ std::expected<PhysicalAddress, Error> PageMap::unmap(
     }
 
     const PTEntry desired{0};
-    if (pte->cas(expected, desired, std::memory_order_release,
-                 std::memory_order_acquire)) [[likely]] {
+    if (pte->cas(expected, desired, std::memory_order_release, std::memory_order_acquire))
+        [[likely]] {
       const PageTableEntry old_pte{expected.raw()};
 
       auto addr_res = old_pte.extract_address(size);
@@ -86,18 +84,17 @@ std::expected<PhysicalAddress, Error> PageMap::unmap(
       }
 
       const bool is_huge = (size != PageSize::Size4K);
-      tlb::ShootdownCoordinator::broadcast(this, virt, page_size_bytes,
-                                           is_huge);
+      tlb::ShootdownCoordinator::broadcast(this, virt, page_size_bytes, is_huge);
 
       return *addr_res;
     }
   }
 }
 
-std::expected<void, Error> PageMap::unmap_range(
-    const VirtualAddress start_virt, const std::size_t size_bytes) noexcept {
-  if (!start_virt.is_aligned(PAGE_SIZE) ||
-      !utils::maths::is_aligned(size_bytes, PAGE_SIZE)) [[unlikely]] {
+std::expected<void, Error> PageMap::unmap_range(const VirtualAddress start_virt,
+                                                const std::size_t size_bytes) noexcept {
+  if (!start_virt.is_aligned(PAGE_SIZE) || !utils::maths::is_aligned(size_bytes, PAGE_SIZE))
+      [[unlikely]] {
     return std::unexpected(Error::InvalidAlignment);
   }
 
@@ -130,8 +127,7 @@ std::expected<void, Error> PageMap::unmap_range(
       continue;
     }
 
-    const std::size_t bytes_to_pml1_boundary =
-        PAGE_SIZE_2MB - curr_virt.page_offset(PAGE_SIZE_2MB);
+    const std::size_t bytes_to_pml1_boundary = PAGE_SIZE_2MB - curr_virt.page_offset(PAGE_SIZE_2MB);
     const std::size_t batch_bytes = std::min(remaining, bytes_to_pml1_boundary);
     const std::size_t pages_in_batch = batch_bytes / PAGE_SIZE;
 
@@ -154,8 +150,7 @@ std::expected<void, Error> PageMap::unmap_range(
     remaining -= batch_bytes;
   }
 
-  tlb::ShootdownCoordinator::broadcast(this, start_virt, size_bytes,
-                                       size_bytes >= PAGE_SIZE_2MB);
+  tlb::ShootdownCoordinator::broadcast(this, start_virt, size_bytes, size_bytes >= PAGE_SIZE_2MB);
   return {};
 }
 }  // namespace kernel::memory::vmm

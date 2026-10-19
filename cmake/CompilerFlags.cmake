@@ -38,7 +38,7 @@ target_compile_options(os_base_flags INTERFACE "-march=${OS_ARCH_LEVEL}"
         "$<$<COMPILE_LANGUAGE:CXX>:-fno-threadsafe-statics>"
         "$<$<COMPILE_LANGUAGE:CXX>:-fno-use-cxa-atexit>"
 
-        "$<$<COMPILE_LANGUAGE:CXX>:-std=gnu++23>"
+        "$<$<COMPILE_LANGUAGE:CXX>:-std=gnu++2d>"
         "$<$<COMPILE_LANGUAGE:C>:-std=gnu23>"
         -fno-strict-aliasing
 

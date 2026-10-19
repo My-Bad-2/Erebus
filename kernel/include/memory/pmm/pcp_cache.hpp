@@ -25,8 +25,7 @@ class PcpList {
   Page* m_pages[MAX_CAPACITY]{};
 
  public:
-  void tune(const std::uint64_t zone_free_pages,
-            const std::uint8_t order) noexcept {
+  void tune(const std::uint64_t zone_free_pages, const std::uint8_t order) noexcept {
     // Base limits: Order 0 gets 256. Order 3 gets 32.
     const std::uint16_t base_high = 256 >> order;
     const std::uint16_t base_batch = 32 >> order;
@@ -51,17 +50,11 @@ class PcpList {
     }
   }
 
-  [[nodiscard]] constexpr std::uint16_t size() const noexcept {
-    return m_count;
-  }
+  [[nodiscard]] constexpr std::uint16_t size() const noexcept { return m_count; }
   [[nodiscard]] constexpr bool empty() const noexcept { return m_count == 0; }
 
-  [[nodiscard]] constexpr bool needs_drain() const noexcept {
-    return m_count >= m_high;
-  }
-  [[nodiscard]] constexpr std::uint16_t batch_size() const noexcept {
-    return m_batch;
-  }
+  [[nodiscard]] constexpr bool needs_drain() const noexcept { return m_count >= m_high; }
+  [[nodiscard]] constexpr std::uint16_t batch_size() const noexcept { return m_batch; }
 
   // Push to tail
   [[gnu::always_inline]] void push_hot(Page* p) noexcept {

@@ -2,6 +2,8 @@
 
 #include <uacpi/acpi.h>
 
+#include "drivers/uart.hpp"
+
 namespace kernel::utils::logger {
 namespace {
 std::optional<drivers::uart::SerialPort> console;
@@ -9,8 +11,7 @@ TicketSpinlock console_lock;
 
 void ensure_console_init() noexcept {
   if (!console.has_value()) [[unlikely]] {
-    drivers::uart::SerialPort early_port(
-        hw::IoResource(hw::IoType::PMIO, 0x3f8, 1));
+    drivers::uart::SerialPort early_port(hw::IoResource(hw::IoType::PMIO, 0x3f8, 1));
     auto _ = early_port.initialize(115200);
     console.emplace(early_port);
     console->append("\x1b[2J");  // Clear screen on host (can be safely removed)
@@ -25,9 +26,8 @@ void initialize(const void* spcr_raw) noexcept {
 
   const auto* spcr = static_cast<const acpi_spcr*>(spcr_raw);
   if (spcr != nullptr) [[unlikely]] {
-    const auto type = spcr->base_address.address_space_id == 0
-                          ? hw::IoType::MMIO
-                          : hw::IoType::PMIO;
+    const auto type =
+        spcr->base_address.address_space_id == 0 ? hw::IoType::MMIO : hw::IoType::PMIO;
     const std::uint8_t stride =
         spcr->base_address.access_size > 0 ? spcr->base_address.access_size : 1;
 

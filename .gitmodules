@@ -7,3 +7,6 @@
 [submodule "third_party/zydis"]
 	path = third_party/zydis
 	url = https://github.com/zyantific/zydis.git
+[submodule "third_party/freestanding-lgrt"]
+	path = third_party/freestanding-lgrt
+	url = https://github.com/osdev0/freestanding-lgrt.git

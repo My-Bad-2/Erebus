@@ -8,13 +8,10 @@ extern "C" {
 
 void __assert_fail(const char* assertion, const char* file, unsigned int line,
                    const char* function) {
-  kernel::utils::logger::error("{} failed @ {}:{}:{}!", assertion, file, line,
-                               function);
+  kernel::utils::logger::error("{} failed @ {}:{}:{}!", assertion, file, line, function);
 }
 
 void atexit() { kernel::utils::logger::fatal("Atexit Called!\n"); }
 }
 
-void std::terminate() noexcept {
-  kernel::utils::logger::fatal("Terminate Called!\n");
-}
+void std::terminate() noexcept { kernel::utils::logger::fatal("Terminate Called!\n"); }

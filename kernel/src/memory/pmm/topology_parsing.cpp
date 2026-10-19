@@ -12,9 +12,8 @@ struct acpi_hmat_locality_arrays {
   uacpi_u16* matrix;             // Matrix of latency/bandwidth values
 };
 
-void uacpi_hmat_locality_get_arrays(
-    struct acpi_hmat_locality* loc,
-    struct acpi_hmat_locality_arrays* out_arrays) {
+void uacpi_hmat_locality_get_arrays(struct acpi_hmat_locality* loc,
+                                    struct acpi_hmat_locality_arrays* out_arrays) {
   auto ptr = reinterpret_cast<std::uint8_t*>(loc + 1);
 
   out_arrays->initiator_domains = reinterpret_cast<std::uint32_t*>(ptr);
@@ -56,8 +55,7 @@ void TopologyParser::parse_srat(const EarlyAllocFn alloc) noexcept {
 
   // Extract unique ACPI proximity domains for dense mapping
   auto* temp_domains =
-      alloc(sizeof(std::uint32_t) * m_domain_count, alignof(std::uint32_t))
-          .as<std::uint32_t>();
+      alloc(sizeof(std::uint32_t) * m_domain_count, alignof(std::uint32_t)).as<std::uint32_t>();
 
   std::size_t map_idx = 0;
   for (const acpi_entry_hdr* hdr : *payload_res) {
@@ -79,8 +77,7 @@ void TopologyParser::parse_srat(const EarlyAllocFn alloc) noexcept {
 
   // Map physical memory domains using the new dense IDs
   m_domains =
-      alloc(sizeof(MemoryDomain) * m_domain_count, alignof(MemoryDomain))
-          .as<MemoryDomain>();
+      alloc(sizeof(MemoryDomain) * m_domain_count, alignof(MemoryDomain)).as<MemoryDomain>();
 
   std::size_t domain_idx = 0;
   for (const acpi_entry_hdr* hdr : *payload_res) {
@@ -110,8 +107,7 @@ void TopologyParser::parse_slit(EarlyAllocFn alloc) noexcept {
   }
 
   const auto* slit_ptr = *slit_ptr_res;
-  const std::uint64_t count =
-      slit_ptr->num_localities;  // 'count' equates to max ACPI domain ID
+  const std::uint64_t count = slit_ptr->num_localities;  // 'count' equates to max ACPI domain ID
 
   // Validate matrix dimensions against the physical table length.
   std::size_t expected_matrix_size = 0;
@@ -128,9 +124,9 @@ void TopologyParser::parse_slit(EarlyAllocFn alloc) noexcept {
 
   // Allocate a dense latency matrix bounded purely by actual nodes, not the
   // ACPI max ID
-  m_latencies = alloc(m_active_nodes * m_active_nodes * sizeof(std::uint32_t),
-                      alignof(std::uint32_t))
-                    .as<std::uint32_t>();
+  m_latencies =
+      alloc(m_active_nodes * m_active_nodes * sizeof(std::uint32_t), alignof(std::uint32_t))
+          .as<std::uint32_t>();
 
   // Initialize with defaults in case SLIT is sparse
   for (std::uint32_t i = 0; i < m_active_nodes * m_active_nodes; ++i) {
@@ -162,25 +158,20 @@ void TopologyParser::process_hmat_locality(const void* slb) const noexcept {
   const auto* sllb = static_cast<const acpi_hmat_locality*>(slb);
 
   acpi_hmat_locality_arrays arrays;
-  uacpi_hmat_locality_get_arrays(const_cast<acpi_hmat_locality*>(sllb),
-                                 &arrays);
+  uacpi_hmat_locality_get_arrays(const_cast<acpi_hmat_locality*>(sllb), &arrays);
 
-  const auto* initiators =
-      static_cast<const std::uint32_t*>(arrays.initiator_domains);
-  const auto* targets =
-      static_cast<const std::uint32_t*>(arrays.target_domains);
+  const auto* initiators = static_cast<const std::uint32_t*>(arrays.initiator_domains);
+  const auto* targets = static_cast<const std::uint32_t*>(arrays.target_domains);
   const auto* matrix = static_cast<const std::uint16_t*>(arrays.matrix);
 
   using namespace drivers::acpi;
-  const bool is_latency =
-      (sllb->data_type == ACPI_HMAT_LOCALITY_DATA_TYPE_ACCESS_LATENCY ||
-       sllb->data_type == ACPI_HMAT_LOCALITY_DATA_TYPE_READ_LATENCY ||
-       sllb->data_type == ACPI_HMAT_LOCALITY_DATA_TYPE_WRITE_LATENCY);
+  const bool is_latency = (sllb->data_type == ACPI_HMAT_LOCALITY_DATA_TYPE_ACCESS_LATENCY ||
+                           sllb->data_type == ACPI_HMAT_LOCALITY_DATA_TYPE_READ_LATENCY ||
+                           sllb->data_type == ACPI_HMAT_LOCALITY_DATA_TYPE_WRITE_LATENCY);
 
-  const bool is_bandwidth =
-      (sllb->data_type == ACPI_HMAT_LOCALITY_DATA_TYPE_ACCESS_BANDWIDTH ||
-       sllb->data_type == ACPI_HMAT_LOCALITY_DATA_TYPE_READ_BANDWIDTH ||
-       sllb->data_type == ACPI_HMAT_LOCALITY_DATA_TYPE_WRITE_BANDWIDTH);
+  const bool is_bandwidth = (sllb->data_type == ACPI_HMAT_LOCALITY_DATA_TYPE_ACCESS_BANDWIDTH ||
+                             sllb->data_type == ACPI_HMAT_LOCALITY_DATA_TYPE_READ_BANDWIDTH ||
+                             sllb->data_type == ACPI_HMAT_LOCALITY_DATA_TYPE_WRITE_BANDWIDTH);
 
   for (std::uint32_t t = 0; t < sllb->num_target_proximity_domains; ++t) {
     const std::uint32_t target_internal = get_internal_node_id(targets[t]);
@@ -193,8 +184,7 @@ void TopologyParser::process_hmat_locality(const void* slb) const noexcept {
         continue;
       }
 
-      const std::uint64_t raw_val =
-          matrix[i * sllb->num_target_proximity_domains + t];
+      const std::uint64_t raw_val = matrix[i * sllb->num_target_proximity_domains + t];
       if (raw_val == 0 || raw_val == 0xFFFF) {
         continue;
       }
@@ -217,8 +207,7 @@ void TopologyParser::process_hmat_locality(const void* slb) const noexcept {
           m_node_metrics[target_internal].tier = MemoryTier::CXL_LOCAL;
         }
       } else if (is_bandwidth) {
-        m_node_metrics[target_internal].bandwidth_mbps =
-            static_cast<std::uint32_t>(scaled_val);
+        m_node_metrics[target_internal].bandwidth_mbps = static_cast<std::uint32_t>(scaled_val);
       }
     }
   }
@@ -239,8 +228,7 @@ void TopologyParser::parse_hmat() const noexcept {
 
   const auto* hmat_ptr = *tbl_res;
   auto current = reinterpret_cast<const std::uint8_t*>(hmat_ptr->entries);
-  const auto end =
-      reinterpret_cast<const std::uint8_t*>(hmat_ptr) + hmat_ptr->hdr.length;
+  const auto end = reinterpret_cast<const std::uint8_t*>(hmat_ptr) + hmat_ptr->hdr.length;
 
   while (current + sizeof(acpi_hmat_entry_hdr) <= end) {
     const auto* hdr = reinterpret_cast<const acpi_hmat_entry_hdr*>(current);
@@ -263,14 +251,12 @@ void TopologyParser::parse(EarlyAllocFn&& alloc) noexcept {
   if (m_active_nodes == 0) {
     m_active_nodes = 1;
     m_acpi_to_internal_map =
-        alloc(sizeof(std::uint32_t), alignof(std::uint32_t))
-            .as<std::uint32_t>();
+        alloc(sizeof(std::uint32_t), alignof(std::uint32_t)).as<std::uint32_t>();
     m_acpi_to_internal_map[0] = 0;
   }
 
   m_node_metrics =
-      alloc(sizeof(NodeMetrics) * m_active_nodes, alignof(NodeMetrics))
-          .as<NodeMetrics>();
+      alloc(sizeof(NodeMetrics) * m_active_nodes, alignof(NodeMetrics)).as<NodeMetrics>();
   for (std::uint32_t i = 0; i < m_active_nodes; ++i) {
     m_node_metrics[i] = NodeMetrics{};
   }
@@ -282,15 +268,12 @@ void TopologyParser::parse(EarlyAllocFn&& alloc) noexcept {
     std::span domains_span{m_domains, m_domain_count};
 
     std::ranges::sort(domains_span,
-                      [](const MemoryDomain& a, const MemoryDomain& b) {
-                        return a.base < b.base;
-                      });
+                      [](const MemoryDomain& a, const MemoryDomain& b) { return a.base < b.base; });
 
     // Overlapping SRAT memory domains
     for (std::size_t i = 0; i < m_domain_count - 1; ++i) {
       if (domains_span[i].end > domains_span[i + 1].base) {
-        utils::logger::fatal(
-            "Firmware Bug: Overlapping ACPI SRAT memory domains detected!\n");
+        utils::logger::fatal("Firmware Bug: Overlapping ACPI SRAT memory domains detected!\n");
       }
     }
   }

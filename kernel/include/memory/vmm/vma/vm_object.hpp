@@ -53,23 +53,20 @@ class VMObject {
   void expand_max_pages(const std::size_t new_max_pages) noexcept {
     std::size_t current = m_max_pages.load(std::memory_order_relaxed);
     while (current < new_max_pages) {
-      if (m_max_pages.compare_exchange_weak(current, new_max_pages,
-                                            std::memory_order_release,
+      if (m_max_pages.compare_exchange_weak(current, new_max_pages, std::memory_order_release,
                                             std::memory_order_relaxed)) {
         break;
       }
     }
   }
 
-  [[nodiscard]] VMObject* shadow_parent() const noexcept {
-    return m_shadow_parent;
-  }
+  [[nodiscard]] VMObject* shadow_parent() const noexcept { return m_shadow_parent; }
 
   [[nodiscard]] VMObject* create_shadow_clone() noexcept;
-  [[nodiscard]] std::expected<PhysicalAddress, Error> get_page(
-      std::size_t page_offset, PageSize page_size) noexcept;
-  [[nodiscard]] std::expected<PhysicalAddress, Error> resolve_cow_fault(
-      std::size_t page_offset, PageSize size) noexcept;
+  [[nodiscard]] std::expected<PhysicalAddress, Error> get_page(std::size_t page_offset,
+                                                               PageSize page_size) noexcept;
+  [[nodiscard]] std::expected<PhysicalAddress, Error> resolve_cow_fault(std::size_t page_offset,
+                                                                        PageSize size) noexcept;
 };
 
 constexpr std::uint8_t get_page_order(const PageSize size) noexcept {

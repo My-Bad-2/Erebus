@@ -4,9 +4,9 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "../io.hpp"
 #include "apic.hpp"
 #include "core/errors.hpp"
+#include "hal/io.hpp"
 #include "memory/address.hpp"
 #include "uacpi/acpi.h"
 #include "utils/lock.hpp"
@@ -120,8 +120,7 @@ struct ShadowEntry {
   RedirectionEntryHigh m_high;
 
  public:
-  constexpr ShadowEntry(const RedirectionEntryLow lo = {},
-                        const RedirectionEntryHigh hi = {})
+  constexpr ShadowEntry(const RedirectionEntryLow lo = {}, const RedirectionEntryHigh hi = {})
       : m_low(lo), m_high(hi) {}
 
   constexpr RedirectionEntryLow low() const noexcept { return m_low; }
@@ -134,10 +133,8 @@ struct ShadowEntry {
     return (static_cast<std::uint64_t>(m_high.raw()) << 32) | m_low.raw();
   }
 
-  [[nodiscard]] static constexpr ShadowEntry unpack(
-      const std::uint64_t val) noexcept {
-    return ShadowEntry(static_cast<std::uint32_t>(val),
-                       static_cast<std::uint32_t>(val >> 32));
+  [[nodiscard]] static constexpr ShadowEntry unpack(const std::uint64_t val) noexcept {
+    return ShadowEntry(static_cast<std::uint32_t>(val), static_cast<std::uint32_t>(val >> 32));
   }
 };
 
@@ -167,8 +164,7 @@ class IoApicController {
     return Schema{read_direct<IoWin>(IOWIN).get_data()};
   }
 
-  void write_indirect_unsafe(const std::uint8_t reg,
-                             const std::uint32_t data) const noexcept {
+  void write_indirect_unsafe(const std::uint8_t reg, const std::uint32_t data) const noexcept {
     write_direct(IOREGSEL, IoRegSel{}.with_reg_index(reg));
     write_direct(IOWIN, IoWin{}.with_data(data));
   }
@@ -204,21 +200,15 @@ class IoApicController {
   std::expected<void, Error> initialize(memory::VirtualAddress mmio_base,
                                         std::uint32_t gsi_base) noexcept;
 
-  [[nodiscard]] constexpr std::uint32_t get_gsi_base() const noexcept {
-    return m_gsi_base;
-  }
-  [[nodiscard]] constexpr std::uint32_t get_max_entries() const noexcept {
-    return m_max_entries;
-  }
-  [[nodiscard]] constexpr bool handles_gsi(
-      const std::uint32_t gsi) const noexcept {
+  [[nodiscard]] constexpr std::uint32_t get_gsi_base() const noexcept { return m_gsi_base; }
+  [[nodiscard]] constexpr std::uint32_t get_max_entries() const noexcept { return m_max_entries; }
+  [[nodiscard]] constexpr bool handles_gsi(const std::uint32_t gsi) const noexcept {
     return gsi >= m_gsi_base && gsi < (m_gsi_base + m_max_entries);
   }
 
   constexpr std::uint8_t version() const noexcept { return m_version; }
 
-  [[nodiscard]] std::uint64_t get_cached_state(
-      const std::uint32_t gsi) const noexcept {
+  [[nodiscard]] std::uint64_t get_cached_state(const std::uint32_t gsi) const noexcept {
     const std::uint32_t pin = gsi - m_gsi_base;
     return m_shadow_table[pin].load(std::memory_order_acquire);
   }
@@ -244,8 +234,7 @@ class IoApicManager {
   utils::Vector<IoApicController> m_controllers{};
   utils::Vector<InterruptOverride> m_overrides{};
 
-  [[nodiscard]] uint32_t resolve_isa_to_gsi(
-      std::uint8_t isa_irq) const noexcept;
+  [[nodiscard]] uint32_t resolve_isa_to_gsi(std::uint8_t isa_irq) const noexcept;
   [[nodiscard]] std::pair<PinPolarity, TriggerMode> resolve_acpi_flags(
       std::uint8_t isa_irq) const noexcept;
   IoApicController* find_controller(std::uint32_t gsi) noexcept;
@@ -253,30 +242,25 @@ class IoApicManager {
  public:
   IoApicManager() = default;
 
-  std::expected<void, Error> register_controller(
-      memory::VirtualAddress mmio_base, std::uint32_t gsi_base) noexcept;
-  std::expected<void, Error> register_isa_override(
-      std::uint8_t isa_irq, std::uint32_t mapped_gsi,
-      std::uint16_t acpi_flags) noexcept;
+  std::expected<void, Error> register_controller(memory::VirtualAddress mmio_base,
+                                                 std::uint32_t gsi_base) noexcept;
+  std::expected<void, Error> register_isa_override(std::uint8_t isa_irq, std::uint32_t mapped_gsi,
+                                                   std::uint16_t acpi_flags) noexcept;
 
-  std::expected<void, Error> route_isa_irq(std::uint8_t isa_irq,
-                                           std::uint8_t vector,
-                                           std::uint8_t apic_id,
-                                           bool masked = false) noexcept;
-  std::expected<void, Error> route_direct_gsi(
-      std::uint32_t gsi, std::uint8_t vector, std::uint8_t apic_id,
-      PinPolarity polarity = PinPolarity::High,
-      TriggerMode trigger = TriggerMode::Edge, bool masked = false) noexcept;
+  std::expected<void, Error> route_isa_irq(std::uint8_t isa_irq, std::uint8_t vector,
+                                           std::uint8_t apic_id, bool masked = false) noexcept;
+  std::expected<void, Error> route_direct_gsi(std::uint32_t gsi, std::uint8_t vector,
+                                              std::uint8_t apic_id,
+                                              PinPolarity polarity = PinPolarity::High,
+                                              TriggerMode trigger = TriggerMode::Edge,
+                                              bool masked = false) noexcept;
 
-  std::expected<void, Error> route_remapped_gsi(std::uint32_t gsi,
-                                                std::uint16_t iommu_irt_index,
+  std::expected<void, Error> route_remapped_gsi(std::uint32_t gsi, std::uint16_t iommu_irt_index,
                                                 bool masked = true) noexcept;
   std::expected<void, Error> mask_gsi(std::uint32_t gsi) noexcept;
   std::expected<void, Error> unmask_gsi(std::uint32_t gsi) noexcept;
 
-  bool supports_directed_eoi() const noexcept {
-    return m_controllers[0].version() >= 0x20;
-  }
+  bool supports_directed_eoi() const noexcept { return m_controllers[0].version() >= 0x20; }
 };
 
 extern IoApicManager io_apic_manager;

@@ -1,8 +1,7 @@
 #include "boot/boot.hpp"
 
 namespace kernel::boot {
-[[gnu::section(
-    ".limine_requests_start")]] volatile std::uint64_t start_marker[] =
+[[gnu::section(".limine_requests_start")]] volatile std::uint64_t start_marker[] =
     LIMINE_REQUESTS_START_MARKER;
 [[gnu::section(".limine_requests_end")]] volatile std::uint64_t end_marker[] =
     LIMINE_REQUESTS_END_MARKER;

@@ -19,8 +19,7 @@ concept BTreeData = requires(T a, T b) {
   { a == b } -> std::same_as<bool>;
 } && std::is_trivially_copyable_v<T>;
 
-template <BTreeData K, BTreeData V,
-          size_t NodeBytes = std::hardware_destructive_interference_size>
+template <BTreeData K, BTreeData V, size_t NodeBytes = std::hardware_destructive_interference_size>
 class BPlusTree {
   static consteval std::size_t calc_max_keys() {
     for (std::size_t n = 64; n >= 3; --n) {
@@ -35,8 +34,7 @@ class BPlusTree {
 
       const std::size_t union_size =
           (children_size > leaf_data_size) ? children_size : leaf_data_size;
-      const std::size_t union_align =
-          (alignof(V) > alignof(void*)) ? alignof(V) : alignof(void*);
+      const std::size_t union_align = (alignof(V) > alignof(void*)) ? alignof(V) : alignof(void*);
 
       offset = maths::align_up(offset, union_align);
 
@@ -49,8 +47,7 @@ class BPlusTree {
   }
 
   static constexpr size_t MAX_PHYSICAL_KEYS = calc_max_keys();
-  static_assert(MAX_PHYSICAL_KEYS >= 3,
-                "NodeBytes too small to satisfy minimum branching factor.");
+  static_assert(MAX_PHYSICAL_KEYS >= 3, "NodeBytes too small to satisfy minimum branching factor.");
 
   struct alignas(std::hardware_destructive_interference_size) Node {
     std::uint16_t is_leaf : 1;
@@ -68,8 +65,7 @@ class BPlusTree {
       };
     };
 
-    constexpr explicit Node(const bool leaf) noexcept
-        : is_leaf(leaf), count(0) {
+    constexpr explicit Node(const bool leaf) noexcept : is_leaf(leaf), count(0) {
       if (leaf) {
         next_leaf = nullptr;
         prev_leaf = nullptr;
@@ -134,8 +130,7 @@ class BPlusTree {
     }
   }
 
-  static std::size_t search_upper_bound(const K* arr, std::size_t len,
-                                        const K& key) noexcept {
+  static std::size_t search_upper_bound(const K* arr, std::size_t len, const K& key) noexcept {
     if constexpr (MAX_PHYSICAL_KEYS <= 16) {
       std::size_t i = 0;
       while (i < len && !(key < arr[i])) {
@@ -176,8 +171,8 @@ class BPlusTree {
     free_node(node);
   }
 
-  void insert_recursive(Node* node, const K& key, const V& val,
-                        K& out_split_key, Node*& out_right_sibling) noexcept {
+  void insert_recursive(Node* node, const K& key, const V& val, K& out_split_key,
+                        Node*& out_right_sibling) noexcept {
     out_right_sibling = nullptr;
 
     if (node->is_leaf) {
@@ -189,10 +184,8 @@ class BPlusTree {
 
       const std::size_t move_cnt = node->count - idx;
       if (move_cnt > 0) {
-        klib::memmove(&node->keys[idx + 1], &node->keys[idx],
-                      move_cnt * sizeof(K));
-        klib::memmove(&node->values[idx + 1], &node->values[idx],
-                      move_cnt * sizeof(V));
+        klib::memmove(&node->keys[idx + 1], &node->keys[idx], move_cnt * sizeof(K));
+        klib::memmove(&node->values[idx + 1], &node->values[idx], move_cnt * sizeof(V));
       }
 
       node->keys[idx] = key;
@@ -203,14 +196,12 @@ class BPlusTree {
 
       K child_split_key;
       Node* child_right_sib = nullptr;
-      insert_recursive(node->children[idx], key, val, child_split_key,
-                       child_right_sib);
+      insert_recursive(node->children[idx], key, val, child_split_key, child_right_sib);
 
       if (child_right_sib) [[unlikely]] {
         const std::size_t move_cnt = node->count - idx;
         if (move_cnt > 0) {
-          klib::memmove(&node->keys[idx + 1], &node->keys[idx],
-                        move_cnt * sizeof(K));
+          klib::memmove(&node->keys[idx + 1], &node->keys[idx], move_cnt * sizeof(K));
           klib::memmove(&node->children[idx + 2], &node->children[idx + 1],
                         move_cnt * sizeof(Node*));
         }
@@ -261,10 +252,8 @@ class BPlusTree {
       if (idx < node->count && node->keys[idx] == key) [[likely]] {
         const std::size_t move_cnt = node->count - idx - 1;
         if (move_cnt > 0) {
-          klib::memmove(&node->keys[idx], &node->keys[idx + 1],
-                        move_cnt * sizeof(K));
-          klib::memmove(&node->values[idx], &node->values[idx + 1],
-                        move_cnt * sizeof(V));
+          klib::memmove(&node->keys[idx], &node->keys[idx + 1], move_cnt * sizeof(K));
+          klib::memmove(&node->values[idx], &node->values[idx + 1], move_cnt * sizeof(V));
         }
 
         --node->count;
@@ -298,8 +287,7 @@ class BPlusTree {
       const std::size_t move_children = node->count - idx;
 
       if (move_keys > 0) {
-        klib::memmove(&node->keys[key_idx], &node->keys[key_idx + 1],
-                      move_keys * sizeof(K));
+        klib::memmove(&node->keys[key_idx], &node->keys[key_idx + 1], move_keys * sizeof(K));
       }
 
       if (move_children > 0) {
@@ -315,8 +303,7 @@ class BPlusTree {
 
  public:
   BPlusTree() {
-    const auto res =
-        memory::heap::KmemCache::create(sizeof(Node), alignof(Node));
+    const auto res = memory::heap::KmemCache::create(sizeof(Node), alignof(Node));
     if (!res) {
       logger::fatal("Unable to create memory block allocator.");
     }
@@ -356,8 +343,7 @@ class BPlusTree {
   }
 
   template <typename Func>
-  void range(const K& start_key, const K& end_key,
-             Func&& callback) const noexcept {
+  void range(const K& start_key, const K& end_key, Func&& callback) const noexcept {
     SharedPreemptGuard guard(m_lock);
 
     Node* curr = m_root;

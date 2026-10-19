@@ -1,6 +1,6 @@
 #include "hal/interrupts/interrupts.hpp"
 
-#include "hal/gdt.hpp"
+#include "../../../include/hal/smp/gdt.hpp"
 #include "hal/hal.hpp"
 #include "memory/memory.hpp"
 #include "utility"
@@ -51,22 +51,20 @@ struct FredStklvls {
  public:
   std::uint64_t raw() const noexcept { return m_data; }
 
-  [[nodiscard]] constexpr uint8_t get_exception_level(
-      const InterruptVector vector) const noexcept {
-    if (vector >= InterruptVector::ExternalInterruptStart) [[unlikely]] {
+  [[nodiscard]] constexpr uint8_t get_exception_level(const InterruptVector vector) const noexcept {
+    if (vector >= InterruptVector::ExternalInterruptStart) [[unlikely]]
       return 0;
-    }
 
     return (m_data >> (std::to_underlying(vector) * 2)) & 0b11;
   }
 
-  constexpr auto with_exception_level(
-      const InterruptVector vector, const FredStackLevel level) const noexcept {
+  constexpr auto with_exception_level(const InterruptVector vector,
+                                      const FredStackLevel level) const noexcept {
     FredStklvls copy = *this;
     if (vector < InterruptVector::ExternalInterruptStart) [[likely]] {
       const std::uint64_t shift = std::to_underlying(vector) * 2;
-      copy.m_data = (copy.m_data & ~(3ul << shift)) |
-                    ((static_cast<uint64_t>(level) & 0x3) << shift);
+      copy.m_data =
+          (copy.m_data & ~(3ul << shift)) | ((static_cast<uint64_t>(level) & 0x3) << shift);
     }
 
     return copy;
@@ -87,10 +85,8 @@ void initialize(const memory::VirtualAddress ring0_rsp,
   FredConfig config{};
 
   const auto entrypoint_addr = memory::VirtualAddress{&fred_entrypoint};
-  if (!entrypoint_addr.is_aligned(memory::PAGE_SIZE)) [[unlikely]] {
-    utils::logger::fatal(
-        "FRED entrypoint address is not aligned to page size!\n");
-  }
+  if (!entrypoint_addr.is_aligned(memory::PAGE_SIZE)) [[unlikely]]
+    utils::logger::fatal("FRED entrypoint address is not aligned to page size!\n");
 
   config.set_entrypoint_base(entrypoint_addr.value() >> memory::PAGE_SHIFT_4KB);
   config.set_software_event_stack_level(FredStackLevel::Level0);
@@ -101,12 +97,10 @@ void initialize(const memory::VirtualAddress ring0_rsp,
   write::msr(std::to_underlying(FredMsr::Config), config.raw());
 
   FredStklvls stklvls{};
-  stklvls = stklvls.with_exception_level(InterruptVector::NonMaskableInterrupt,
-                                         FredStackLevel::Level1);
-  stklvls = stklvls.with_exception_level(InterruptVector::DoubleFault,
-                                         FredStackLevel::Level1);
-  stklvls = stklvls.with_exception_level(InterruptVector::MachineCheck,
-                                         FredStackLevel::Level1);
+  stklvls =
+      stklvls.with_exception_level(InterruptVector::NonMaskableInterrupt, FredStackLevel::Level1);
+  stklvls = stklvls.with_exception_level(InterruptVector::DoubleFault, FredStackLevel::Level1);
+  stklvls = stklvls.with_exception_level(InterruptVector::MachineCheck, FredStackLevel::Level1);
   write::msr(std::to_underlying(FredMsr::Stklvls), stklvls.raw());
 
   FredPointer rsp0{};
@@ -141,9 +135,8 @@ struct [[gnu::packed]] IDTEntry {
   std::uint32_t offset_high;
   std::uint32_t reserved;
 
-  constexpr void set_handler(void* handler, gdt::Selector sel,
-                             const GateType type, const EventCpl dpl,
-                             const std::uint8_t ist_idx = 0) {
+  constexpr void set_handler(void* handler, gdt::Selector sel, const GateType type,
+                             const EventCpl dpl, const std::uint8_t ist_idx = 0) {
     const auto addr = reinterpret_cast<std::uint64_t>(handler);
 
     offset_low = static_cast<std::uint16_t>(addr & 0xFFFF);
@@ -155,8 +148,7 @@ struct [[gnu::packed]] IDTEntry {
     reserved = 0;
 
     constexpr std::uint8_t PRESENT_BIT = 1 << 7;
-    type_attr =
-        PRESENT_BIT | (std::to_underlying(dpl) << 5) | std::to_underlying(type);
+    type_attr = PRESENT_BIT | (std::to_underlying(dpl) << 5) | std::to_underlying(type);
   }
 };
 
@@ -180,8 +172,8 @@ void initialize() noexcept {
         ist_idx = 1;
       }
 
-      g_idt_table[vec].set_handler(handler, gdt::Selector::KernelCode,
-                                   GateType::Interrupt, dpl, ist_idx);
+      g_idt_table[vec].set_handler(handler, gdt::Selector::KernelCode, GateType::Interrupt, dpl,
+                                   ist_idx);
     }
 
     return true;
@@ -199,10 +191,9 @@ void initialize() noexcept {
 
 void initialize(memory::VirtualAddress ring0_stack,
                 memory::VirtualAddress critical_stack) noexcept {
-  if (profile_manager.get_current()->has<Feature::FRED>()) {
+  if (profile_manager.get_current()->has<Feature::FRED>())
     fred_config::initialize(ring0_stack, critical_stack);
-  } else {
+  else
     legacy::initialize();
-  }
 }
 }  // namespace kernel::hw::interrupts

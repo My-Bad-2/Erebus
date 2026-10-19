@@ -98,8 +98,7 @@ struct alignas(64) Page {
       Flags schema{current};
       schema.set_order(order);
       desired = schema.raw();
-    } while (!flags.compare_exchange_weak(current, desired,
-                                          std::memory_order_release,
+    } while (!flags.compare_exchange_weak(current, desired, std::memory_order_release,
                                           std::memory_order_relaxed));
   }
 
@@ -118,8 +117,7 @@ struct alignas(64) Page {
       Flags schema{current};
       schema.set_state(new_state);
       desired = schema.raw();
-    } while (!flags.compare_exchange_weak(current, desired,
-                                          std::memory_order_release,
+    } while (!flags.compare_exchange_weak(current, desired, std::memory_order_release,
                                           std::memory_order_relaxed));
   }
 
@@ -134,8 +132,7 @@ struct alignas(64) Page {
       Topology schema{current};
       schema.set_numa_node(numa_id);
       desired = schema.raw();
-    } while (!topology.compare_exchange_weak(current, desired,
-                                             std::memory_order_release,
+    } while (!topology.compare_exchange_weak(current, desired, std::memory_order_release,
                                              std::memory_order_relaxed));
   }
 
@@ -146,8 +143,7 @@ struct alignas(64) Page {
       Topology schema{current};
       schema.set_cpu_id(cpu_id);
       desired = schema.raw();
-    } while (!topology.compare_exchange_weak(current, desired,
-                                             std::memory_order_release,
+    } while (!topology.compare_exchange_weak(current, desired, std::memory_order_release,
                                              std::memory_order_relaxed));
   }
 
@@ -158,8 +154,7 @@ struct alignas(64) Page {
       Flags schema{current};
       schema.set_mobility(mobility);
       desired = schema.raw();
-    } while (!flags.compare_exchange_weak(current, desired,
-                                          std::memory_order_release,
+    } while (!flags.compare_exchange_weak(current, desired, std::memory_order_release,
                                           std::memory_order_relaxed));
   }
 
@@ -168,14 +163,13 @@ struct alignas(64) Page {
     return schema.get_mobility();
   }
 
-  [[nodiscard]] bool try_update_slub_state(
-      heap::SlabState& expected, const heap::SlabState desired) noexcept {
+  [[nodiscard]] bool try_update_slub_state(heap::SlabState& expected,
+                                           const heap::SlabState desired) noexcept {
     auto old_val = std::bit_cast<std::uint64_t>(expected);
     auto new_val = std::bit_cast<std::uint64_t>(desired);
 
-    if (slub.state.compare_exchange_weak(
-            old_val, new_val, std::memory_order_acq_rel,
-            std::memory_order_relaxed)) [[likely]] {
+    if (slub.state.compare_exchange_weak(old_val, new_val, std::memory_order_acq_rel,
+                                         std::memory_order_relaxed)) [[likely]] {
       return true;
     }
 
@@ -184,21 +178,18 @@ struct alignas(64) Page {
   }
 
   [[nodiscard]] heap::SlabState read_slub_state() const noexcept {
-    return std::bit_cast<heap::SlabState>(
-        slub.state.load(std::memory_order_relaxed));
+    return std::bit_cast<heap::SlabState>(slub.state.load(std::memory_order_relaxed));
   }
 
   void setup_buddy_metadata(const PageState state, const PageMobility mobility,
-                            const std::uint8_t order,
-                            const std::uint32_t node) noexcept {
+                            const std::uint8_t order, const std::uint32_t node) noexcept {
     auto current_flags = flags.load(std::memory_order_relaxed);
     while (true) {
       Flags schema{current_flags};
       schema.set_state(state);
       schema.set_mobility(mobility);
       schema.set_order(order);
-      if (flags.compare_exchange_weak(current_flags, schema.raw(),
-                                      std::memory_order_relaxed)) {
+      if (flags.compare_exchange_weak(current_flags, schema.raw(), std::memory_order_relaxed)) {
         break;
       }
     }
@@ -207,8 +198,7 @@ struct alignas(64) Page {
     while (true) {
       Topology schema{current_top};
       schema.set_numa_node(node);
-      if (topology.compare_exchange_weak(current_top, schema.raw(),
-                                         std::memory_order_relaxed)) {
+      if (topology.compare_exchange_weak(current_top, schema.raw(), std::memory_order_relaxed)) {
         break;
       }
     }

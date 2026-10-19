@@ -4,23 +4,12 @@
 #include <cstdint>
 
 #include "memory/address.hpp"
-#include "patch.h"
-#include "patcher.hpp"
+#include "patch/static_call.hpp"
 
 namespace kernel::hw {
-namespace detail {
 inline constexpr uint32_t RELAX_TSC_DELAY = 250;
-[[gnu::visibility("hidden")]] static patcher::StaticKeyDef use_waitpkg = {
-    false};
-[[gnu::visibility("hidden")]] static patcher::StaticKeyDef use_moniterx = {
-    false};
-[[gnu::visibility("hidden")]] static patcher::StaticKeyDef use_mwait = {false};
-[[gnu::visibility("hidden")]] static patcher::StaticKeyDef use_fsgsbase = {
-    false};
-}  // namespace detail
 
-[[gnu::always_inline]] inline std::uint64_t read_tsc(
-    std::uint32_t* cpu_id) noexcept {
+[[gnu::always_inline]] inline std::uint64_t read_tsc(std::uint32_t* cpu_id) noexcept {
   std::uint32_t cpu, low, high;
   asm volatile("rdtscp"
                : "=a"(low), "=d"(high), "=c"(cpu)
@@ -31,49 +20,26 @@ inline constexpr uint32_t RELAX_TSC_DELAY = 250;
     *cpu_id = cpu;
   }
 
-  return (static_cast<std::uint64_t>(high) << 32) |
-         static_cast<std::uint64_t>(low);
+  return (static_cast<std::uint64_t>(high) << 32) | static_cast<std::uint64_t>(low);
 }
 
-[[gnu::always_inline]] inline std::uint64_t read_tsc() noexcept {
-  return read_tsc(nullptr);
-}
+[[gnu::always_inline]] inline std::uint64_t read_tsc() noexcept { return read_tsc(nullptr); }
 
-[[gnu::always_inline]] inline void pause() noexcept {
-  asm volatile("pause" : /* No Output */ : /* No Input */ : "memory");
-}
+void pause(std::uint32_t = 1, std::uint64_t = RELAX_TSC_DELAY) noexcept;
+void tpause(std::uint32_t state = 1, std::uint64_t delay = RELAX_TSC_DELAY) noexcept;
 
-[[gnu::always_inline]] inline void tpause(
-    const std::uint32_t state = 1,
-    const std::uint64_t delay = detail::RELAX_TSC_DELAY) noexcept {
-  std::uint64_t target_tsc = read_tsc() + delay;
-  const std::uint32_t target_hi = static_cast<std::uint32_t>(target_tsc >> 32);
-  const std::uint32_t target_lo =
-      static_cast<std::uint32_t>(target_tsc & 0xFFFFFFFF);
+DECLARE_STATIC_CALL(void, cpu_relax_impl, std::uint32_t, std::uint64_t);
 
-  asm volatile("tpause %%ecx"
-               :
-               : "c"(state), "a"(target_lo), "d"(target_hi)
-               : "memory");
-}
-
-[[gnu::always_inline]] inline void cpu_relax(
-    const std::uint32_t state = 1,
-    const std::uint64_t delay = detail::RELAX_TSC_DELAY) noexcept {
-  if (EREBUS_STATIC_BRANCH_UNLIKELY(detail::use_waitpkg)) {
-    tpause(state, delay);
-  } else {
-    pause();
-  }
+[[gnu::always_inline]] inline void cpu_relax(const std::uint32_t state = 1,
+                                             const std::uint64_t delay = RELAX_TSC_DELAY) noexcept {
+  cpu_relax_impl(state, delay);
 }
 
 namespace irq {
-[[gnu::always_inline]] inline void disable() noexcept {
-  asm volatile("cli" ::: "memory");
-}
-[[gnu::always_inline]] inline void enable() noexcept {
-  asm volatile("sti" ::: "memory");
-}
+[[gnu::always_inline]] inline void disable() noexcept { asm volatile("cli" ::: "memory"); }
+
+[[gnu::always_inline]] inline void enable() noexcept { asm volatile("sti" ::: "memory"); }
+
 [[gnu::always_inline]] inline std::uint64_t read_flags() noexcept {
   std::uint64_t rflags;
   asm volatile(
@@ -85,8 +51,7 @@ namespace irq {
   return rflags;
 }
 
-[[gnu::always_inline]] inline void write_flags(
-    const std::uint64_t flags) noexcept {
+[[gnu::always_inline]] inline void write_flags(const std::uint64_t flags) noexcept {
   asm volatile(
       "pushq %0\n\t"
       "popfq"
@@ -122,76 +87,31 @@ namespace irq {
   }
 }
 
-namespace detail {
-[[gnu::always_inline]] inline void idle_generic(
-    volatile std::uint32_t* runqueue_count) noexcept {
-  while (*runqueue_count == 0) {
-    wait_for_interrupt();
-  }
-}
+DECLARE_STATIC_CALL([[noreturn]] void, cpu_idle_loop, volatile std::uint32_t*);
 
-[[gnu::always_inline]] inline void idle_mwait(
-    volatile std::uint32_t* runqueue_count) noexcept {
-  while (*runqueue_count == 0) {
-    asm volatile("monitor"
-                 : /* No output */
-                 : "a"(runqueue_count) /* Address */, "c"(0) /* Extensions */,
-                   "d"(0) /* Hints */
-                 : "memory");
-
-    if (*runqueue_count != 0) {
-      break;
-    }
-
-    asm volatile("mwait"
-                 :                                    /* No Output */
-                 : "a"(0) /* C1 state hint */, "c"(1) /* Break on interrupts */
-                 : "memory");
-  }
-}
-}  // namespace detail
-
-[[gnu::always_inline, noreturn]] inline void cpu_idle_loop(
-    volatile std::uint32_t* runqueue_count) noexcept {
-  if (EREBUS_STATIC_BRANCH_UNLIKELY(detail::use_mwait)) {
-    detail::idle_mwait(runqueue_count);
-  } else {
-    detail::idle_generic(runqueue_count);
-  }
-
-  std::unreachable();
-}
-
-[[gnu::always_inline]] inline void umonitor(
-    const volatile void* addr) noexcept {
+[[gnu::always_inline]] inline void umonitor(const volatile void* addr) noexcept {
   asm volatile("umonitor %0" : /* No Output */ : "r"(addr) : "memory");
 }
 
-[[gnu::always_inline]] inline void umwait(
-    const std::uint32_t state, const std::uint64_t tsc_deadline) noexcept {
-  const std::uint32_t target_hi =
-      static_cast<std::uint32_t>(tsc_deadline >> 32);
-  const std::uint32_t target_lo =
-      static_cast<std::uint32_t>(tsc_deadline & 0xFFFFFFFF);
+[[gnu::always_inline]] inline void umwait(const std::uint32_t state,
+                                          const std::uint64_t tsc_deadline) noexcept {
+  const std::uint32_t target_hi = static_cast<std::uint32_t>(tsc_deadline >> 32);
+  const std::uint32_t target_lo = static_cast<std::uint32_t>(tsc_deadline & 0xFFFFFFFF);
 
-  asm volatile("umwait %2"
-               :
-               : "a"(target_lo), "d"(target_hi), "r"(state)
-               : "cc", "memory");
+  asm volatile("umwait %2" : : "a"(target_lo), "d"(target_hi), "r"(state) : "cc", "memory");
 }
 
-[[gnu::always_inline]] inline void monitorx(
-    const volatile void* addr, const std::uint32_t extensions,
-    const std::uint32_t hints) noexcept {
+[[gnu::always_inline]] inline void monitorx(const volatile void* addr,
+                                            const std::uint32_t extensions,
+                                            const std::uint32_t hints) noexcept {
   asm volatile("monitorx"
                : /* No Output */
                : "a"(addr), "c"(extensions), "d"(hints)
                : "memory");
 }
 
-[[gnu::always_inline]] inline void mwaitx(
-    const std::uint32_t extension, const std::uint32_t hints,
-    const std::uint32_t timeout) noexcept {
+[[gnu::always_inline]] inline void mwaitx(const std::uint32_t extension, const std::uint32_t hints,
+                                          const std::uint32_t timeout) noexcept {
   asm volatile("mwaitx"
                : /* No Output */
                : "a"(hints), "c"(extension), "b"(timeout)
@@ -225,20 +145,18 @@ class CR4 {
   constexpr explicit CR4(const std::uint64_t val = 0) : m_data(val) {}
   [[nodiscard]] std::uint64_t raw() const noexcept { return m_data; }
 
-  BF_BIT_RW(vme, 0)  // Virtual 8096 mode extensions
-  BF_BIT_RW(pvi, 1)  // Protected-mode virtual interrupts
-  BF_BIT_RW(tsd, 2)  // Timestamp disabled (except in ring-0)
-  BF_BIT_RW(de, 3)   // Debugging extensions
-  BF_BIT_RW(pse, 4)  // Page Size extension
-  BF_BIT_RW(pae, 5)  // Physical Address Extension
-  BF_BIT_RW(mce, 6)  // Machine check exception
-  BF_BIT_RW(pge, 7)  // Page global enabled
-  BF_BIT_RW(
-      pce, 8)  // Performance-monitoring Counter enable (in any privilege level)
+  BF_BIT_RW(vme, 0)          // Virtual 8096 mode extensions
+  BF_BIT_RW(pvi, 1)          // Protected-mode virtual interrupts
+  BF_BIT_RW(tsd, 2)          // Timestamp disabled (except in ring-0)
+  BF_BIT_RW(de, 3)           // Debugging extensions
+  BF_BIT_RW(pse, 4)          // Page Size extension
+  BF_BIT_RW(pae, 5)          // Physical Address Extension
+  BF_BIT_RW(mce, 6)          // Machine check exception
+  BF_BIT_RW(pge, 7)          // Page global enabled
+  BF_BIT_RW(pce, 8)          // Performance-monitoring Counter enable
   BF_BIT_RW(osfxsr, 9)       // Enabled SSE and FPU save & restore
   BF_BIT_RW(osxmmexcpt, 10)  // enables unmasked SSE exceptions
-  BF_BIT_RW(umip,
-            11)  // sgdt, sidt, sldt, smsw, and str can't be used if cpl > 0.
+  BF_BIT_RW(umip, 11)
   BF_BIT_RW(la57, 12)      // 5-lvl paging
   BF_BIT_RW(vmxe, 13)      // Virtual machine extensions enable
   BF_BIT_RW(smxe, 14)      // Safer mode extensions enable
@@ -246,15 +164,15 @@ class CR4 {
   BF_BIT_RW(pcide, 17)     // enables pcids
   BF_BIT_RW(osxsave, 18)   // xsave and processor extended states enable
   BF_BIT_RW(kl, 19)        // Key locker enable
-  BF_BIT_RW(smep, 20)   // execution of code in a higher ring generates a fault
-  BF_BIT_RW(smap, 21)   // access of data in a higher ring generates a fault
-  BF_BIT_RW(pke, 22)    // Protection key enable
-  BF_BIT_RW(cet, 23)    // Control-flow enforcement
-  BF_BIT_RW(pks, 24)    // Enable protection keys for supervisor pages
-  BF_BIT_RW(uintr, 25)  // User interrupts enable
-  BF_BIT_RW(lass, 27)   // Linear Address space separation
-  BF_BIT_RW(lam_sup, 28)  // Linear address masking for supervisor pointers
-  BF_BIT_RW(fred, 32)     // Flexible return and event delivery
+  BF_BIT_RW(smep, 20)      // execution of code in a higher ring generates a fault
+  BF_BIT_RW(smap, 21)      // access of data in a higher ring generates a fault
+  BF_BIT_RW(pke, 22)       // Protection key enable
+  BF_BIT_RW(cet, 23)       // Control-flow enforcement
+  BF_BIT_RW(pks, 24)       // Enable protection keys for supervisor pages
+  BF_BIT_RW(uintr, 25)     // User interrupts enable
+  BF_BIT_RW(lass, 27)      // Linear Address space separation
+  BF_BIT_RW(lam_sup, 28)   // Linear address masking for supervisor pointers
+  BF_BIT_RW(fred, 32)      // Flexible return and event delivery
 };
 
 class CR3 {
@@ -272,17 +190,14 @@ class CR3 {
   BF_BIT_RW(pwt, 3)  // Page-level write-through
   BF_BIT_RW(pcd, 4)  // Page-level cache disable
 
-  BF_RW(std::uint64_t, pfn, 12,
-        40)  // Page frame number (base physical address)
+  BF_RW(std::uint64_t, pfn, 12, 40)  // Page frame number
 
-  [[nodiscard]] constexpr memory::PhysicalAddress extract_address()
-      const noexcept {
+  constexpr memory::PhysicalAddress extract_address() const noexcept {
     return memory::PhysicalAddress{get_pfn() << 12};
   }
 
-  [[nodiscard]] static constexpr CR3 build_legacy(
-      const memory::PhysicalAddress phys, const bool pwt = false,
-      const bool pcd = false) noexcept {
+  static constexpr CR3 build_legacy(const memory::PhysicalAddress phys, const bool pwt = false,
+                                    const bool pcd = false) noexcept {
     CR3 val{0};
     val.set_pfn(phys.value() >> 12);
     val.set_pwt(pwt);
@@ -290,9 +205,8 @@ class CR3 {
     return val;
   }
 
-  [[nodiscard]] static constexpr CR3 build_pcid(
-      const memory::PhysicalAddress phys, const std::uint16_t pcid,
-      const bool no_flush = false) noexcept {
+  static constexpr CR3 build_pcid(const memory::PhysicalAddress phys, const std::uint16_t pcid,
+                                  const bool no_flush = false) noexcept {
     CR3 val{0};
     val.set_pfn(phys.value() >> 12);
     val.set_pcid(pcid & 0xfff);
@@ -306,7 +220,7 @@ class EFER {
 
  public:
   constexpr explicit EFER(const std::uint64_t val = 0) : m_data(val) {}
-  [[nodiscard]] std::uint64_t raw() const noexcept { return m_data; }
+  std::uint64_t raw() const noexcept { return m_data; }
 
   BF_BIT_RW(sce, 0)  // enables syscalls
   BF_BIT_RW(lme, 8)  // Enables IA-32e mode operation
@@ -350,8 +264,7 @@ namespace read {
   return val;
 }
 
-[[gnu::always_inline]] inline std::uint64_t msr(
-    const std::uint32_t msr) noexcept {
+[[gnu::always_inline]] inline std::uint64_t msr(const std::uint32_t msr) noexcept {
   std::uint32_t lo, hi;
   asm volatile("rdmsr" : "=a"(lo), "=d"(hi) : "c"(msr) : "memory");
   return (static_cast<std::uint64_t>(hi) << 32) | lo;
@@ -362,20 +275,7 @@ namespace read {
   return EFER{msr(IA32_EFER)};
 }
 
-[[gnu::always_inline]] inline std::uint64_t gs_base() noexcept {
-  std::uint64_t base;
-  if (EREBUS_STATIC_BRANCH_UNLIKELY(detail::use_fsgsbase)) {
-    asm volatile("wrgsbase %0"
-                 : "=r"(base)
-                 : /* No input */
-                 : /* No Clobber */);
-  } else {
-    constexpr std::uint32_t KERNEL_GS_BASE = 0xC0000101;
-    base = msr(KERNEL_GS_BASE);
-  }
-
-  return base;
-}
+DECLARE_STATIC_CALL(std::uint64_t, gs_base);
 }  // namespace read
 
 namespace write {
@@ -399,8 +299,7 @@ namespace write {
   asm volatile("mov %0, %%cr8" : /* No output */ : "r"(val) : "memory");
 }
 
-[[gnu::always_inline]] inline void msr(const std::uint32_t msr,
-                                       const std::uint64_t val) noexcept {
+[[gnu::always_inline]] inline void msr(const std::uint32_t msr, const std::uint64_t val) noexcept {
   const std::uint32_t lo = val & 0xFFFFFFFF;
   const std::uint32_t hi = val >> 32;
   asm volatile("wrmsr"
@@ -414,17 +313,7 @@ namespace write {
   msr(IA32_EFER, val.raw());
 }
 
-[[gnu::always_inline]] inline void gs_base(const std::uint64_t base) noexcept {
-  if (EREBUS_STATIC_BRANCH_UNLIKELY(detail::use_fsgsbase)) {
-    asm volatile("wrgsbase %0"
-                 : /* No Output */
-                 : "r"(base)
-                 : /* No Clobber */);
-  } else {
-    constexpr std::uint32_t KERNEL_GS_BASE = 0xC0000101;
-    msr(KERNEL_GS_BASE, base);
-  }
-}
+DECLARE_STATIC_CALL(void, wrgsbase, std::uint64_t);
 }  // namespace write
 
 enum class InvpcidType : std::uint64_t {
@@ -435,13 +324,15 @@ enum class InvpcidType : std::uint64_t {
 };
 
 struct alignas(16) InvpcidDescriptor {
-  std::uint64_t pcid : 12;
-  std::uint64_t reserved : 52;
-  std::uint64_t address;
+  std::uint64_t m_data{0};
+  BF_RW(std::uint16_t, pcid, 0, 12);
+  memory::VirtualAddress address{};
+
+  void set_address(const memory::VirtualAddress addr) noexcept { address = addr; }
 };
 
-[[gnu::always_inline]] inline void invpcid(
-    InvpcidType type, const InvpcidDescriptor& desc) noexcept {
+[[gnu::always_inline]] inline void invpcid(InvpcidType type,
+                                           const InvpcidDescriptor& desc) noexcept {
   asm volatile("invpcid %1, %0"
                : /* No Output */
                : "r"(std::to_underlying(type)), "m"(desc)
@@ -457,8 +348,7 @@ class InvlpgbAddress {
   std::uint64_t m_data;
 
  public:
-  constexpr explicit InvlpgbAddress(const std::uint64_t val = 0)
-      : m_data(val) {}
+  constexpr explicit InvlpgbAddress(const std::uint64_t val = 0) : m_data(val) {}
   [[nodiscard]] std::uint64_t raw() const noexcept { return m_data; }
 
   BF_BIT_RW(va_valid, 0)        // Flush specific VA
@@ -469,8 +359,7 @@ class InvlpgbAddress {
   BF_BIT_RW(final_only, 5)      // Flush only the leaf PTE
   BF_BIT_RW(include_nested, 6)  // Flush guest hypervisor translations
 
-  BF_RW(std::uint64_t, virt_addr, 12,
-        52)  // Target Virtual Address (bits 12-63)
+  BF_RW(std::uint64_t, virt_addr, 12, 52)  // Target Virtual Address
 };
 
 // Maps to EDX
@@ -478,8 +367,7 @@ class InvlpgbContext {
   std::uint32_t m_data;
 
  public:
-  constexpr explicit InvlpgbContext(const std::uint32_t val = 0)
-      : m_data(val) {}
+  constexpr explicit InvlpgbContext(const std::uint32_t val = 0) : m_data(val) {}
   [[nodiscard]] std::uint32_t raw() const noexcept { return m_data; }
 
   BF_RW(std::uint16_t, asid, 0, 16)   // Guest Address Space ID
@@ -494,9 +382,8 @@ class InvlpgbCount {
   constexpr explicit InvlpgbCount(const std::uint32_t val = 0) : m_data(val) {}
   [[nodiscard]] std::uint32_t raw() const noexcept { return m_data; }
 
-  BF_RW(std::uint16_t, extra_count, 0,
-        16)                         // Number of additional pages to flush
-  BF_BIT_RW(large_page_stride, 31)  // Increment VA by 2MB/1GB per count
+  BF_RW(std::uint16_t, extra_count, 0, 16)  // No. of additional pages to flush
+  BF_BIT_RW(large_page_stride, 31)          // Increment VA by 2MB/1GB per count
 };
 
 [[gnu::always_inline]] inline void invlpgb(InvlpgbAddress rax, InvlpgbCount ecx,
@@ -512,8 +399,7 @@ class InvlpgbCount {
 }
 
 [[noreturn, gnu::naked, gnu::noinline]] constexpr void execute_on_new_stack(
-    std::uint64_t new_stack_top, void* payload,
-    void (*target_function)(void*)) noexcept {
+    std::uint64_t new_stack_top, void* payload, void (*target_function)(void*)) noexcept {
   asm volatile(
       "movq %%rdi, %%rsp\n\t"
       "movq %%rsi, %%rdi\n\t"

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "hal/hal.hpp"
-#include "hal/percpu.hpp"
+#include "hal/smp/percpu.hpp"
 
 namespace kernel::utils {
 template <typename T>
@@ -127,9 +127,7 @@ class [[nodiscard]] ExclusiveNakedGuard {
   LockType& m_lock;
 
  public:
-  explicit ExclusiveNakedGuard(LockType& lock) noexcept : m_lock(lock) {
-    m_lock.write_lock();
-  }
+  explicit ExclusiveNakedGuard(LockType& lock) noexcept : m_lock(lock) { m_lock.write_lock(); }
 
   ~ExclusiveNakedGuard() noexcept { m_lock.write_unlock(); }
 

@@ -19,8 +19,7 @@ enum class CacheFlags : std::uint8_t {
 };
 
 constexpr CacheFlags operator|(CacheFlags a, CacheFlags b) {
-  return static_cast<CacheFlags>(static_cast<uint8_t>(a) |
-                                 static_cast<uint8_t>(b));
+  return static_cast<CacheFlags>(static_cast<uint8_t>(a) | static_cast<uint8_t>(b));
 }
 
 constexpr bool has_flag(CacheFlags flags, CacheFlags flag) {
@@ -37,8 +36,7 @@ struct alignas(std::hardware_destructive_interference_size) CpuCache {
   pmm::Page* cpu_partial{nullptr};
 
   static constexpr std::uint8_t MAX_CPU_PARTIAL = 4;
-  [[nodiscard]] void* alloc(std::uint32_t object_size,
-                            const KmemCache* cache) noexcept;
+  [[nodiscard]] void* alloc(std::uint32_t object_size, const KmemCache* cache) noexcept;
 };
 
 struct alignas(std::hardware_destructive_interference_size) NodeCache {
@@ -68,18 +66,14 @@ class alignas(std::hardware_destructive_interference_size) KmemCache {
   [[nodiscard, gnu::cold, gnu::noinline]] std::expected<void*, Error> refill(
       CpuCache& cpu, std::uint32_t cpu_id) noexcept;
   void abandon_active_page(CpuCache& cpu, std::uint32_t cpu_id) noexcept;
-  void push_to_node_partial(pmm::Page* page, std::uint32_t node_id,
-                            bool mostly_empty) noexcept;
-  void remove_from_node_partial(pmm::Page* page,
-                                std::uint32_t node_id) noexcept;
-  [[nodiscard]] pmm::Page* pop_from_node_partial(
-      std::uint32_t node_id) noexcept;
+  void push_to_node_partial(pmm::Page* page, std::uint32_t node_id, bool mostly_empty) noexcept;
+  void remove_from_node_partial(pmm::Page* page, std::uint32_t node_id) noexcept;
+  [[nodiscard]] pmm::Page* pop_from_node_partial(std::uint32_t node_id) noexcept;
 
  public:
   constexpr KmemCache(const std::uint32_t obj_size, const std::uint32_t size,
-                      const std::uint32_t order, const CacheFlags flags,
-                      void (*ctor)(void*), const std::span<CpuCache> cpus,
-                      const std::span<NodeCache> nodes) noexcept
+                      const std::uint32_t order, const CacheFlags flags, void (*ctor)(void*),
+                      const std::span<CpuCache> cpus, const std::span<NodeCache> nodes) noexcept
       : m_cpu_caches(cpus),
         m_node_caches(nodes),
         m_ctor(ctor),
@@ -100,12 +94,10 @@ class alignas(std::hardware_destructive_interference_size) KmemCache {
   }
 
   [[nodiscard]] static std::expected<KmemCache*, Error> create(
-      std::uint32_t obj_size, std::uint32_t alignment,
-      CacheFlags flags = CacheFlags::None,
+      std::uint32_t obj_size, std::uint32_t alignment, CacheFlags flags = CacheFlags::None,
       void (*ctor)(void*) = nullptr) noexcept;
 
-  [[nodiscard, gnu::always_inline]] std::expected<void*, Error>
-  alloc() noexcept {
+  [[nodiscard, gnu::always_inline]] std::expected<void*, Error> alloc() noexcept {
     utils::IrqDisableGuard irq_guard;
     const std::uint32_t cpu_id = hw::percpu::id();
     CpuCache& cpu = m_cpu_caches[cpu_id];
@@ -125,11 +117,9 @@ class alignas(std::hardware_destructive_interference_size) KmemCache {
       return;
     }
 
-    const std::size_t payload =
-        m_obj_size > sizeof(void*) ? m_obj_size - sizeof(void*) : 0;
+    const std::size_t payload = m_obj_size > sizeof(void*) ? m_obj_size - sizeof(void*) : 0;
     if (payload > 0) {
-      klib::memset(static_cast<char*>(obj) + sizeof(void*), POISON_FREE_BYTE,
-                   payload);
+      klib::memset(static_cast<char*>(obj) + sizeof(void*), POISON_FREE_BYTE, payload);
     }
   }
 
@@ -138,14 +128,12 @@ class alignas(std::hardware_destructive_interference_size) KmemCache {
       return;
     }
 
-    const std::size_t payload =
-        m_obj_size > sizeof(void*) ? m_obj_size - sizeof(void*) : 0;
+    const std::size_t payload = m_obj_size > sizeof(void*) ? m_obj_size - sizeof(void*) : 0;
     const auto* mem = static_cast<std::uint8_t*>(obj) + sizeof(void*);
 
     for (std::size_t i = 0; i < payload; ++i) {
       if (mem[i] != POISON_FREE_BYTE) [[unlikely]] {
-        utils::logger::fatal(
-            "KmemCache: Use-After-Free detected at {} (offset {})\n", obj, i);
+        utils::logger::fatal("KmemCache: Use-After-Free detected at {} (offset {})\n", obj, i);
       }
     }
   }
@@ -155,8 +143,7 @@ class alignas(std::hardware_destructive_interference_size) KmemCache {
       return;
     }
 
-    *reinterpret_cast<std::uint64_t*>(static_cast<char*>(obj) + m_obj_size) =
-        REDZONE_MAGIC;
+    *reinterpret_cast<std::uint64_t*>(static_cast<char*>(obj) + m_obj_size) = REDZONE_MAGIC;
   }
 
   void check_redzone(void* obj) const noexcept {
@@ -164,20 +151,16 @@ class alignas(std::hardware_destructive_interference_size) KmemCache {
       return;
     }
 
-    const auto magic =
-        *reinterpret_cast<std::uint64_t*>(static_cast<char*>(obj) + m_obj_size);
+    const auto magic = *reinterpret_cast<std::uint64_t*>(static_cast<char*>(obj) + m_obj_size);
     if (magic != REDZONE_MAGIC) [[unlikely]] {
-      utils::logger::fatal(
-          "KmemCache: Buffer overflow detected (Redzone corrupted) at {}\n",
-          obj);
+      utils::logger::fatal("KmemCache: Buffer overflow detected (Redzone corrupted) at {}\n", obj);
     }
   }
 };
 
 void initialize() noexcept;
 
-[[nodiscard]] void* kmalloc(std::size_t size,
-                            std::size_t alignment = sizeof(void*)) noexcept;
+[[nodiscard]] void* kmalloc(std::size_t size, std::size_t alignment = sizeof(void*)) noexcept;
 void kfree(void* obj) noexcept;
 [[nodiscard]] void* krealloc(void* ptr, std::size_t new_size,
                              std::size_t align = sizeof(void*)) noexcept;

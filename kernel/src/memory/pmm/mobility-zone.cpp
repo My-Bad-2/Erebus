@@ -42,8 +42,7 @@ void MobilityZone::flush_deferred_frees_internal() noexcept {
   }
 }
 
-void MobilityZone::buddy_merge_internal(Page* page,
-                                        std::uint8_t order) noexcept {
+void MobilityZone::buddy_merge_internal(Page* page, std::uint8_t order) noexcept {
   std::uint64_t pfn = page_to_pfn(page);
 
   while (order < MAX_ORDER) {
@@ -68,14 +67,12 @@ void MobilityZone::buddy_merge_internal(Page* page,
     order++;
   }
 
-  page->setup_buddy_metadata(PageState::Free, m_mobility, order,
-                             m_parent_node->get_id());
+  page->setup_buddy_metadata(PageState::Free, m_mobility, order, m_parent_node->get_id());
   m_areas[order].push_hot(page);
   m_active_orders_bitmap |= (1u << order);
 }
 
-Page* MobilityZone::extract_block_internal(
-    const std::uint8_t requested_order) noexcept {
+Page* MobilityZone::extract_block_internal(const std::uint8_t requested_order) noexcept {
   const std::uint32_t search_mask = ~((1u << requested_order) - 1);
   const std::uint32_t available = m_active_orders_bitmap & search_mask;
 
@@ -83,8 +80,7 @@ Page* MobilityZone::extract_block_internal(
     return nullptr;
   }
 
-  std::uint8_t curr_order =
-      static_cast<std::uint8_t>(std::countr_zero(available));
+  std::uint8_t curr_order = static_cast<std::uint8_t>(std::countr_zero(available));
   Page* page = m_areas[curr_order].pop_hot();
 
   if (m_areas[curr_order].is_empty()) {
@@ -96,8 +92,7 @@ Page* MobilityZone::extract_block_internal(
     const std::uint64_t buddy_pfn = page_to_pfn(page) ^ (1ul << curr_order);
     Page* buddy = pfn_to_page(buddy_pfn);
 
-    page->setup_buddy_metadata(PageState::Free, m_mobility, curr_order,
-                               m_parent_node->get_id());
+    page->setup_buddy_metadata(PageState::Free, m_mobility, curr_order, m_parent_node->get_id());
 
     m_areas[curr_order].push_hot(buddy);
     m_active_orders_bitmap |= (1u << curr_order);
@@ -114,8 +109,8 @@ std::uint32_t MobilityZone::calculate_fragmentation_index() const noexcept {
     return 0;  // Empty Zone, no fragmentation
   }
 
-  const std::uint64_t superpage_pages =
-      static_cast<std::uint64_t>(m_areas[MAX_ORDER].count()) << MAX_ORDER;
+  const std::uint64_t superpage_pages = static_cast<std::uint64_t>(m_areas[MAX_ORDER].count())
+                                        << MAX_ORDER;
   if (superpage_pages >= free) {
     return 0;  // 0% fragmented (all available memory is perfectly contiguous
   }
@@ -124,15 +119,13 @@ std::uint32_t MobilityZone::calculate_fragmentation_index() const noexcept {
   return static_cast<std::uint32_t>(100 - ((superpage_pages * 100) / free));
 }
 
-Page* MobilityZone::alloc_pages_locked(
-    const std::uint8_t requested_order) noexcept {
+Page* MobilityZone::alloc_pages_locked(const std::uint8_t requested_order) noexcept {
   flush_deferred_frees_internal();
 
   if (Page* page = extract_block_internal(requested_order)) [[likely]] {
     const std::uint64_t allocated = 1ul << requested_order;
     const std::uint64_t remaining_free =
-        m_total_free_pages.fetch_sub(allocated, std::memory_order_relaxed) -
-        allocated;
+        m_total_free_pages.fetch_sub(allocated, std::memory_order_relaxed) - allocated;
     evaluate_watermarks(remaining_free, requested_order, false);
     return page;
   }
@@ -141,15 +134,13 @@ Page* MobilityZone::alloc_pages_locked(
   return nullptr;
 }
 
-void MobilityZone::free_page_locked(Page* page,
-                                    const std::uint8_t order) noexcept {
+void MobilityZone::free_page_locked(Page* page, const std::uint8_t order) noexcept {
   flush_deferred_frees_internal();
   buddy_merge_internal(page, order);
   m_total_free_pages.fetch_add(1ul << order, std::memory_order_relaxed);
 }
 
-bool MobilityZone::batch_refill_pcp(PcpList& list,
-                                    const std::uint8_t order) noexcept {
+bool MobilityZone::batch_refill_pcp(PcpList& list, const std::uint8_t order) noexcept {
   utils::NakedGuard guard{m_lock};
   flush_deferred_frees_internal();
 
@@ -165,12 +156,9 @@ bool MobilityZone::batch_refill_pcp(PcpList& list,
   }
 
   if (refilled > 0) [[likely]] {
-    const std::uint64_t pages_allocated = static_cast<std::uint64_t>(refilled)
-                                          << order;
+    const std::uint64_t pages_allocated = static_cast<std::uint64_t>(refilled) << order;
     const std::uint64_t remaining_free =
-        m_total_free_pages.fetch_sub(pages_allocated,
-                                     std::memory_order_relaxed) -
-        pages_allocated;
+        m_total_free_pages.fetch_sub(pages_allocated, std::memory_order_relaxed) - pages_allocated;
     evaluate_watermarks(remaining_free, order, false);
     return true;
   }
@@ -188,8 +176,7 @@ void MobilityZone::batch_drain_pcp(PcpList& list, std::uint8_t order) noexcept {
     buddy_merge_internal(cold_page, order);
   }
 
-  m_total_free_pages.fetch_add(static_cast<std::uint64_t>(list.batch_size())
-                                   << order,
+  m_total_free_pages.fetch_add(static_cast<std::uint64_t>(list.batch_size()) << order,
                                std::memory_order_relaxed);
 }
 
@@ -245,8 +232,7 @@ void MobilityZone::free_page(Page* page, const std::uint8_t order) noexcept {
   list.push_hot(page);
 }
 
-Page* MobilityZone::extract_largest_block_for_steal(
-    const std::uint8_t min_order) noexcept {
+Page* MobilityZone::extract_largest_block_for_steal(const std::uint8_t min_order) noexcept {
   utils::IrqSaveGuard guard{m_lock};
   flush_deferred_frees_internal();
 
@@ -258,8 +244,7 @@ Page* MobilityZone::extract_largest_block_for_steal(
   }
 
   // Find the highest available order to steal.
-  const std::uint8_t target_order =
-      static_cast<std::uint8_t>(std::bit_width(available) - 1);
+  const std::uint8_t target_order = static_cast<std::uint8_t>(std::bit_width(available) - 1);
 
   Page* page = m_areas[target_order].pop_hot();
   if (m_areas[target_order].is_empty()) {

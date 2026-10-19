@@ -18,8 +18,7 @@ class WpDisable {
  public:
   WpDisable() noexcept : m_cr0(0) {
     asm volatile("mov %%cr0, %0" : "=r"(m_cr0));
-    asm volatile("mov %0, %%cr0" ::"r"(m_cr0 & ~(1UL << 16))
-                 : "memory");  // Clear WP
+    asm volatile("mov %0, %%cr0" ::"r"(m_cr0 & ~(1UL << 16)) : "memory");  // Clear WP
   }
 
   ~WpDisable() noexcept {
@@ -47,9 +46,8 @@ bool InstructionDecoder::verify_boundaries(const std::uint8_t* code,
 
   // Decode until we hit exactly the expected length
   while (processed < expected_len) {
-    if (!ZYAN_SUCCESS(
-            ZydisDecoderDecodeInstruction(&decoder, nullptr, code + processed,
-                                          expected_len - processed, &insn))) {
+    if (!ZYAN_SUCCESS(ZydisDecoderDecodeInstruction(&decoder, nullptr, code + processed,
+                                                    expected_len - processed, &insn))) {
       return false;
     }
 
@@ -59,9 +57,9 @@ bool InstructionDecoder::verify_boundaries(const std::uint8_t* code,
   return processed == expected_len;
 }
 
-bool InstructionDecoder::relocate_rip_instructions(
-    std::span<std::uint8_t> payload, std::uintptr_t old_rip,
-    std::uintptr_t new_rip) noexcept {
+bool InstructionDecoder::relocate_rip_instructions(std::span<std::uint8_t> payload,
+                                                   std::uintptr_t old_rip,
+                                                   std::uintptr_t new_rip) noexcept {
   ZydisDecoder decoder;
   ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64);
 
@@ -74,8 +72,7 @@ bool InstructionDecoder::relocate_rip_instructions(
     ZydisDecodedOperand operands[ZYDIS_MAX_OPERAND_COUNT];
 
     if (!ZYAN_SUCCESS(ZydisDecoderDecodeFull(&decoder, payload.data() + offset,
-                                             payload.size() - offset, &insn,
-                                             operands))) {
+                                             payload.size() - offset, &insn, operands))) {
       break;
     }
 
@@ -86,73 +83,63 @@ bool InstructionDecoder::relocate_rip_instructions(
         const std::uint8_t disp_offset = insn.raw.disp.offset;
         std::int32_t current_disp;
 
-        klib::memcpy(&current_disp, payload.data() + offset + disp_offset,
-                     sizeof(current_disp));
+        klib::memcpy(&current_disp, payload.data() + offset + disp_offset, sizeof(current_disp));
 
         const std::uintptr_t old_anchor = old_rip + offset + insn.length;
         const std::uintptr_t new_anchor = new_rip + offset + insn.length;
-        const std::uintptr_t absolute_target =
-            old_anchor + static_cast<std::int64_t>(current_disp);
+        const std::uintptr_t absolute_target = old_anchor + static_cast<std::int64_t>(current_disp);
 
-        const std::int64_t diff = static_cast<std::int64_t>(absolute_target) -
-                                  static_cast<std::int64_t>(new_anchor);
+        const std::int64_t diff =
+            static_cast<std::int64_t>(absolute_target) - static_cast<std::int64_t>(new_anchor);
         if (diff < MIN_REL32 || diff > MAX_REL32) {
           utils::logger::fatal("Zydis RIP relocation out of 32-bit bounds!\n");
           return false;
         }
 
-        const std::int32_t new_disp =
-            static_cast<std::int32_t>(absolute_target - new_anchor);
-        klib::memcpy(payload.data() + offset + disp_offset, &new_disp,
-                     sizeof(new_disp));
+        const std::int32_t new_disp = static_cast<std::int32_t>(absolute_target - new_anchor);
+        klib::memcpy(payload.data() + offset + disp_offset, &new_disp, sizeof(new_disp));
         break;
       }
 
       // Fix Branch rel32 / rel8
       if (insn.meta.branch_type != ZYDIS_BRANCH_TYPE_NONE &&
-          operands[i].type == ZYDIS_OPERAND_TYPE_IMMEDIATE &&
-          operands[i].imm.is_relative) {
+          operands[i].type == ZYDIS_OPERAND_TYPE_IMMEDIATE && operands[i].imm.is_relative) {
         const std::uint8_t imm_offset = insn.raw.imm[0].offset;
         const std::uintptr_t old_anchor = old_rip + offset + insn.length;
         const std::uintptr_t new_anchor = new_rip + offset + insn.length;
 
         if (insn.raw.imm[0].size == 32) {
           std::int32_t current_disp;
-          klib::memcpy(&current_disp, payload.data() + offset + imm_offset,
-                       sizeof(current_disp));
+          klib::memcpy(&current_disp, payload.data() + offset + imm_offset, sizeof(current_disp));
 
           const std::uintptr_t absolute_target =
               old_anchor + static_cast<std::int64_t>(current_disp);
 
-          const std::int64_t diff = static_cast<std::int64_t>(absolute_target) -
-                                    static_cast<std::int64_t>(new_anchor);
+          const std::int64_t diff =
+              static_cast<std::int64_t>(absolute_target) - static_cast<std::int64_t>(new_anchor);
           if (diff < MIN_REL32 || diff > MAX_REL32) {
-            utils::logger::fatal(
-                "Zydis RIP relocation out of 32-bit bounds!\n");
+            utils::logger::fatal("Zydis RIP relocation out of 32-bit bounds!\n");
             return false;
           }
 
           const std::int32_t new_disp = static_cast<std::int32_t>(diff);
-          klib::memcpy(payload.data() + offset + imm_offset, &new_disp,
-                       sizeof(new_disp));
+          klib::memcpy(payload.data() + offset + imm_offset, &new_disp, sizeof(new_disp));
         } else if (insn.raw.imm[0].size == 8) {
           std::int8_t current_disp;
-          klib::memcpy(&current_disp, payload.data() + offset + imm_offset,
-                       sizeof(current_disp));
+          klib::memcpy(&current_disp, payload.data() + offset + imm_offset, sizeof(current_disp));
 
           const std::uintptr_t absolute_target =
               old_anchor + static_cast<std::int64_t>(current_disp);
 
-          const std::int64_t diff = static_cast<std::int64_t>(absolute_target) -
-                                    static_cast<std::int64_t>(new_anchor);
+          const std::int64_t diff =
+              static_cast<std::int64_t>(absolute_target) - static_cast<std::int64_t>(new_anchor);
           if (diff < -128 || diff > 127) {
             utils::logger::fatal("Zydis rel8 relocation out of bounds!\n");
             return false;
           }
 
           const std::int8_t new_disp = static_cast<std::int8_t>(diff);
-          klib::memcpy(payload.data() + offset + imm_offset, &new_disp,
-                       sizeof(new_disp));
+          klib::memcpy(payload.data() + offset + imm_offset, &new_disp, sizeof(new_disp));
         }
         break;
       }
@@ -164,21 +151,19 @@ bool InstructionDecoder::relocate_rip_instructions(
   return true;
 }
 
-void InstructionDecoder::pad_with_nops(
-    std::span<std::uint8_t> buffer, const std::uintptr_t target_addr) noexcept {
+void InstructionDecoder::pad_with_nops(std::span<std::uint8_t> buffer,
+                                       const std::uintptr_t target_addr) noexcept {
   if (buffer.empty()) {
     return;
   }
 
-  constexpr std::size_t CACHE_LINE =
-      std::hardware_destructive_interference_size;
+  constexpr std::size_t CACHE_LINE = std::hardware_destructive_interference_size;
   const std::size_t dist_to_boundary = CACHE_LINE - (target_addr % CACHE_LINE);
 
   // Never allow a multi-byte NOP to straddle a 64-byte boundary
   if (dist_to_boundary > 0 && dist_to_boundary < buffer.size()) {
     ZydisEncoderNopFill(buffer.data(), dist_to_boundary);
-    ZydisEncoderNopFill(buffer.data() + dist_to_boundary,
-                        buffer.size() - dist_to_boundary);
+    ZydisEncoderNopFill(buffer.data() + dist_to_boundary, buffer.size() - dist_to_boundary);
   } else {
     ZydisEncoderNopFill(buffer.data(), buffer.size());
   }
@@ -191,8 +176,7 @@ void ExceptionTable::sync_trampoline(const std::uintptr_t old_rip,
 
   for (auto* entry = start; entry < stop; ++entry) {
     const auto relative_offset = static_cast<std::int64_t>(entry->insn_offset);
-    const auto fault_addr =
-        reinterpret_cast<std::uintptr_t>(&entry->insn_offset) + relative_offset;
+    const auto fault_addr = reinterpret_cast<std::uintptr_t>(&entry->insn_offset) + relative_offset;
 
     if (fault_addr == old_rip) {
       auto* mutable_entry = const_cast<ExceptionTableEntry*>(entry);
@@ -206,16 +190,16 @@ void ExceptionTable::sync_trampoline(const std::uintptr_t old_rip,
 bool BootPatcher::validate_ibt(std::span<const std::uint8_t> payload,
                                const std::uint8_t* target) noexcept {
   // ENDBR64 Opcode: 0xF3 0x0F 0x1E 0xFA
-  const bool orig_has_endbr = (target[0] == 0xF3 && target[1] == 0x0F &&
-                               target[2] == 0x1E && target[3] == 0xFA);
+  const bool orig_has_endbr =
+      (target[0] == 0xF3 && target[1] == 0x0F && target[2] == 0x1E && target[3] == 0xFA);
 
   if (orig_has_endbr) {
     if (payload.size() < 4) {
       return false;
     }
 
-    const bool repl_has_endbr = (payload[0] == 0xF3 && payload[1] == 0x0F &&
-                                 payload[2] == 0x1E && payload[3] == 0xFA);
+    const bool repl_has_endbr =
+        (payload[0] == 0xF3 && payload[1] == 0x0F && payload[2] == 0x1E && payload[3] == 0xFA);
     // If the original instruction was a valid indirect branch target, the
     // replacement must also start with ENDBR64
     return repl_has_endbr;
@@ -254,21 +238,17 @@ PatchResult BootPatcher::apply_patch(const AltInstr& alt) noexcept {
 
       if (alt.instr_len > 2) {
         InstructionDecoder::pad_with_nops(
-            std::span{dest + 2, static_cast<std::size_t>(alt.instr_len - 2)},
-            target + 2);
+            std::span{dest + 2, static_cast<std::size_t>(alt.instr_len - 2)}, target + 2);
       }
     } else {
       if (alt.instr_len < 5) {
         return std::unexpected(Error::TargetTooSmallForTrampoline);
       }
 
-      const auto disp64 = static_cast<std::int64_t>(repl) -
-                          static_cast<std::int64_t>(target + 5);
+      const auto disp64 = static_cast<std::int64_t>(repl) - static_cast<std::int64_t>(target + 5);
 
-      constexpr std::int64_t MAX_REL32 =
-          std::numeric_limits<std::int32_t>::max();
-      constexpr std::int64_t MIN_REL32 =
-          std::numeric_limits<std::int32_t>::min();
+      constexpr std::int64_t MAX_REL32 = std::numeric_limits<std::int32_t>::max();
+      constexpr std::int64_t MIN_REL32 = std::numeric_limits<std::int32_t>::min();
 
       if (disp64 < MIN_REL32 || disp64 > MAX_REL32) {
         utils::logger::fatal("Trampoline displacement out of 32-bit bounds!\n");
@@ -281,8 +261,7 @@ PatchResult BootPatcher::apply_patch(const AltInstr& alt) noexcept {
 
       if (alt.instr_len > 5) {
         InstructionDecoder::pad_with_nops(
-            std::span{dest + 5, static_cast<std::size_t>(alt.instr_len - 5)},
-            target + 5);
+            std::span{dest + 5, static_cast<std::size_t>(alt.instr_len - 5)}, target + 5);
       }
     }
 
@@ -293,26 +272,22 @@ PatchResult BootPatcher::apply_patch(const AltInstr& alt) noexcept {
   // Inline patching
   std::array<std::uint8_t, 64> payload{};
   if (alt.repl_len > 0) {
-    klib::memcpy(payload.data(), reinterpret_cast<const void*>(repl),
-                 alt.repl_len);
+    klib::memcpy(payload.data(), reinterpret_cast<const void*>(repl), alt.repl_len);
 
-    if (!validate_ibt(
-            std::span<const std::uint8_t>{payload.data(), alt.repl_len},
-            dest)) {
+    if (!validate_ibt(std::span<const std::uint8_t>{payload.data(), alt.repl_len}, dest)) {
       return std::unexpected(Error::IBTViolation);
     }
 
-    if (!InstructionDecoder::relocate_rip_instructions(
-            std::span(payload.data(), alt.repl_len), repl, target)) {
+    if (!InstructionDecoder::relocate_rip_instructions(std::span(payload.data(), alt.repl_len),
+                                                       repl, target)) {
       return std::unexpected(Error::ZydisRelocationFailed);
     }
   }
 
   const std::size_t pad_len = alt.instr_len - alt.repl_len;
   if (pad_len > 0) {
-    InstructionDecoder::pad_with_nops(
-        std::span{payload.data() + alt.repl_len, pad_len},
-        target + alt.repl_len);
+    InstructionDecoder::pad_with_nops(std::span{payload.data() + alt.repl_len, pad_len},
+                                      target + alt.repl_len);
   }
 
   klib::memcpy(dest, payload.data(), alt.instr_len);
@@ -324,29 +299,24 @@ void apply_all_boot_patches() noexcept {
 
   const CpuInfo* cpu = profile_manager.get_current();
 
-  for (const auto* alt = __start_altinstructions; alt < __stop_altinstructions;
-       ++alt) {
+  for (const auto* alt = __start_altinstructions; alt < __stop_altinstructions; ++alt) {
     if (!cpu->has(alt->feature_flag)) {
       continue;
     }
 
-    const auto target_addr =
-        reinterpret_cast<std::uintptr_t>(&alt->instr_offset) +
-        static_cast<std::intptr_t>(alt->instr_offset);
+    const auto target_addr = reinterpret_cast<std::uintptr_t>(&alt->instr_offset) +
+                             static_cast<std::intptr_t>(alt->instr_offset);
 
     bool higher_prio_patch_exists = false;
-    for (const auto* comp = __start_altinstructions;
-         comp < __stop_altinstructions; ++comp) {
+    for (const auto* comp = __start_altinstructions; comp < __stop_altinstructions; ++comp) {
       if (comp == alt) {
         continue;
       }
 
-      const auto comp_target =
-          reinterpret_cast<uintptr_t>(&comp->instr_offset) +
-          static_cast<std::intptr_t>(comp->instr_offset);
+      const auto comp_target = reinterpret_cast<uintptr_t>(&comp->instr_offset) +
+                               static_cast<std::intptr_t>(comp->instr_offset);
       if (comp_target == target_addr && cpu->has(comp->feature_flag)) {
-        if (comp->priority > alt->priority ||
-            (comp->priority == alt->priority && comp < alt)) {
+        if (comp->priority > alt->priority || (comp->priority == alt->priority && comp < alt)) {
           higher_prio_patch_exists = true;
           break;
         }
@@ -361,9 +331,8 @@ void apply_all_boot_patches() noexcept {
   }
 
   for (const auto* key = __start_static_keys; key < __stop_static_keys; ++key) {
-    const auto key_def_addr =
-        reinterpret_cast<std::uintptr_t>(&key->key_def_offset) +
-        static_cast<std::int64_t>(key->key_def_offset);
+    const auto key_def_addr = reinterpret_cast<std::uintptr_t>(&key->key_def_offset) +
+                              static_cast<std::int64_t>(key->key_def_offset);
     const auto* key_def = reinterpret_cast<const StaticKeyDef*>(key_def_addr);
 
     if (!key_def->enabled) {
@@ -372,12 +341,11 @@ void apply_all_boot_patches() noexcept {
 
     const auto nop_addr = reinterpret_cast<std::uintptr_t>(&key->nop_offset) +
                           static_cast<std::int64_t>(key->nop_offset);
-    const auto target_addr =
-        reinterpret_cast<std::uintptr_t>(&key->target_offset) +
-        static_cast<std::int64_t>(key->target_offset);
+    const auto target_addr = reinterpret_cast<std::uintptr_t>(&key->target_offset) +
+                             static_cast<std::int64_t>(key->target_offset);
 
-    const std::int64_t disp64 = static_cast<std::int64_t>(target_addr) -
-                                static_cast<std::int64_t>(nop_addr + 5);
+    const std::int64_t disp64 =
+        static_cast<std::int64_t>(target_addr) - static_cast<std::int64_t>(nop_addr + 5);
 
     constexpr std::int64_t MAX_REL32 = std::numeric_limits<std::int32_t>::max();
     constexpr std::int64_t MIN_REL32 = std::numeric_limits<std::int32_t>::min();
@@ -390,8 +358,7 @@ void apply_all_boot_patches() noexcept {
     auto* dest = reinterpret_cast<std::uint8_t*>(target_addr);
 
     if (disp64 >= -128 && disp64 <= 127) {
-      std::int8_t disp8 =
-          static_cast<std::int8_t>(target_addr - (nop_addr + 2));
+      std::int8_t disp8 = static_cast<std::int8_t>(target_addr - (nop_addr + 2));
 
       dest[0] = 0xEB;  // JMP rel8
       dest[1] = disp8;

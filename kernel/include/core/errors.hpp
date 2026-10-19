@@ -43,6 +43,10 @@ enum class Error : std::uint32_t {
   ZydisConversionFailed = 0x5004,
   InvalidOpcode = 0x5005,
   TrampolineAllocationFailed = 0x5006,
+  SiteOutOfTextBounds = 0x5007,
+  ZydisDecodeFailed = 0x5008,
+  ZydisEncodeFailed = 0x5009,
+  UnexpectedSiteMnemonic = 0x500A,
 
   // IOAPIC errors
   UnmappedGSI = 0x6001,
@@ -50,12 +54,8 @@ enum class Error : std::uint32_t {
   OverrideLimitReached = 0x6003,
 };
 
-[[nodiscard]] constexpr bool IsSuccess(const Error e) noexcept {
-  return e == Error::Success;
-}
-[[nodiscard]] constexpr bool IsError(const Error e) noexcept {
-  return e != Error::Success;
-}
+[[nodiscard]] constexpr bool IsSuccess(const Error e) noexcept { return e == Error::Success; }
+[[nodiscard]] constexpr bool IsError(const Error e) noexcept { return e != Error::Success; }
 [[nodiscard]] constexpr uint32_t GetErrorSubsystem(const Error e) noexcept {
   return static_cast<uint32_t>(e) & 0xF000;
 }

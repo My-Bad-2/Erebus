@@ -25,8 +25,8 @@ class alignas(std::hardware_destructive_interference_size) MobilityZone {
   std::uint32_t m_active_orders_bitmap{0};
   FreeArea m_areas[MAX_ORDER + 1];
 
-  alignas(std::hardware_destructive_interference_size)
-      std::atomic<std::uint64_t> m_total_free_pages{0};
+  alignas(
+      std::hardware_destructive_interference_size) std::atomic<std::uint64_t> m_total_free_pages{0};
 
   alignas(std::hardware_destructive_interference_size) PageMobility m_mobility;
   NumaNode* m_parent_node;
@@ -36,13 +36,11 @@ class alignas(std::hardware_destructive_interference_size) MobilityZone {
   alignas(std::hardware_destructive_interference_size)
       utils::MpscRingBuffer<Page*, 512> m_deferred_frees;
 
-  [[nodiscard]] Page* extract_block_internal(
-      std::uint8_t requested_order) noexcept;
+  [[nodiscard]] Page* extract_block_internal(std::uint8_t requested_order) noexcept;
   void buddy_merge_internal(Page* page, std::uint8_t order) noexcept;
 
   void flush_deferred_frees_internal() noexcept;
-  void evaluate_watermarks(std::uint64_t curr_free,
-                           std::uint8_t requested_order,
+  void evaluate_watermarks(std::uint64_t curr_free, std::uint8_t requested_order,
                            bool alloc_failed) const noexcept;
 
   [[nodiscard]] Page* alloc_pages_locked(std::uint8_t requested_order) noexcept;
@@ -58,50 +56,39 @@ class alignas(std::hardware_destructive_interference_size) MobilityZone {
   MobilityZone(const MobilityZone&) = delete;
   MobilityZone& operator=(const MobilityZone&) = delete;
 
-  [[nodiscard]] PageMobility get_mobility() const noexcept {
-    return m_mobility;
-  }
+  [[nodiscard]] PageMobility get_mobility() const noexcept { return m_mobility; }
   [[nodiscard]] utils::QSpinlock& get_lock() noexcept { return m_lock; }
-  [[nodiscard]] ZoneWatermarks get_watermarks() const noexcept {
-    return m_watermarks;
-  }
+  [[nodiscard]] ZoneWatermarks get_watermarks() const noexcept { return m_watermarks; }
 
   [[nodiscard]] std::uint64_t get_free_pages() const noexcept {
     return m_total_free_pages.load(std::memory_order_relaxed);
   }
 
-  [[gnu::always_inline]] void add_free_pages(
-      const std::uint64_t count) noexcept {
+  [[gnu::always_inline]] void add_free_pages(const std::uint64_t count) noexcept {
     m_total_free_pages.fetch_add(count, std::memory_order_relaxed);
   }
 
-  [[gnu::always_inline]] void sub_free_pages(
-      const std::uint64_t count) noexcept {
+  [[gnu::always_inline]] void sub_free_pages(const std::uint64_t count) noexcept {
     m_total_free_pages.fetch_sub(count, std::memory_order_relaxed);
   }
 
-  [[nodiscard, gnu::always_inline]] bool is_order_active(
-      const std::uint8_t order) const noexcept {
+  [[nodiscard, gnu::always_inline]] bool is_order_active(const std::uint8_t order) const noexcept {
     return (m_active_orders_bitmap & (1u << order)) != 0;
   }
 
-  [[gnu::always_inline]] void set_order_active(
-      const std::uint8_t order) noexcept {
+  [[gnu::always_inline]] void set_order_active(const std::uint8_t order) noexcept {
     m_active_orders_bitmap |= (1u << order);
   }
 
-  [[gnu::always_inline]] void clear_order_active(
-      const std::uint8_t order) noexcept {
+  [[gnu::always_inline]] void clear_order_active(const std::uint8_t order) noexcept {
     m_active_orders_bitmap &= ~(1u << order);
   }
 
-  [[nodiscard, gnu::always_inline]] std::uint32_t get_active_orders_bitmap()
-      const noexcept {
+  [[nodiscard, gnu::always_inline]] std::uint32_t get_active_orders_bitmap() const noexcept {
     return m_active_orders_bitmap;
   }
 
-  [[nodiscard, gnu::always_inline]] FreeArea& get_area(
-      const std::uint8_t order) noexcept {
+  [[nodiscard, gnu::always_inline]] FreeArea& get_area(const std::uint8_t order) noexcept {
     return m_areas[order];
   }
 
@@ -110,8 +97,7 @@ class alignas(std::hardware_destructive_interference_size) MobilityZone {
     return m_areas[order];
   }
 
-  [[gnu::always_inline]] void inject_free_page_cold(
-      Page* page, const std::uint8_t order) noexcept {
+  [[gnu::always_inline]] void inject_free_page_cold(Page* page, const std::uint8_t order) noexcept {
     m_areas[order].push_cold(page);
     set_order_active(order);
     add_free_pages(1ul << order);
@@ -123,9 +109,7 @@ class alignas(std::hardware_destructive_interference_size) MobilityZone {
     m_watermarks.high = (total_present_pages * 5) / 100;  // 5%
   }
 
-  void allocate_pcp(void* pcp_memory) noexcept {
-    m_pcp_cache = static_cast<PcpCache*>(pcp_memory);
-  }
+  void allocate_pcp(void* pcp_memory) noexcept { m_pcp_cache = static_cast<PcpCache*>(pcp_memory); }
 
   void tune_pcp(const std::uint32_t total_cpus) const noexcept {
     if (!m_pcp_cache) {
@@ -144,8 +128,7 @@ class alignas(std::hardware_destructive_interference_size) MobilityZone {
   [[nodiscard]] Page* alloc_pages(std::uint8_t requested_order) noexcept;
   void free_page(Page* page, std::uint8_t order) noexcept;
 
-  [[nodiscard]] Page* extract_largest_block_for_steal(
-      std::uint8_t min_order) noexcept;
+  [[nodiscard]] Page* extract_largest_block_for_steal(std::uint8_t min_order) noexcept;
   [[nodiscard]] std::uint32_t calculate_fragmentation_index() const noexcept;
 };
 

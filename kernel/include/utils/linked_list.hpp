@@ -28,29 +28,21 @@ class SListNode {
   SListNode(SListNode&&) = delete;
   SListNode& operator=(SListNode&&) = delete;
 
-  [[nodiscard]] constexpr T* as_item() noexcept {
-    return static_cast<T*>(this);
-  }
-  [[nodiscard]] constexpr const T* as_item() const noexcept {
-    return static_cast<const T*>(this);
-  }
-  [[nodiscard]] constexpr bool is_linked() const noexcept {
-    return m_next != nullptr;
-  }
+  [[nodiscard]] constexpr T* as_item() noexcept { return static_cast<T*>(this); }
+  [[nodiscard]] constexpr const T* as_item() const noexcept { return static_cast<const T*>(this); }
+  [[nodiscard]] constexpr bool is_linked() const noexcept { return m_next != nullptr; }
 };
 
 template <typename T, typename Tag, bool Const>
 class SListIterator {
-  using node_type =
-      std::conditional_t<Const, const SListNode<T, Tag>, SListNode<T, Tag>>;
+  using node_type = std::conditional_t<Const, const SListNode<T, Tag>, SListNode<T, Tag>>;
   node_type* m_current;
 
   friend class SList<T, Tag>;
   template <typename, typename, bool>
   friend class SListIterator;
 
-  explicit constexpr SListIterator(node_type* node) noexcept
-      : m_current(node) {}
+  explicit constexpr SListIterator(node_type* node) noexcept : m_current(node) {}
 
  public:
   using iterator_category = std::forward_iterator_tag;
@@ -93,8 +85,8 @@ class SListIterator {
     return tmp;
   }
 
-  [[nodiscard]] friend constexpr bool operator==(
-      const SListIterator&, const SListIterator&) noexcept = default;
+  [[nodiscard]] friend constexpr bool operator==(const SListIterator&,
+                                                 const SListIterator&) noexcept = default;
 };
 
 template <typename T, typename Tag>
@@ -129,46 +121,38 @@ class SList {
 
   template <class Self>
   [[nodiscard]] constexpr auto begin(this Self&& self) noexcept {
-    using Iter =
-        std::conditional_t<std::is_const_v<std::remove_reference_t<Self>>,
-                           const_iterator, iterator>;
-    using NodePtr =
-        std::conditional_t<std::is_const_v<std::remove_reference_t<Self>>,
-                           const node_type*, node_type*>;
+    using Iter = std::conditional_t<std::is_const_v<std::remove_reference_t<Self>>, const_iterator,
+                                    iterator>;
+    using NodePtr = std::conditional_t<std::is_const_v<std::remove_reference_t<Self>>,
+                                       const node_type*, node_type*>;
     return Iter(static_cast<NodePtr>(self.m_head.m_next));
   }
 
   template <class Self>
   [[nodiscard]] constexpr auto end(this Self&&) noexcept {
-    using Iter =
-        std::conditional_t<std::is_const_v<std::remove_reference_t<Self>>,
-                           const_iterator, iterator>;
+    using Iter = std::conditional_t<std::is_const_v<std::remove_reference_t<Self>>, const_iterator,
+                                    iterator>;
     return Iter(nullptr);
   }
 
   template <class Self>
   [[nodiscard]] constexpr auto before_begin(this Self&& self) noexcept {
-    using Iter =
-        std::conditional_t<std::is_const_v<std::remove_reference_t<Self>>,
-                           const_iterator, iterator>;
-    using NodePtr =
-        std::conditional_t<std::is_const_v<std::remove_reference_t<Self>>,
-                           const node_type*, node_type*>;
+    using Iter = std::conditional_t<std::is_const_v<std::remove_reference_t<Self>>, const_iterator,
+                                    iterator>;
+    using NodePtr = std::conditional_t<std::is_const_v<std::remove_reference_t<Self>>,
+                                       const node_type*, node_type*>;
     return Iter(static_cast<NodePtr>(&self.m_head));
   }
 
   template <class Self>
   [[nodiscard]] constexpr decltype(auto) front(this Self&& self) noexcept {
     [[assume(self.m_head.m_next != nullptr)]];
-    using NodePtr =
-        std::conditional_t<std::is_const_v<std::remove_reference_t<Self>>,
-                           const node_type*, node_type*>;
+    using NodePtr = std::conditional_t<std::is_const_v<std::remove_reference_t<Self>>,
+                                       const node_type*, node_type*>;
     return *static_cast<NodePtr>(self.m_head.m_next)->as_item();
   }
 
-  [[nodiscard]] constexpr bool empty() const noexcept {
-    return m_head.m_next == nullptr;
-  }
+  [[nodiscard]] constexpr bool empty() const noexcept { return m_head.m_next == nullptr; }
 
   constexpr void push_front(T& item) noexcept {
     node_type* node = static_cast<node_type*>(&item);

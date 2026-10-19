@@ -6,8 +6,8 @@
 namespace kernel::memory::pmm {
 namespace {
 constexpr std::uint32_t COMPACTION_FRAG_THRESHOLD = 85;
-constexpr std::array RECLAIMABLE_ZONES = {
-    PageMobility::Unmovable, PageMobility::Movable, PageMobility::Reclaimable};
+constexpr std::array RECLAIMABLE_ZONES = {PageMobility::Unmovable, PageMobility::Movable,
+                                          PageMobility::Reclaimable};
 
 struct alignas(64) DaemonControlBlock {
   std::atomic<bool> reclaim_pending{false};

@@ -29,18 +29,15 @@ class ActivePcidTracker {
 
   void mark(const std::uint32_t cpu_id, const std::uint16_t pcid) noexcept {
     m_cpu_pcids[cpu_id].store(pcid, std::memory_order_relaxed);
-    m_mask[cpu_id / 64].fetch_or(1ul << (cpu_id % 64),
-                                 std::memory_order_release);
+    m_mask[cpu_id / 64].fetch_or(1ul << (cpu_id % 64), std::memory_order_release);
   }
 
   void unmark(const std::uint32_t cpu_id) noexcept {
-    m_mask[cpu_id / 64].fetch_and(~(1ul << (cpu_id % 64)),
-                                  std::memory_order_release);
+    m_mask[cpu_id / 64].fetch_and(~(1ul << (cpu_id % 64)), std::memory_order_release);
   }
 
   [[nodiscard]] bool test(const std::uint32_t cpu_id) const noexcept {
-    return (m_mask[cpu_id / 64].load(std::memory_order_relaxed) &
-            (1ul << (cpu_id % 64))) != 0;
+    return (m_mask[cpu_id / 64].load(std::memory_order_relaxed) & (1ul << (cpu_id % 64))) != 0;
   }
 
   template <typename Func>
@@ -51,8 +48,7 @@ class ActivePcidTracker {
       while (block != 0) {
         const std::uint32_t bit = std::countr_zero(block);
         const std::uint32_t target_cpu = (i * 64) + bit;
-        const std::uint16_t target_pcid =
-            m_cpu_pcids[target_cpu].load(std::memory_order_relaxed);
+        const std::uint16_t target_pcid = m_cpu_pcids[target_cpu].load(std::memory_order_relaxed);
 
         callback(target_cpu, target_pcid);
         block &= (block - 1);

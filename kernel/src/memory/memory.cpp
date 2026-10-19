@@ -7,7 +7,6 @@
 #include "memory/heap.hpp"
 #include "memory/pmm.hpp"
 #include "memory/vmm.hpp"
-#include "utils/logger.hpp"
 
 namespace kernel::memory {
 void initialize() {

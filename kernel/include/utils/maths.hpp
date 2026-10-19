@@ -25,8 +25,7 @@ template <std::unsigned_integral T, std::unsigned_integral U>
 }
 
 template <std::unsigned_integral T, std::unsigned_integral U>
-[[nodiscard, gnu::always_inline]] constexpr T div_round_down(T n,
-                                                             U a) noexcept {
+[[nodiscard, gnu::always_inline]] constexpr T div_round_down(T n, U a) noexcept {
   [[assume(a > 0)]];
   return n >> std::countr_zero(a);
 }
@@ -38,8 +37,7 @@ template <std::unsigned_integral T, std::unsigned_integral U>
 }
 
 template <std::unsigned_integral T>
-[[nodiscard, gnu::always_inline]] constexpr T Bit_mask(
-    std::size_t bits) noexcept {
+[[nodiscard, gnu::always_inline]] constexpr T Bit_mask(std::size_t bits) noexcept {
   // Shifting by the width of the type is UB
   if (bits >= sizeof(T) * 8) {
     return ~T{0};
@@ -49,14 +47,12 @@ template <std::unsigned_integral T>
 }
 
 template <std::unsigned_integral T, std::integral... U>
-[[nodiscard, gnu::always_inline]] constexpr bool has_bits(
-    T val, U... bit_indices) noexcept {
+[[nodiscard, gnu::always_inline]] constexpr bool has_bits(T val, U... bit_indices) noexcept {
   return (((val & (T{1} << bit_indices)) != 0) && ...);
 }
 
 template <std::unsigned_integral T, std::integral... U>
-[[nodiscard, gnu::always_inline]] constexpr bool has_any_bits(
-    T val, U... bit_indices) noexcept {
+[[nodiscard, gnu::always_inline]] constexpr bool has_any_bits(T val, U... bit_indices) noexcept {
   return (((val & (T{1} << bit_indices)) != 0) || ...);
 }
 
@@ -66,8 +62,7 @@ template <std::unsigned_integral T>
 }
 
 template <std::unsigned_integral T = std::size_t>
-[[nodiscard, gnu::always_inline]] constexpr T pow2(
-    std::size_t exponent) noexcept {
+[[nodiscard, gnu::always_inline]] constexpr T pow2(std::size_t exponent) noexcept {
   return T{1} << exponent;
 }
 

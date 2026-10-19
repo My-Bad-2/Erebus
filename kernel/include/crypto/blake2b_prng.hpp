@@ -9,18 +9,15 @@
 
 namespace kernel::crypto {
 class Blake2bPrng {
-  alignas(std::hardware_destructive_interference_size)
-      std::array<std::uint64_t, 16> m_state{};
-  alignas(std::hardware_destructive_interference_size)
-      std::array<std::byte, 64> m_buffer{};
+  alignas(std::hardware_destructive_interference_size) std::array<std::uint64_t, 16> m_state{};
+  alignas(std::hardware_destructive_interference_size) std::array<std::byte, 64> m_buffer{};
 
   std::size_t m_buf_idx{64};
 
   static consteval std::array<uint64_t, 8> get_iv() noexcept {
     return {
-        0x6a09e667f3bcc908ul, 0xbb67ae8584caa73bul, 0x3c6ef372fe94f82bul,
-        0xa54ff53a5f1d36f1ul, 0x510e527fade682d1ul, 0x9b05688c2b3e6c1ful,
-        0x1f83d9abfb41bd6bul, 0x5be0cd19137e2179ul,
+        0x6a09e667f3bcc908ul, 0xbb67ae8584caa73bul, 0x3c6ef372fe94f82bul, 0xa54ff53a5f1d36f1ul,
+        0x510e527fade682d1ul, 0x9b05688c2b3e6c1ful, 0x1f83d9abfb41bd6bul, 0x5be0cd19137e2179ul,
     };
   }
 
@@ -60,8 +57,7 @@ class Blake2bPrng {
 
   template <std::unsigned_integral T>
     requires std::same_as<T, std::uint64_t>
-  [[gnu::always_inline]] static constexpr void mix(T& a, T& b, T& c,
-                                                   T& d) noexcept {
+  [[gnu::always_inline]] static constexpr void mix(T& a, T& b, T& c, T& d) noexcept {
     a += b;
     d = std::rotr(d ^ a, 32);
     c += d;
@@ -73,9 +69,7 @@ class Blake2bPrng {
   }
 
   void generate_block(std::span<std::byte> direct_out = {}) noexcept {
-    alignas(std::hardware_constructive_interference_size)
-        std::array<std::uint64_t, 16>
-            v = m_state;
+    alignas(std::hardware_constructive_interference_size) std::array<std::uint64_t, 16> v = m_state;
 
 #pragma GCC unroll 12
     for (int i = 0; i < 12; ++i) {

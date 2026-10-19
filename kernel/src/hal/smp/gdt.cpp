@@ -1,4 +1,4 @@
-#include "hal/gdt.hpp"
+#include "hal/smp/gdt.hpp"
 
 namespace kernel::hw::gdt {
 std::array<GdtEntry, 2> GlobalDescriptorTable::make_tss_descriptors(

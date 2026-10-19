@@ -34,8 +34,7 @@ class PcidManager {
   PcidManager& operator=(const PcidManager&) = delete;
 
   void load(PageMap* pagemap) noexcept;
-  [[nodiscard]] std::uint16_t get_active_pcid(
-      const PageMap* pagemap) const noexcept;
+  [[nodiscard]] std::uint16_t get_active_pcid(const PageMap* pagemap) const noexcept;
 
   void invalidate_active_pcid(const PageMap* pagemap) noexcept;
 };
@@ -48,17 +47,15 @@ struct alignas(std::hardware_destructive_interference_size) ShootdownRequest {
 };
 
 class ShootdownCoordinator {
-  static void local_invalidate(const PageMap* pmap, VirtualAddress virt,
-                               std::size_t size, bool is_huge) noexcept;
-  static void queue_invlpgb(VirtualAddress virt, std::size_t size_bytes,
-                            std::uint16_t target_pcid, bool is_huge) noexcept;
+  static void local_invalidate(const PageMap* pmap, VirtualAddress virt, std::size_t size,
+                               bool is_huge) noexcept;
 
  public:
   ShootdownCoordinator() noexcept = default;
-  static void broadcast(PageMap* pmap, VirtualAddress virt,
-                        std::size_t size_bytes, bool is_huge = false) noexcept;
+  static void broadcast(PageMap* pmap, VirtualAddress virt, std::size_t size_bytes,
+                        bool is_huge = false) noexcept;
   static void handle_ipi(ShootdownRequest* req) noexcept;
+  static void queue_invlpgb(VirtualAddress virt, std::size_t size_bytes, std::uint16_t target_pcid,
+                            bool is_huge) noexcept;
 };
-
-void initialize() noexcept;
 }  // namespace kernel::memory::vmm::tlb

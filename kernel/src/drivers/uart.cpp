@@ -4,21 +4,16 @@
 
 namespace kernel::drivers::uart {
 std::expected<void, std::string_view> SerialPort::initialize(
-    const std::uint32_t baud_rate, std::uint32_t base_clock_hz) noexcept {
+    const std::uint32_t baud_rate, const std::uint32_t base_clock_hz) noexcept {
   // Probe for missing hardware or unmapped MMIO memory
-  if (read<Lsr>().raw() == 0xff) {
-    return std::unexpected(
-        "UART bus floats high (0xFF). Hardware missing or memory unmapped");
-  }
+  if (read<Lsr>().raw() == 0xff) return std::unexpected("UART bus is high. Hardware missing.");
 
   write<Ier>(IER{0});
 
   // 16550 samples 16x per bit.
   const auto divisor_32 = base_clock_hz / (16 * baud_rate);
-  if (divisor_32 == 0 ||
-      divisor_32 > std::numeric_limits<std::uint16_t>::max()) {
+  if (divisor_32 == 0 || divisor_32 > std::numeric_limits<std::uint16_t>::max())
     return std::unexpected("Baud rate unsupported by current base clock.");
-  }
 
   const auto divisor = static_cast<std::uint16_t>(divisor_32);
 
@@ -41,12 +36,10 @@ std::expected<void, std::string_view> SerialPort::initialize(
 
   // Read back IIR to verify actual hardware capabilities
   const auto iir = read<Iir>();
-  if (iir.get_fifo_status() == 3) {
-    // Detect PCIe 16750 UART / 16550 UART
+  if (iir.get_fifo_status() == 3)  // Detect PCIe 16750 UART / 16550 UART
     m_fifo_depth = iir.get_fifo_64byte_enabled() != 0u ? 64 : 16;
-  } else {
-    m_fifo_depth = 1;  // Legacy 16450 (No FIFO).
-  }
+  else  // Legacy 16450 (No FIFO).
+    m_fifo_depth = 1;
 
   // Enable OUT2, DTR, and RTS
   write<Mcr>(MCR{}.with_dtr().with_rts().with_out2());
@@ -58,11 +51,9 @@ void SerialPort::append(const std::string_view str) const noexcept {
 
   std::uint8_t fifo_space_remaining = 0;
 
-  auto push_char = [&](char c) {
+  auto push_char = [&](const char c) {
     if (fifo_space_remaining == 0) {
-      while (!is_transmit_fifo_empty()) {
-        hw::cpu_relax();
-      }
+      while (!is_transmit_fifo_empty()) hw::cpu_relax();
 
       fifo_space_remaining = m_fifo_depth;
     }
@@ -72,10 +63,7 @@ void SerialPort::append(const std::string_view str) const noexcept {
   };
 
   for (const auto c : str) {
-    if (c == '\n') {
-      push_char('\r');
-    }
-
+    if (c == '\n') push_char('\r');
     push_char(c);
   }
 }
@@ -90,37 +78,20 @@ void SerialPort::push(const char c) const noexcept {
   write<THR>(c);
 }
 
-void SerialPort::append_fill(const std::size_t count,
-                             const char c) const noexcept {
+void SerialPort::append_fill(const std::size_t count, const char c) const noexcept {
   if (count == 0) return;
-
-  for (std::size_t i = 0; i < count; ++i) {
-    push(c);
-  }
+  for (std::size_t i = 0; i < count; ++i) push(c);
 }
 
 std::expected<char, ReceiveError> SerialPort::read_char() const noexcept {
-  while (!has_data()) {
-    hw::cpu_relax();
-  }
+  while (!has_data()) hw::cpu_relax();
 
   const auto lsr = read<Lsr>();
 
-  if (lsr.get_overrun_error()) {
-    return std::unexpected(ReceiveError::Overrun);
-  }
-
-  if (lsr.get_parity_error()) {
-    return std::unexpected(ReceiveError::Parity);
-  }
-
-  if (lsr.get_framing_error()) {
-    return std::unexpected(ReceiveError::Framing);
-  }
-
-  if (lsr.get_break_interrupt()) {
-    return std::unexpected(ReceiveError::BreakInterrupt);
-  }
+  if (lsr.get_overrun_error()) return std::unexpected(ReceiveError::Overrun);
+  if (lsr.get_parity_error()) return std::unexpected(ReceiveError::Parity);
+  if (lsr.get_framing_error()) return std::unexpected(ReceiveError::Framing);
+  if (lsr.get_break_interrupt()) return std::unexpected(ReceiveError::BreakInterrupt);
 
   return static_cast<char>(read<RBR>());
 }

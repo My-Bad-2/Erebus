@@ -33,7 +33,7 @@ struct EventInfo {
   BF_RO(std::uint16_t, ss, 0, 16);
   BF_BIT_RO(stb, 16);  // STI Blocking
   BF_BIT_RO(sys,
-            17);  // software interrupt triggered by syscall, sysenter, or INT n
+            17);       // software interrupt triggered by syscall, sysenter, or INT n
   BF_BIT_RO(nmi, 18);  // NMI delivered
 
   // For exernal interrupt, the vector is provided by the LAPIC.
@@ -139,8 +139,7 @@ enum class InterruptVector : std::uint8_t {
 
 [[nodiscard]] consteval bool has_error_code(InterruptVector vector) noexcept {
   const auto v = static_cast<std::uint8_t>(vector);
-  return v == 8 || (v >= 10 && v <= 14) || v == 17 || v == 21 || v == 29 ||
-         v == 30;
+  return v == 8 || (v >= 10 && v <= 14) || v == 17 || v == 21 || v == 29 || v == 30;
 }
 
 [[nodiscard]] consteval bool is_exception(InterruptVector vector) noexcept {
@@ -153,6 +152,5 @@ constexpr std::size_t IDT_SIZE = 256;
 extern std::array<StubPtr, IDT_SIZE> legacy_idt_stubs;
 
 [[gnu::naked]] void fred_entrypoint() noexcept;
-void initialize(memory::VirtualAddress ring0_stack,
-                memory::VirtualAddress critical_stack) noexcept;
+void initialize(memory::VirtualAddress ring0_stack, memory::VirtualAddress critical_stack) noexcept;
 }  // namespace kernel::hw::interrupts

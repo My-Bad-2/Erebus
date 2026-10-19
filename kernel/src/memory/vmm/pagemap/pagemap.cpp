@@ -43,11 +43,9 @@ class PatMsr {
   BF_RW(std::uint8_t, pat7, 56, 8)
 };
 
-void free_table_recursive(const PhysicalAddress table_phys,
-                          const std::uint8_t lvl) noexcept {
+void free_table_recursive(const PhysicalAddress table_phys, const std::uint8_t lvl) noexcept {
   if (lvl > 1) {
-    const auto* table =
-        DirectMap::phys_to_virt(table_phys).as<PageTableEntry>();
+    const auto* table = DirectMap::phys_to_virt(table_phys).as<PageTableEntry>();
     for (std::uint32_t i = 0; i < 512; ++i) {
       if (table[i].is_present() && !table[i].is_huge()) {
         if (auto child_phys = table[i].extract_address(PageSize::Size4K)) {
@@ -95,8 +93,7 @@ AccessFlags PageMap::extract_flags(const PTEntry& s) noexcept {
   return flags | AccessFlags::Read;
 }
 
-CacheMode PageMap::extract_cache(const PTEntry& s,
-                                 const bool is_huge) noexcept {
+CacheMode PageMap::extract_cache(const PTEntry& s, const bool is_huge) noexcept {
   const bool pwt = s.get_pwt() == 1;
   const bool pcd = s.get_pcd() == 1;
 
@@ -126,8 +123,7 @@ CacheMode PageMap::extract_cache(const PTEntry& s,
 }
 
 PageMap::PageMap() noexcept : m_lvls{max_lvls} {
-  const auto root_res =
-      pmm::alloc_pages_zeroed(pmm::PageMobility::Unmovable, 0);
+  const auto root_res = pmm::alloc_pages_zeroed(pmm::PageMobility::Unmovable, 0);
   if (!root_res) {
     utils::logger::fatal("Unable to allocate page for top pml table!\n");
   }
@@ -136,8 +132,7 @@ PageMap::PageMap() noexcept : m_lvls{max_lvls} {
   m_root_phys = root_phys;
 
   if (s_kernel_root) [[likely]] {
-    auto* new_root_table =
-        DirectMap::phys_to_virt(root_phys).as<PageTableEntry>();
+    auto* new_root_table = DirectMap::phys_to_virt(root_phys).as<PageTableEntry>();
     auto* kernel_root_table = s_kernel_root.as<PageTableEntry>();
 
     for (std::size_t i = MAX_PAGE_ENTRIES / 2; i < MAX_PAGE_ENTRIES; ++i) {
@@ -153,8 +148,6 @@ PageMap::~PageMap() noexcept { free_table_recursive(m_root_phys, m_lvls); }
 
 void early_initialize_hw() noexcept {
   const hw::CpuInfo* info = hw::profile_manager.get_current();
-
-  tlb::initialize();
 
   supports_1gb_pages = info->has<hw::Feature::GIB>();
   smap_supported = info->has<hw::Feature::SMAP>();

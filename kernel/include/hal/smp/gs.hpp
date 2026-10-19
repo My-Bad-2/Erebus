@@ -6,15 +6,12 @@
 
 #define READ_PCP(member) \
   ::kernel::hw::gs::read<offsetof(PerCpu, member), decltype(PerCpu::member)>()
-#define WRITE_PCP(member, val)                                                 \
-  ::kernel::hw::gs::write<offsetof(PerCpu, member), decltype(PerCpu::member)>( \
-      val)
-#define INC_PCP(member)                           \
-  ::kernel::hw::gs::inc<offsetof(PerCpu, member), \
-                        sizeof(decltype(PerCpu::member))>()
-#define DEC_PCP(member)                           \
-  ::kernel::hw::gs::dec<offsetof(PerCpu, member), \
-                        sizeof(decltype(PerCpu::member))>()
+#define WRITE_PCP(member, val) \
+  ::kernel::hw::gs::write<offsetof(PerCpu, member), decltype(PerCpu::member)>(val)
+#define INC_PCP(member) \
+  ::kernel::hw::gs::inc<offsetof(PerCpu, member), sizeof(decltype(PerCpu::member))>()
+#define DEC_PCP(member) \
+  ::kernel::hw::gs::dec<offsetof(PerCpu, member), sizeof(decltype(PerCpu::member))>()
 
 namespace kernel::hw::gs {
 template <std::size_t Offset, typename T>
@@ -93,25 +90,16 @@ template <std::size_t Offset, std::size_t Size>
 template <std::size_t Offset, std::size_t Size>
 [[gnu::always_inline]] void add(std::uint32_t amount) noexcept {
   if constexpr (Size == 1) {
-    asm volatile("addb %1, %%gs:%c0"
-                 :
-                 : "i"(Offset), "i"(amount)
-                 : "memory", "cc");
+    asm volatile("addb %1, %%gs:%c0" : : "i"(Offset), "i"(amount) : "memory", "cc");
   } else if constexpr (Size == 4) {
-    asm volatile("addl %1, %%gs:%c0"
-                 :
-                 : "i"(Offset), "i"(amount)
-                 : "memory", "cc");
+    asm volatile("addl %1, %%gs:%c0" : : "i"(Offset), "i"(amount) : "memory", "cc");
   }
 }
 
 template <std::size_t Offset, std::size_t Size>
 [[gnu::always_inline]] void sub(std::uint32_t amount) noexcept {
   if constexpr (Size == 1) {
-    asm volatile("subb %1, %%gs:%c0"
-                 :
-                 : "i"(Offset), "i"(amount)
-                 : "memory", "cc");
+    asm volatile("subb %1, %%gs:%c0" : : "i"(Offset), "i"(amount) : "memory", "cc");
   }
 }
 }  // namespace kernel::hw::gs

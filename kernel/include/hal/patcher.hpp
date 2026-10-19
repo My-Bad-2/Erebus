@@ -1,12 +1,11 @@
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <expected>
 #include <span>
 
 #include "core/errors.hpp"
-#include "cpu_info.hpp"
+#include "smp/cpu_info.hpp"
 
 namespace kernel::hw::patcher {
 template <typename T>
@@ -15,11 +14,7 @@ concept CodePointer = std::is_pointer_v<T> || std::is_integral_v<T>;
 using PatchResult = std::expected<void, Error>;
 constexpr std::uint32_t FEATURE_ALWAYS = 0xFFFFFFFF;
 
-enum class PatchFlags : std::uint8_t {
-  INLINE,
-  OUT_OF_TRAMPOLINE,
-  STRIP_PREFIX
-};
+enum class PatchFlags : std::uint8_t { INLINE, OUT_OF_TRAMPOLINE, STRIP_PREFIX };
 
 struct [[gnu::packed]] AltInstr {
   std::int32_t instr_offset;  // Relative offset to original code in .text
@@ -48,19 +43,17 @@ struct [[gnu::packed]] ExceptionTableEntry {
 
 class InstructionDecoder {
  public:
-  static void pad_with_nops(std::span<std::uint8_t> buffer,
-                            std::uintptr_t target_addr) noexcept;
-  [[nodiscard]] static bool verify_boundaries(
-      const std::uint8_t* code, std::uint8_t expected_len) noexcept;
-  [[nodiscard]] static bool relocate_rip_instructions(
-      std::span<std::uint8_t> payload, std::uintptr_t old_rip,
-      std::uintptr_t new_rip) noexcept;
+  static void pad_with_nops(std::span<std::uint8_t> buffer, std::uintptr_t target_addr) noexcept;
+  [[nodiscard]] static bool verify_boundaries(const std::uint8_t* code,
+                                              std::uint8_t expected_len) noexcept;
+  [[nodiscard]] static bool relocate_rip_instructions(std::span<std::uint8_t> payload,
+                                                      std::uintptr_t old_rip,
+                                                      std::uintptr_t new_rip) noexcept;
 };
 
 class ExceptionTable {
  public:
-  static void sync_trampoline(std::uintptr_t old_rip,
-                              std::uintptr_t new_rip) noexcept;
+  static void sync_trampoline(std::uintptr_t old_rip, std::uintptr_t new_rip) noexcept;
 };
 
 class BootPatcher {

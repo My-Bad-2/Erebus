@@ -43,10 +43,12 @@ set(ZYAN_NO_LIBC ON FORCE)
 add_subdirectory(zydis EXCLUDE_FROM_ALL)
 
 target_compile_options(Zydis PRIVATE
+        -mno-vzeroupper # For some reason, Zydis code emits vzeroupper in -O3
         $<TARGET_PROPERTY:os_base_flags,INTERFACE_COMPILE_OPTIONS>
 )
 
 target_compile_options(Zycore PRIVATE
+        -mno-vzeroupper # For some reason, Zydis code emits vzeroupper in -O3
         $<TARGET_PROPERTY:os_base_flags,INTERFACE_COMPILE_OPTIONS>
 )
 
@@ -55,6 +57,9 @@ if (EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/freestanding-cxx-hdrs-gnu/README")
 else ()
     message(FATAL_ERROR "Third-Party: freestanding-cxx-hdrs-gnu submodule not found.")
 endif ()
+
+add_library(lgrt STATIC "${CMAKE_CURRENT_SOURCE_DIR}/freestanding-lgrt/src/freestanding-lgrt.c")
+target_compile_options(lgrt PRIVATE $<TARGET_PROPERTY:os_base_flags,INTERFACE_COMPILE_OPTIONS>)
 
 set(LIMINE_DIR "${LIMINE_DIR}" PARENT_SCOPE)
 set(OVMF_DIR "${OVMF_DIR}" PARENT_SCOPE)

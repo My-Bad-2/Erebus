@@ -16,8 +16,7 @@ namespace kernel::utils {
 enum class DequeError : uint8_t { Empty, Full };
 
 template <typename T>
-concept RingQueable = std::is_nothrow_move_constructible_v<T> &&
-                      std::is_nothrow_destructible_v<T>;
+concept RingQueable = std::is_nothrow_move_constructible_v<T> && std::is_nothrow_destructible_v<T>;
 
 template <RingQueable T, size_t Capacity, bool MultiConsumer, bool PadSlots>
 class RingBuffer {
@@ -30,14 +29,11 @@ class RingBuffer {
   struct WriteTicket {
     T* ptr{nullptr};
     std::size_t head{0};
-    [[nodiscard]] explicit operator bool() const noexcept {
-      return ptr != nullptr;
-    }
+    [[nodiscard]] explicit operator bool() const noexcept { return ptr != nullptr; }
   };
 
  private:
-  struct alignas(PadSlots ? std::hardware_destructive_interference_size
-                          : alignof(T)) Slot {
+  struct alignas(PadSlots ? std::hardware_destructive_interference_size : alignof(T)) Slot {
     std::atomic<size_t> sequence;
     union {
       T data;
@@ -47,10 +43,8 @@ class RingBuffer {
     ~Slot() noexcept {}
   };
 
-  alignas(std::hardware_destructive_interference_size)
-      std::atomic<size_t> m_head{0};
-  alignas(std::hardware_destructive_interference_size)
-      std::atomic<size_t> m_tail{0};
+  alignas(std::hardware_destructive_interference_size) std::atomic<size_t> m_head{0};
+  alignas(std::hardware_destructive_interference_size) std::atomic<size_t> m_tail{0};
   alignas(std::hardware_destructive_interference_size) Slot m_slots[Capacity];
 
  public:
@@ -82,8 +76,7 @@ class RingBuffer {
       const auto diff = static_cast<std::intptr_t>(seq - head);
 
       if (diff == 0) {
-        if (m_head.compare_exchange_weak(head, head + 1,
-                                         std::memory_order_relaxed)) {
+        if (m_head.compare_exchange_weak(head, head + 1, std::memory_order_relaxed)) {
           break;
         }
       } else if (diff < 0) {
@@ -122,8 +115,7 @@ class RingBuffer {
       const auto diff = static_cast<std::intptr_t>(seq - head);
 
       if (diff == 0) {
-        if (m_head.compare_exchange_weak(head, head + 1,
-                                         std::memory_order_relaxed)) {
+        if (m_head.compare_exchange_weak(head, head + 1, std::memory_order_relaxed)) {
           return {.ptr = reinterpret_cast<T*>(&slot->data), .head = head};
         }
       } else if (diff < 0) {
@@ -152,8 +144,7 @@ class RingBuffer {
 
       if (diff == 0) {
         if constexpr (MultiConsumer) {
-          if (!m_tail.compare_exchange_weak(tail, tail + 1,
-                                            std::memory_order_relaxed)) {
+          if (!m_tail.compare_exchange_weak(tail, tail + 1, std::memory_order_relaxed)) {
             hw::cpu_relax();
             continue;
           }
@@ -211,9 +202,7 @@ class RingBuffer {
     return read;
   }
 
-  [[nodiscard]] static constexpr std::size_t capacity() noexcept {
-    return Capacity;
-  }
+  [[nodiscard]] static constexpr std::size_t capacity() noexcept { return Capacity; }
 
   [[nodiscard]] std::size_t size_approx() const noexcept {
     const std::size_t head = m_head.load(std::memory_order_relaxed);
@@ -221,12 +210,8 @@ class RingBuffer {
     return (head >= tail) ? (head - tail) : 0;
   }
 
-  [[nodiscard]] bool empty_approx() const noexcept {
-    return size_approx() == 0;
-  }
-  [[nodiscard]] bool full_approx() const noexcept {
-    return size_approx() >= Capacity;
-  }
+  [[nodiscard]] bool empty_approx() const noexcept { return size_approx() == 0; }
+  [[nodiscard]] bool full_approx() const noexcept { return size_approx() >= Capacity; }
 };
 
 template <RingQueable T, std::size_t Capacity>
@@ -237,8 +222,7 @@ class RingDeque {
 
   alignas(std::hardware_destructive_interference_size) std::size_t m_head{0};
   alignas(std::hardware_destructive_interference_size) std::size_t m_tail{0};
-  alignas(std::hardware_destructive_interference_size)
-      std::byte m_storage[Capacity * sizeof(T)];
+  alignas(std::hardware_destructive_interference_size) std::byte m_storage[Capacity * sizeof(T)];
 
   [[nodiscard]] constexpr T* ptr(const std::size_t index) noexcept {
     return reinterpret_cast<T*>(&m_storage[(index & Mask) * sizeof(T)]);
@@ -251,22 +235,13 @@ class RingDeque {
   RingDeque(const RingDeque&) = delete;
   RingDeque& operator=(const RingDeque&) = delete;
 
-  [[nodiscard]] constexpr std::size_t size() const noexcept {
-    return m_tail - m_head;
-  }
-  [[nodiscard]] constexpr std::size_t capacity() const noexcept {
-    return Capacity;
-  }
-  [[nodiscard]] constexpr bool empty() const noexcept {
-    return m_head == m_tail;
-  }
-  [[nodiscard]] constexpr bool full() const noexcept {
-    return size() == Capacity;
-  }
+  [[nodiscard]] constexpr std::size_t size() const noexcept { return m_tail - m_head; }
+  [[nodiscard]] constexpr std::size_t capacity() const noexcept { return Capacity; }
+  [[nodiscard]] constexpr bool empty() const noexcept { return m_head == m_tail; }
+  [[nodiscard]] constexpr bool full() const noexcept { return size() == Capacity; }
 
   template <typename... Args>
-  constexpr std::expected<void, DequeError> emplace_back(
-      Args&&... args) noexcept {
+  constexpr std::expected<void, DequeError> emplace_back(Args&&... args) noexcept {
     if (full()) [[unlikely]] {
       return std::unexpected(DequeError::Full);
     }
@@ -276,8 +251,7 @@ class RingDeque {
   }
 
   template <typename... Args>
-  constexpr std::expected<void, DequeError> emplace_front(
-      Args&&... args) noexcept {
+  constexpr std::expected<void, DequeError> emplace_front(Args&&... args) noexcept {
     if (full()) [[unlikely]] {
       return std::unexpected(DequeError::Full);
     }
@@ -315,8 +289,7 @@ class RingDeque {
     requires std::is_nothrow_copy_constructible_v<T>
   {
     const std::size_t available = Capacity - size();
-    const std::size_t to_write =
-        (items.size() < available) ? items.size() : available;
+    const std::size_t to_write = (items.size() < available) ? items.size() : available;
 
     for (std::size_t i = 0; i < to_write; ++i) {
       std::construct_at(ptr(m_tail++), items[i]);
@@ -327,8 +300,7 @@ class RingDeque {
 
   constexpr std::size_t pop_front_bulk(std::span<T> out) noexcept {
     const std::size_t available = size();
-    const std::size_t to_read =
-        (out.size() < available) ? out.size() : available;
+    const std::size_t to_read = (out.size() < available) ? out.size() : available;
 
     for (std::size_t i = 0; i < to_read; ++i) {
       T* p = ptr(m_head);

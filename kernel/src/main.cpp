@@ -1,11 +1,12 @@
 #include "drivers/acpi.hpp"
+#include "drivers/clock.hpp"
 #include "drivers/uart.hpp"
 #include "hal/hal.hpp"
 #include "hal/patcher.hpp"
-#include "hal/percpu.hpp"
+#include "hal/smp/percpu.hpp"
 #include "memory/memory.hpp"
 #include "memory/vmm/vma/vma.hpp"
-#include "utils/hashmap.hpp"
+#include "patch/static_call.hpp"
 #include "utils/logger.hpp"
 
 namespace kernel {
@@ -31,10 +32,15 @@ extern "C" void _start() noexcept {
   drivers::acpi::early_initialize();
   memory::initialize();
 
+  drivers::SystemClock::initialize();
+
+  if (auto res = patch::StaticCallPatcher::apply_patches(); !res) {
+    utils::logger::fatal("Failed to apply patches! error: {}", res.error());
+  }
+
   const auto bsp_rsp = memory::vmm::kernel_space()->alloc(
-      KSTACK_SIZE,
-      memory::vmm::AccessFlags::Read | memory::vmm::AccessFlags::Write |
-          memory::vmm::AccessFlags::Stack | memory::vmm::AccessFlags::Populate);
+      KSTACK_SIZE, memory::vmm::AccessFlags::Read | memory::vmm::AccessFlags::Write |
+                       memory::vmm::AccessFlags::Stack | memory::vmm::AccessFlags::Populate);
   if (!bsp_rsp) {
     utils::logger::fatal("Failed to allocate BSP stack! error : {}\n",
                          std::to_underlying(bsp_rsp.error()));

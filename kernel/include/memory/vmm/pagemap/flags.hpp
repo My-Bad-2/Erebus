@@ -30,34 +30,27 @@ enum class AccessFlags : std::uint32_t {
   Populate = 1 << 12,  // Instantly allocates physical memory
 };
 
-constexpr AccessFlags operator|(const AccessFlags a,
-                                const AccessFlags b) noexcept {
-  return static_cast<AccessFlags>(std::to_underlying(a) |
-                                  std::to_underlying(b));
+constexpr AccessFlags operator|(const AccessFlags a, const AccessFlags b) noexcept {
+  return static_cast<AccessFlags>(std::to_underlying(a) | std::to_underlying(b));
 }
 
-constexpr AccessFlags operator&(const AccessFlags a,
-                                const AccessFlags b) noexcept {
-  return static_cast<AccessFlags>(std::to_underlying(a) &
-                                  std::to_underlying(b));
+constexpr AccessFlags operator&(const AccessFlags a, const AccessFlags b) noexcept {
+  return static_cast<AccessFlags>(std::to_underlying(a) & std::to_underlying(b));
 }
 
 constexpr AccessFlags operator~(const AccessFlags a) noexcept {
   return static_cast<AccessFlags>(~std::to_underlying(a));
 }
 
-constexpr AccessFlags& operator|=(AccessFlags& a,
-                                  const AccessFlags b) noexcept {
+constexpr AccessFlags& operator|=(AccessFlags& a, const AccessFlags b) noexcept {
   return a = a | b;
 }
 
-constexpr AccessFlags& operator&=(AccessFlags& a,
-                                  const AccessFlags b) noexcept {
+constexpr AccessFlags& operator&=(AccessFlags& a, const AccessFlags b) noexcept {
   return a = a & b;
 }
 
-constexpr bool has_flag(const AccessFlags flags,
-                        const AccessFlags flag) noexcept {
+constexpr bool has_flag(const AccessFlags flags, const AccessFlags flag) noexcept {
   return (flags & flag) == flag;
 }
 

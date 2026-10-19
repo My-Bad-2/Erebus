@@ -19,10 +19,8 @@ enum class Selector : uint16_t {
 };
 
 enum class PrivilegeLevel : uint8_t { Ring0 = 0, Ring3 = 3 };
-[[nodiscard]] constexpr Selector with_rpl(const Selector sel,
-                                          const PrivilegeLevel rpl) noexcept {
-  return static_cast<Selector>(std::to_underlying(sel) |
-                               std::to_underlying(rpl));
+[[nodiscard]] constexpr Selector with_rpl(const Selector sel, const PrivilegeLevel rpl) noexcept {
+  return static_cast<Selector>(std::to_underlying(sel) | std::to_underlying(rpl));
 }
 
 enum class SegmentFlags : uint64_t {
@@ -38,16 +36,14 @@ enum class SegmentFlags : uint64_t {
   Granularity = 1ul << 55  // 4KB page granularity
 };
 
-[[nodiscard]] constexpr SegmentFlags operator|(
-    const SegmentFlags lhs, const SegmentFlags rhs) noexcept {
-  return static_cast<SegmentFlags>(std::to_underlying(lhs) |
-                                   std::to_underlying(rhs));
+[[nodiscard]] constexpr SegmentFlags operator|(const SegmentFlags lhs,
+                                               const SegmentFlags rhs) noexcept {
+  return static_cast<SegmentFlags>(std::to_underlying(lhs) | std::to_underlying(rhs));
 }
 
-[[nodiscard]] constexpr SegmentFlags operator&(
-    const SegmentFlags lhs, const SegmentFlags rhs) noexcept {
-  return static_cast<SegmentFlags>(std::to_underlying(lhs) &
-                                   std::to_underlying(rhs));
+[[nodiscard]] constexpr SegmentFlags operator&(const SegmentFlags lhs,
+                                               const SegmentFlags rhs) noexcept {
+  return static_cast<SegmentFlags>(std::to_underlying(lhs) & std::to_underlying(rhs));
 }
 
 enum class IstIndex : uint8_t {
@@ -86,10 +82,9 @@ class GdtEntry {
  public:
   consteval GdtEntry() = default;
 
-  [[nodiscard]] static consteval GdtEntry create_segment(
-      const bool is_code, const PrivilegeLevel dpl) {
-    auto flags = SegmentFlags::UserType | SegmentFlags::Present |
-                 SegmentFlags::ReadWrite;
+  [[nodiscard]] static consteval GdtEntry create_segment(const bool is_code,
+                                                         const PrivilegeLevel dpl) {
+    auto flags = SegmentFlags::UserType | SegmentFlags::Present | SegmentFlags::ReadWrite;
 
     if (is_code) {
       flags = flags | SegmentFlags::Executable | SegmentFlags::LongMode;
@@ -105,11 +100,9 @@ class GdtEntry {
   [[nodiscard]] constexpr uint64_t raw() const { return m_value; }
 };
 
-class alignas(std::hardware_destructive_interference_size)
-    GlobalDescriptorTable {
+class alignas(std::hardware_destructive_interference_size) GlobalDescriptorTable {
  public:
-  static constexpr std::size_t TotalEntries =
-      7;  // Null, KC, KD, UD, UC, TSS(2)
+  static constexpr std::size_t TotalEntries = 7;  // Null, KC, KD, UD, UC, TSS(2)
  private:
   alignas(16) std::array<GdtEntry, TotalEntries> m_entries{};
   TaskStateSegment m_tss{};
@@ -119,27 +112,22 @@ class alignas(std::hardware_destructive_interference_size)
 
  public:
   constexpr GlobalDescriptorTable() noexcept {
-    m_entries[0] = GdtEntry();  // Null
-    m_entries[1] = GdtEntry::create_segment(
-        true, PrivilegeLevel::Ring0);  // 0x08: Kernel Code
-    m_entries[2] = GdtEntry::create_segment(
-        false, PrivilegeLevel::Ring0);  // 0x10: Kernel Data
-    m_entries[3] = GdtEntry::create_segment(
-        false, PrivilegeLevel::Ring3);  // 0x18: User Data
-    m_entries[4] = GdtEntry::create_segment(
-        true, PrivilegeLevel::Ring3);  // 0x20: User Code
+    m_entries[0] = GdtEntry();                                              // Null
+    m_entries[1] = GdtEntry::create_segment(true, PrivilegeLevel::Ring0);   // 0x08: Kernel Code
+    m_entries[2] = GdtEntry::create_segment(false, PrivilegeLevel::Ring0);  // 0x10: Kernel Data
+    m_entries[3] = GdtEntry::create_segment(false, PrivilegeLevel::Ring3);  // 0x18: User Data
+    m_entries[4] = GdtEntry::create_segment(true, PrivilegeLevel::Ring3);   // 0x20: User Code
   }
 
   void load() noexcept;
 
-  GlobalDescriptorTable& set_kernel_stack(
-      const memory::VirtualAddress stack_top) noexcept {
+  GlobalDescriptorTable& set_kernel_stack(const memory::VirtualAddress stack_top) noexcept {
     m_tss.rsp0 = stack_top.value();
     return *this;
   }
 
-  GlobalDescriptorTable& set_interrupt_stack(
-      const IstIndex idx, const memory::VirtualAddress stack_top) noexcept {
+  GlobalDescriptorTable& set_interrupt_stack(const IstIndex idx,
+                                             const memory::VirtualAddress stack_top) noexcept {
     if (idx != IstIndex::None) {
       m_tss.ist[std::to_underlying(idx) - 1] = stack_top.value();
     }

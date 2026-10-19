@@ -1,6 +1,7 @@
 #include "hal/hal.hpp"
 #include "hal/interrupts/interrupt_manager.hpp"
 #include "hal/interrupts/interrupts.hpp"
+#include "utils/logger.hpp"
 
 #define ASM_PUSH_ALL_REGISTERS \
   "pushq %%rax\n\t"            \
@@ -104,8 +105,7 @@ template <std::size_t Vector>
 }
 
 template <std::size_t Vector>
-  requires(Vector !=
-               std::to_underlying(InterruptVector::NonMaskableInterrupt) &&
+  requires(Vector != std::to_underlying(InterruptVector::NonMaskableInterrupt) &&
            !has_error_code(InterruptVector{Vector}))
 [[gnu::naked, gnu::used]] void legacy_stub() noexcept {
   asm volatile(
@@ -118,8 +118,7 @@ template <std::size_t Vector>
 }
 
 template <std::size_t Vector>
-  requires(Vector !=
-               std::to_underlying(InterruptVector::NonMaskableInterrupt) &&
+  requires(Vector != std::to_underlying(InterruptVector::NonMaskableInterrupt) &&
            has_error_code(InterruptVector{Vector}))
 [[gnu::naked, gnu::used]] void legacy_stub() noexcept {
   asm volatile(

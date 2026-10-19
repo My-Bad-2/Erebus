@@ -25,19 +25,17 @@ constexpr std::uint8_t CTRL_DELETED = 0xC0;
   return hash ^ (hash >> 32);
 }
 
-[[nodiscard]] constexpr std::uint64_t replicate_byte(
-    const std::uint8_t b) noexcept {
+[[nodiscard]] constexpr std::uint64_t replicate_byte(const std::uint8_t b) noexcept {
   return static_cast<std::uint64_t>(b) * 0x0101010101010101ul;
 }
 
-[[nodiscard]] inline std::uint64_t swar_match_sig(
-    const std::uint64_t ctrl_word, const std::uint8_t sig) noexcept {
+[[nodiscard]] inline std::uint64_t swar_match_sig(const std::uint64_t ctrl_word,
+                                                  const std::uint8_t sig) noexcept {
   const std::uint64_t match = ctrl_word ^ replicate_byte(sig);
   return (match - 0x0101010101010101ul) & ~match & 0x8080808080808080ul;
 }
 
-[[nodiscard]] inline std::uint64_t swar_match_usable(
-    const std::uint64_t ctrl_word) noexcept {
+[[nodiscard]] inline std::uint64_t swar_match_usable(const std::uint64_t ctrl_word) noexcept {
   return ctrl_word & 0x8080808080808080ul;
 }
 
@@ -52,8 +50,7 @@ struct alignas(std::hardware_destructive_interference_size) MapTable {
 
 template <KernelKey K, typename V, std::size_t NumShards = 64>
 class FastHashMap {
-  static_assert(std::has_single_bit(NumShards),
-                "NumShards must be a power of 2");
+  static_assert(std::has_single_bit(NumShards), "NumShards must be a power of 2");
 
   struct alignas(std::hardware_destructive_interference_size) Shard {
     mutable RWLock lock;
@@ -63,8 +60,7 @@ class FastHashMap {
 
   Shard m_shards[NumShards];
 
-  [[nodiscard]] MapTable<K, V>* allocate_table(
-      std::uint32_t capacity) noexcept {
+  [[nodiscard]] MapTable<K, V>* allocate_table(std::uint32_t capacity) noexcept {
     auto* tbl = new MapTable<K, V>();
 
     tbl->capacity = capacity;
@@ -89,8 +85,7 @@ class FastHashMap {
     delete tbl;
   }
 
-  void insert_no_lock(MapTable<K, V>* tbl, K key, V* val,
-                      std::uint8_t sig) noexcept {
+  void insert_no_lock(MapTable<K, V>* tbl, K key, V* val, std::uint8_t sig) noexcept {
     std::uint32_t idx = (hash_key(key) & tbl->mask) & ~7u;
 
     while (true) {
@@ -118,8 +113,7 @@ class FastHashMap {
 
     for (std::uint32_t i = 0; i < old_tbl->capacity; ++i) {
       if ((old_tbl->ctrl[i] & CTRL_EMPTY) == 0) {
-        insert_no_lock(new_tbl, old_tbl->keys[i], old_tbl->values[i],
-                       old_tbl->ctrl[i]);
+        insert_no_lock(new_tbl, old_tbl->keys[i], old_tbl->values[i], old_tbl->ctrl[i]);
       }
     }
 
@@ -158,8 +152,7 @@ class FastHashMap {
     std::uint32_t idx = (hash & tbl->mask) & ~7u;
 
     while (true) {
-      const std::uint64_t ctrl_word =
-          *reinterpret_cast<const std::uint64_t*>(&tbl->ctrl[idx]);
+      const std::uint64_t ctrl_word = *reinterpret_cast<const std::uint64_t*>(&tbl->ctrl[idx]);
       std::uint64_t match_mask = swar_match_sig(ctrl_word, sig);
 
       while (match_mask) {
@@ -201,8 +194,7 @@ class FastHashMap {
     std::uint32_t target_slot = std::numeric_limits<std::uint32_t>::max();
 
     while (true) {
-      const std::uint64_t ctrl_word =
-          *reinterpret_cast<std::uint64_t*>(&tbl->ctrl[idx]);
+      const std::uint64_t ctrl_word = *reinterpret_cast<std::uint64_t*>(&tbl->ctrl[idx]);
       std::uint64_t match_mask = swar_match_sig(ctrl_word, sig);
 
       while (match_mask) {
@@ -255,8 +247,7 @@ class FastHashMap {
     std::uint32_t idx = (hash & tbl->mask) & ~7u;
 
     while (true) {
-      const std::uint64_t ctrl_word =
-          *reinterpret_cast<std::uint64_t*>(&tbl->ctrl[idx]);
+      const std::uint64_t ctrl_word = *reinterpret_cast<std::uint64_t*>(&tbl->ctrl[idx]);
       std::uint64_t match_mask = swar_match_sig(ctrl_word, sig);
 
       while (match_mask) {

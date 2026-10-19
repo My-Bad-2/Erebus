@@ -66,16 +66,8 @@ enum class Hypervisor : std::uint8_t {
 };
 
 enum class CoreType : std::uint8_t { Unknown = 0, Atom = 0x20, Core = 0x40 };
-
-enum class CacheType : std::uint8_t {
-  Null = 0,
-  Data = 1,
-  Instruction = 2,
-  Unified = 3
-};
-
+enum class CacheType : std::uint8_t { Null = 0, Data = 1, Instruction = 2, Unified = 3 };
 enum class PageSize : std::uint8_t { Size4K, Size2M, Size4M, Size1G, Unknown };
-
 enum class TopoLevel : std::uint8_t {
   Invalid = 0,
   SMT = 1,
@@ -87,7 +79,6 @@ enum class TopoLevel : std::uint8_t {
 };
 
 enum class Reg : std::uint32_t { EAX = 0, EBX = 1, ECX = 2, EDX = 3 };
-
 struct CacheInfo {
   std::uint32_t level;
   CacheType type;
@@ -110,41 +101,27 @@ struct TopologyInfo {
   std::uint32_t id_shift;
 };
 
-consteval std::uint32_t make_feat(const std::uint32_t leaf,
-                                  const std::uint32_t subleaf, const Reg reg,
-                                  const std::uint32_t bit) {
+consteval std::uint32_t make_feat(const std::uint32_t leaf, const std::uint32_t subleaf,
+                                  const Reg reg, const std::uint32_t bit) {
   const std::uint32_t is_ext = (leaf & 0x80000000) ? 1 : 0;
   const std::uint32_t base_id = leaf & 0xff;
-  return bit | (static_cast<std::uint32_t>(reg) << 5) | (subleaf << 7) |
-         (base_id << 15) | (is_ext << 23);
+  return bit | (static_cast<std::uint32_t>(reg) << 5) | (subleaf << 7) | (base_id << 15) |
+         (is_ext << 23);
 }
 
-constexpr std::uint32_t map_leaf_to_index(const std::uint32_t leaf,
-                                          const std::uint32_t subleaf) {
-  if (leaf == 1 && subleaf == 0) {
-    return 0;
-  }
-
-  if (leaf == 7 && subleaf == 0) {
-    return 1;
-  }
-
-  if (leaf == 7 && subleaf == 1) {
-    return 2;
-  }
-
-  if (leaf == 0x80000001 && subleaf == 0) {
-    return 3;
-  }
-
-  if (leaf == 0x80000008 && subleaf == 0) {
-    return 4;
-  }
-
+constexpr std::uint32_t map_leaf_to_index(const std::uint32_t leaf, const std::uint32_t subleaf) {
+  if (leaf == 1 && subleaf == 0) return 0;
+  if (leaf == 7 && subleaf == 0) return 1;
+  if (leaf == 7 && subleaf == 1) return 2;
+  if (leaf == 0x80000001 && subleaf == 0) return 3;
+  if (leaf == 0x80000008 && subleaf == 0) return 4;
   return 0xFFFFFFFF;  // Leaf is not pre-cached
 }
 
 enum class Feature : std::uint32_t {
+  ALWAYS = 0,  // Unconditional Priority-0 baseline target (used by patcher)
+  NONE = 1,
+
   // Base Features: Leaf 1
   SSE3 = make_feat(1, 0, Reg::ECX, 0),
   PCLMULQDQ = make_feat(1, 0, Reg::ECX, 1),
@@ -208,6 +185,7 @@ enum class Feature : std::uint32_t {
   VAES = make_feat(7, 0, Reg::ECX, 9),
   AVX512_VNNI = make_feat(7, 0, Reg::ECX, 11),
 
+  SERIALIZE = make_feat(7, 0, Reg::EDX, 14),
   HYBRID = make_feat(7, 0, Reg::EDX, 15),
   CET_IBT = make_feat(7, 0, Reg::EDX, 20),
   AMX_BF16 = make_feat(7, 0, Reg::EDX, 22),
@@ -233,15 +211,16 @@ enum class Feature : std::uint32_t {
   RDTSCP = make_feat(0x80000001, 0, Reg::EDX, 27),
   LM = make_feat(0x80000001, 0, Reg::EDX, 29),
 
+  // Leaf 0x80000007
+  AMD_CPB = make_feat(0x80000007, 0, Reg::EDX, 7),
+  INVARIANT_TSC = make_feat(0x80000007, 0, hw::Reg::EDX, 8),
+
   // Leaf 0x80000008
   INVLPGB = make_feat(0x80000008, 0, Reg::EBX, 3),
 };
 
 class alignas(std::hardware_destructive_interference_size) CpuInfo {
   friend class CpuProfileManager;
-  struct Registers {
-    std::uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
-  };
 
   alignas(64) std::array<std::array<std::uint32_t, 4>, 5> m_leaves{};
 
@@ -282,13 +261,6 @@ class alignas(std::hardware_destructive_interference_size) CpuInfo {
   std::size_t m_num_topology{0};
   std::array<TopologyInfo, 8> m_topology{};
 
-  static Registers query(const std::uint32_t leaf,
-                         const std::uint32_t subleaf = 0) noexcept {
-    Registers r;
-    __cpuid_count(leaf, subleaf, r.eax, r.ebx, r.ecx, r.edx);
-    return r;
-  }
-
   void parse_fms(std::uint32_t eax) noexcept;
   void parse_frequencies() noexcept;
   void parse_brand() noexcept;
@@ -300,40 +272,36 @@ class alignas(std::hardware_destructive_interference_size) CpuInfo {
   UArch decode_uarch();
 
  public:
+  struct Registers {
+    std::uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
+  };
+
+  static Registers query(const std::uint32_t leaf, const std::uint32_t subleaf = 0) noexcept {
+    Registers r;
+    __cpuid_count(leaf, subleaf, r.eax, r.ebx, r.ecx, r.edx);
+    return r;
+  }
+
   [[nodiscard]] Vendor vendor() const noexcept { return m_vendor; }
   [[nodiscard]] Hypervisor hypervisor() const noexcept { return m_hypervisor; }
   [[nodiscard]] UArch microarchitecture() const noexcept { return m_uarch; }
-  [[nodiscard]] std::string_view vendor_string() const noexcept {
-    return {m_vendor_string.data()};
-  }
+  [[nodiscard]] std::string_view vendor_string() const noexcept { return {m_vendor_string.data()}; }
 
-  [[nodiscard]] std::string_view brand_string() const noexcept {
-    return {m_brand_string.data()};
-  }
+  [[nodiscard]] std::string_view brand_string() const noexcept { return {m_brand_string.data()}; }
 
-  [[nodiscard]] bool is_virtualized() const noexcept {
-    return m_is_virtualized;
-  }
+  [[nodiscard]] bool is_virtualized() const noexcept { return m_is_virtualized; }
 
   [[nodiscard]] std::uint32_t apic_id() const noexcept { return m_apic_id; }
-  [[nodiscard]] std::uint32_t clflush_size() const noexcept {
-    return m_clflush_size;
-  }
+  [[nodiscard]] std::uint32_t clflush_size() const noexcept { return m_clflush_size; }
 
-  [[nodiscard]] std::uint32_t phys_addr_bits() const noexcept {
-    return m_phys_addr_bits;
-  }
+  [[nodiscard]] std::uint32_t phys_addr_bits() const noexcept { return m_phys_addr_bits; }
 
-  [[nodiscard]] std::uint32_t virt_addr_bits() const noexcept {
-    return m_virt_addr_bits;
-  }
+  [[nodiscard]] std::uint32_t virt_addr_bits() const noexcept { return m_virt_addr_bits; }
 
   [[nodiscard]] std::uint32_t family() const noexcept { return m_family; }
   [[nodiscard]] std::uint32_t model() const noexcept { return m_model; }
   [[nodiscard]] std::uint32_t stepping() const noexcept { return m_stepping; }
-  [[nodiscard]] std::uint32_t processor_type() const noexcept {
-    return m_processor_type;
-  }
+  [[nodiscard]] std::uint32_t processor_type() const noexcept { return m_processor_type; }
 
   [[nodiscard]] std::uint32_t base_mhz() const noexcept { return m_base_mhz; }
   [[nodiscard]] std::uint32_t max_mhz() const noexcept { return m_max_mhz; }
@@ -352,9 +320,7 @@ class alignas(std::hardware_destructive_interference_size) CpuInfo {
   }
 
   [[nodiscard]] std::uint32_t max_leaf() const noexcept { return m_max_leaf; }
-  [[nodiscard]] std::uint32_t max_ext_leaf() const noexcept {
-    return m_max_ext_leaf;
-  }
+  [[nodiscard]] std::uint32_t max_ext_leaf() const noexcept { return m_max_ext_leaf; }
 
   [[nodiscard]] std::uint8_t apic_id_core_id_size() const noexcept {
     return m_apic_id_core_id_size;

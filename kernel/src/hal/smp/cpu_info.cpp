@@ -1,4 +1,4 @@
-#include "hal/cpu_info.hpp"
+#include "hal/smp/cpu_info.hpp"
 
 #include "utils/lock.hpp"
 
@@ -46,8 +46,7 @@ void CpuInfo::parse_brand() noexcept {
 }
 
 void CpuInfo::parse_caches() noexcept {
-  const std::uint32_t cache_leaf =
-      (m_vendor == Vendor::Amd) ? 0x8000001D : 0x04;
+  const std::uint32_t cache_leaf = (m_vendor == Vendor::Amd) ? 0x8000001D : 0x04;
 
   if ((m_vendor == Vendor::Amd && m_max_ext_leaf >= cache_leaf) ||
       (m_vendor == Vendor::Intel && m_max_leaf >= cache_leaf)) {
@@ -105,18 +104,15 @@ void CpuInfo::parse_tlb() noexcept {
   }
 
   if (m_vendor == Vendor::Amd) {
-    auto push = [this](const std::uint32_t reg, const PageSize size,
-                       const bool is_l2) {
+    auto push = [this](const std::uint32_t reg, const PageSize size, const bool is_l2) {
       if (m_num_tlbs < m_tlbs.size()) {
-        const std::uint32_t d_entries =
-            is_l2 ? ((reg >> 16) & 0xFFF) : ((reg >> 16) & 0xFF);
+        const std::uint32_t d_entries = is_l2 ? ((reg >> 16) & 0xFFF) : ((reg >> 16) & 0xFF);
         if (d_entries > 0) {
           m_tlbs[m_num_tlbs++] = {
               .type = CacheType::Data,
               .page_size = size,
               .entries = d_entries,
-              .ways = is_l2 ? decode_amd_l2_assoc((reg >> 28) * 0xF)
-                            : ((reg >> 24) & 0xFF),
+              .ways = is_l2 ? decode_amd_l2_assoc((reg >> 28) * 0xF) : ((reg >> 24) & 0xFF),
           };
         }
       }
@@ -128,8 +124,7 @@ void CpuInfo::parse_tlb() noexcept {
               .type = CacheType::Instruction,
               .page_size = size,
               .entries = i_entries,
-              .ways = is_l2 ? decode_amd_l2_assoc((reg >> 12) & 0xF)
-                            : ((reg >> 8) & 0xFF),
+              .ways = is_l2 ? decode_amd_l2_assoc((reg >> 12) & 0xF) : ((reg >> 8) & 0xFF),
           };
         }
       }
@@ -159,8 +154,7 @@ void CpuInfo::parse_tlb() noexcept {
 }
 
 void CpuInfo::parse_topology() noexcept {
-  const std::uint32_t topo_leaf =
-      (m_max_leaf >= 0x1F) ? 0x1F : ((m_max_leaf >= 0xB) ? 0xB : 0);
+  const std::uint32_t topo_leaf = (m_max_leaf >= 0x1F) ? 0x1F : ((m_max_leaf >= 0xB) ? 0xB : 0);
 
   if (topo_leaf != 0) {
     for (std::uint32_t i = 0; i < m_topology.size(); ++i) {
@@ -404,8 +398,7 @@ UArch CpuInfo::decode_uarch() {
         if (m_model < 0x30) return UArch::Zen1;  // Zen / Zen+
         return UArch::Zen2;
       case 0x19:
-        if (m_model < 0x10 || (m_model >= 0x20 && m_model < 0x60))
-          return UArch::Zen3;
+        if (m_model < 0x10 || (m_model >= 0x20 && m_model < 0x60)) return UArch::Zen3;
         return UArch::Zen4;  // Genoa, Raphael
       case 0x1A:
         return UArch::Zen5;
@@ -439,8 +432,7 @@ const CpuInfo* CpuProfileManager::register_cpu() noexcept {
 
   const std::size_t active = m_active_profiles.load(std::memory_order_acquire);
   for (std::size_t i = 0; i < active; ++i) {
-    if (m_profiles[i].fingerprint.load(std::memory_order_relaxed) ==
-        fingerprint) {
+    if (m_profiles[i].fingerprint.load(std::memory_order_relaxed) == fingerprint) {
       return &m_profiles[i].info;
     }
   }
@@ -448,14 +440,12 @@ const CpuInfo* CpuProfileManager::register_cpu() noexcept {
   {
     utils::IrqSaveGuard guard(cpu_profile_lock);
 
-    const std::size_t curr_active =
-        m_active_profiles.load(std::memory_order_relaxed);
+    const std::size_t curr_active = m_active_profiles.load(std::memory_order_relaxed);
 
     const std::size_t new_idx = curr_active;
     if (new_idx < MAX_ARCH_PROFILES) {
       m_profiles[new_idx].info.initialize();
-      m_profiles[new_idx].fingerprint.store(fingerprint,
-                                            std::memory_order_relaxed);
+      m_profiles[new_idx].fingerprint.store(fingerprint, std::memory_order_relaxed);
       m_active_profiles.store(new_idx + 1, std::memory_order_release);
 
       return &m_profiles[new_idx].info;
@@ -470,8 +460,7 @@ const CpuInfo* CpuProfileManager::get_current() const noexcept {
   const std::size_t active = m_active_profiles.load(std::memory_order_relaxed);
 
   for (std::size_t i = 0; i < active; ++i) {
-    if (m_profiles[i].fingerprint.load(std::memory_order_relaxed) ==
-        fingerprint) {
+    if (m_profiles[i].fingerprint.load(std::memory_order_relaxed) == fingerprint) {
       return &m_profiles[i].info;
     }
   }

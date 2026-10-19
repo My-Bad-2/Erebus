@@ -17,16 +17,12 @@ class MmioResource {
 
  public:
   constexpr MmioResource() noexcept = default;
-  constexpr explicit MmioResource(const memory::VirtualAddress base) noexcept
-      : m_base{base} {}
+  constexpr explicit MmioResource(const memory::VirtualAddress base) noexcept : m_base{base} {}
 
-  constexpr void set_base(memory::VirtualAddress addr) noexcept {
-    m_base = addr;
-  }
+  constexpr void set_base(memory::VirtualAddress addr) noexcept { m_base = addr; }
 
   template <std::unsigned_integral T>
-  [[gnu::always_inline]] void write(std::size_t offset,
-                                    std::size_t val) const noexcept {
+  [[gnu::always_inline]] void write(std::size_t offset, std::size_t val) const noexcept {
     // Flush write-combining memory buffers
     const memory::VirtualAddress addr = m_base + offset;
     // sfence guarantees writes aren't held in write-combining buffers
@@ -59,8 +55,7 @@ class IoResource {
   template <std::unsigned_integral T>
   [[gnu::always_inline]] void write(std::size_t offset, T val) const noexcept {
     if (m_type == IoType::PMIO) {
-      const auto port =
-          static_cast<std::uint16_t>(m_base + (offset * m_stride));
+      const auto port = static_cast<std::uint16_t>(m_base + (offset * m_stride));
 
       if constexpr (sizeof(T) == 1) {
         asm volatile("outb %0, %w1" ::"a"(val), "Nd"(port) : "memory");
@@ -69,8 +64,7 @@ class IoResource {
       } else if constexpr (sizeof(T) == 4) {
         asm volatile("outl %0, %w1" ::"a"(val), "Nd"(port) : "memory");
       } else {
-        static_assert(sizeof(T) != sizeof(T),
-                      "x86-64 doesn't support 64-bit Port I/O");
+        static_assert(sizeof(T) != sizeof(T), "x86-64 doesn't support 64-bit Port I/O");
       }
     } else {
       // Flush write-combining memory buffers
@@ -92,8 +86,7 @@ class IoResource {
       } else if constexpr (sizeof(T) == 4) {
         asm volatile("inl %w1, %0" : "=a"(ret) : "Nd"(port) : "memory");
       } else {
-        static_assert(sizeof(T) != sizeof(T),
-                      "x86-64 doesn't support 64-bit Port I/O");
+        static_assert(sizeof(T) != sizeof(T), "x86-64 doesn't support 64-bit Port I/O");
       }
 
       return ret;

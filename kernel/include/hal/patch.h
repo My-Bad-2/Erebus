@@ -24,29 +24,28 @@
     _branch_res;                                   \
   })
 
-#define EREBUS_HOTSWAP_CALL_PRIO(fallback, opt, hw_feat, prio) \
-  asm volatile(                                                \
-      "661:\n\t"                                               \
-      "  call %P[orig]\n\t"                                    \
-      "662:\n\t"                                               \
-      ".pushsection .init.altinstructions,\"a\"\n\t"           \
-      "  .long 661b - .\n\t"                                   \
-      "  .long 663f - .\n\t"                                   \
-      "  .long %c[feat]\n\t"                                   \
-      "  .byte 662b - 661b\n\t"                                \
-      "  .byte 664f - 663f\n\t"                                \
-      "  .byte " #prio                                         \
-      "\n\t"                                                   \
-      "  .byte 0\n\t"                                          \
-      ".popsection\n\t"                                        \
-      ".pushsection .init.altinstr_replacement,\"ax\"\n\t"     \
-      "663:\n\t"                                               \
-      "  call %P[repl]\n\t"                                    \
-      "664:\n\t"                                               \
-      ".popsection\n\t"                                        \
-      :                                                        \
-      : [orig] "X"(fallback), [repl] "X"(opt),                 \
-        [feat] "X"(static_cast<std::uint32_t>(hw_feat))        \
+#define EREBUS_HOTSWAP_CALL_PRIO(fallback, opt, hw_feat, prio)                                 \
+  asm volatile(                                                                                \
+      "661:\n\t"                                                                               \
+      "  call %P[orig]\n\t"                                                                    \
+      "662:\n\t"                                                                               \
+      ".pushsection .init.altinstructions,\"a\"\n\t"                                           \
+      "  .long 661b - .\n\t"                                                                   \
+      "  .long 663f - .\n\t"                                                                   \
+      "  .long %c[feat]\n\t"                                                                   \
+      "  .byte 662b - 661b\n\t"                                                                \
+      "  .byte 664f - 663f\n\t"                                                                \
+      "  .byte " #prio                                                                         \
+      "\n\t"                                                                                   \
+      "  .byte 0\n\t"                                                                          \
+      ".popsection\n\t"                                                                        \
+      ".pushsection .init.altinstr_replacement,\"ax\"\n\t"                                     \
+      "663:\n\t"                                                                               \
+      "  call %P[repl]\n\t"                                                                    \
+      "664:\n\t"                                                                               \
+      ".popsection\n\t"                                                                        \
+      :                                                                                        \
+      : [orig] "X"(fallback), [repl] "X"(opt), [feat] "X"(static_cast<std::uint32_t>(hw_feat)) \
       : "memory")
 
 #define EREBUS_HOTSWAP_CALL(fallback, opt, hw_feat) \

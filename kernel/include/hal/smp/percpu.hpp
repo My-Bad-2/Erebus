@@ -55,8 +55,7 @@ struct alignas(std::hardware_destructive_interference_size) PerCpu {
   utils::CLHNode* curr_node{&node[0]};
   utils::CLHNode* prev_node{&node[1]};
 
-  alignas(std::hardware_destructive_interference_size)
-      memory::vmm::tlb::PcidManager pcid_manager;
+  alignas(std::hardware_destructive_interference_size) memory::vmm::tlb::PcidManager pcid_manager;
   apic::Lapic lapic;
   crypto::Blake2bPrng rng;
 
@@ -71,29 +70,23 @@ namespace percpu {
   return READ_PCP(topology).get_numa_node();
 }
 [[gnu::always_inline]] inline PerCpu* self() noexcept { return READ_PCP(self); }
-[[gnu::always_inline]] inline crypto::Blake2bPrng& rng() noexcept {
-  return self()->rng;
-}
+[[gnu::always_inline]] inline crypto::Blake2bPrng& rng() noexcept { return self()->rng; }
 [[nodiscard]] inline memory::vmm::tlb::PcidManager& pcid_manager() noexcept {
   return self()->pcid_manager;
 }
 [[nodiscard]] inline apic::Lapic& lapic() noexcept { return self()->lapic; }
 
 // Used by QSpinlock
-[[nodiscard, gnu::always_inline]] inline utils::CLHNode*
-get_curr_node() noexcept {
+[[nodiscard, gnu::always_inline]] inline utils::CLHNode* get_curr_node() noexcept {
   return READ_PCP(curr_node);
 }
-[[gnu::always_inline]] inline void set_curr_node(
-    utils::CLHNode* node) noexcept {
+[[gnu::always_inline]] inline void set_curr_node(utils::CLHNode* node) noexcept {
   WRITE_PCP(curr_node, node);
 }
-[[nodiscard, gnu::always_inline]] inline utils::CLHNode*
-get_prev_node() noexcept {
+[[nodiscard, gnu::always_inline]] inline utils::CLHNode* get_prev_node() noexcept {
   return READ_PCP(prev_node);
 }
-[[gnu::always_inline]] inline void set_prev_node(
-    utils::CLHNode* node) noexcept {
+[[gnu::always_inline]] inline void set_prev_node(utils::CLHNode* node) noexcept {
   WRITE_PCP(prev_node, node);
 }
 
@@ -113,45 +106,29 @@ inline constexpr std::size_t NMI_MCE_BYTE = CTX_BASE + 4;  // Nibble-split
   gs::write<AST_BYTE, std::uint8_t>(flags);
 }
 
-[[gnu::always_inline]] inline void preempt_disable() noexcept {
-  gs::inc<PREEMPT_BYTE, 1>();
-}
-[[gnu::always_inline]] inline void preempt_enable() noexcept {
-  gs::dec<PREEMPT_BYTE, 1>();
-}
+[[gnu::always_inline]] inline void preempt_disable() noexcept { gs::inc<PREEMPT_BYTE, 1>(); }
+[[gnu::always_inline]] inline void preempt_enable() noexcept { gs::dec<PREEMPT_BYTE, 1>(); }
 
 [[nodiscard, gnu::always_inline]] inline std::uint8_t preempt_count() noexcept {
   return gs::read<PREEMPT_BYTE, std::uint8_t>();
 }
 
-[[gnu::always_inline]] inline void softirq_enter() noexcept {
-  gs::inc<SOFTIRQ_BYTE, 1>();
-}
-[[gnu::always_inline]] inline void softirq_exit() noexcept {
-  gs::dec<SOFTIRQ_BYTE, 1>();
-}
+[[gnu::always_inline]] inline void softirq_enter() noexcept { gs::inc<SOFTIRQ_BYTE, 1>(); }
+[[gnu::always_inline]] inline void softirq_exit() noexcept { gs::dec<SOFTIRQ_BYTE, 1>(); }
 
 [[nodiscard, gnu::always_inline]] inline bool in_softirq() noexcept {
   return gs::read<SOFTIRQ_BYTE, std::uint8_t>() > 0;
 }
 
-[[gnu::always_inline]] inline void hardirq_enter() noexcept {
-  gs::inc<HARDIRQ_BYTE, 1>();
-}
-[[gnu::always_inline]] inline void hardirq_exit() noexcept {
-  gs::dec<HARDIRQ_BYTE, 1>();
-}
+[[gnu::always_inline]] inline void hardirq_enter() noexcept { gs::inc<HARDIRQ_BYTE, 1>(); }
+[[gnu::always_inline]] inline void hardirq_exit() noexcept { gs::dec<HARDIRQ_BYTE, 1>(); }
 
 [[nodiscard, gnu::always_inline]] inline bool in_hardirq() noexcept {
   return gs::read<HARDIRQ_BYTE, std::uint8_t>() > 0;
 }
 
-[[gnu::always_inline]] inline void nmi_enter() noexcept {
-  gs::add<NMI_MCE_BYTE, 1>(1);
-}
-[[gnu::always_inline]] inline void nmi_exit() noexcept {
-  gs::sub<NMI_MCE_BYTE, 1>(1);
-}
+[[gnu::always_inline]] inline void nmi_enter() noexcept { gs::add<NMI_MCE_BYTE, 1>(1); }
+[[gnu::always_inline]] inline void nmi_exit() noexcept { gs::sub<NMI_MCE_BYTE, 1>(1); }
 
 [[nodiscard, gnu::always_inline]] inline bool in_nmi() noexcept {
   return (gs::read<NMI_MCE_BYTE, std::uint8_t>() & 0x0F) > 0;
@@ -162,9 +139,7 @@ inline constexpr std::size_t NMI_MCE_BYTE = CTX_BASE + 4;  // Nibble-split
   gs::add<NMI_MCE_BYTE, 1>(16);
 }
 
-[[gnu::always_inline]] inline void mce_exit() noexcept {
-  gs::sub<NMI_MCE_BYTE, 1>(16);
-}
+[[gnu::always_inline]] inline void mce_exit() noexcept { gs::sub<NMI_MCE_BYTE, 1>(16); }
 
 [[nodiscard, gnu::always_inline]] inline bool in_mce() noexcept {
   return (gs::read<NMI_MCE_BYTE, std::uint8_t>() & 0xF0) > 0;

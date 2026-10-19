@@ -1,4 +1,4 @@
-#include "hal/percpu.hpp"
+#include "hal/smp/percpu.hpp"
 #include "memory/vmm/vma/vma.hpp"
 
 namespace kernel::memory::vmm {
@@ -6,8 +6,7 @@ namespace {
 constexpr bool enable_aslr = true;
 }  // namespace
 
-VirtualAddress AddressSpace::find_free_gap(const std::size_t size_bytes,
-                                           std::size_t alignment,
+VirtualAddress AddressSpace::find_free_gap(const std::size_t size_bytes, std::size_t alignment,
                                            const bool is_heap) noexcept {
   VirtualAddress& bump = is_heap ? m_heap_bump : m_mmap_bump;
   bump = bump.align_up(alignment);
@@ -73,8 +72,8 @@ void AddressSpace::unlink_vma(VMArea* vma) noexcept {
   }
 }
 
-std::expected<VMArea*, Error> AddressSpace::split_vma(
-    VMArea* vma, const VirtualAddress split_point) noexcept {
+std::expected<VMArea*, Error> AddressSpace::split_vma(VMArea* vma,
+                                                      const VirtualAddress split_point) noexcept {
   if (split_point <= vma->start || split_point >= vma->end) {
     return vma;
   }
@@ -88,8 +87,7 @@ std::expected<VMArea*, Error> AddressSpace::split_vma(
   const PageSize page_size = static_cast<PageSize>(vma->flags.get_page_size());
   const std::size_t bytes_per_page = get_page_bytes(page_size);
 
-  new_vma->object_offset +=
-      (split_point.value() - vma->start.value()) / bytes_per_page;
+  new_vma->object_offset += (split_point.value() - vma->start.value()) / bytes_per_page;
 
   if (new_vma->vm_object) {
     new_vma->vm_object->add_ref();
@@ -110,8 +108,7 @@ std::expected<VMArea*, Error> AddressSpace::split_vma(
 
 void AddressSpace::initialize() noexcept {
   const auto vma_res = heap::KmemCache::create(sizeof(VMArea), alignof(VMArea));
-  const auto vmo_res =
-      heap::KmemCache::create(sizeof(VMObject), alignof(VMObject));
+  const auto vmo_res = heap::KmemCache::create(sizeof(VMObject), alignof(VMObject));
   if (!vma_res || !vmo_res) {
     if (vma_res) {
       (*vma_res)->destroy();
@@ -160,8 +157,7 @@ AddressSpace::~AddressSpace() noexcept {
       curr->vm_object->drop_ref();
     }
 
-    [[maybe_unused]] auto _ =
-        m_pagemap.unmap_range(curr->start, curr->size_bytes());
+    [[maybe_unused]] auto _ = m_pagemap.unmap_range(curr->start, curr->size_bytes());
     delete curr;
     curr = next;
   }
@@ -193,8 +189,7 @@ void AddressSpace::merge_vma(VMArea* vma) noexcept {
       return false;
     }
 
-    const PageSize page_size =
-        static_cast<PageSize>(left->flags.get_page_size());
+    const PageSize page_size = static_cast<PageSize>(left->flags.get_page_size());
     const std::size_t bytes_per_page = get_page_bytes(page_size);
     const std::size_t pages_in_left = left->size_bytes() / bytes_per_page;
 
@@ -225,8 +220,7 @@ void AddressSpace::merge_vma(VMArea* vma) noexcept {
   }
 }
 
-std::expected<void, Error> AddressSpace::clone_into(
-    AddressSpace& child) noexcept {
+std::expected<void, Error> AddressSpace::clone_into(AddressSpace& child) noexcept {
   utils::ExclusivePreemptGuard parent_guard(m_as_lock);
   utils::ExclusivePreemptGuard child_guard{child.m_as_lock};
 
@@ -249,8 +243,7 @@ std::expected<void, Error> AddressSpace::clone_into(
     while (parent_curr != stop_point) {
       const AccessFlags access = parent_curr->flags.get_access();
 
-      if (has_flag(access, AccessFlags::CopyOnWrite) &&
-          parent_curr->vm_object) {
+      if (has_flag(access, AccessFlags::CopyOnWrite) && parent_curr->vm_object) {
         const AccessFlags orig = access & ~AccessFlags::CopyOnWrite;
         parent_curr->flags.set_access(orig);
 
@@ -262,8 +255,8 @@ std::expected<void, Error> AddressSpace::clone_into(
         }
 
         if (has_flag(orig, AccessFlags::Write)) {
-          [[maybe_unused]] auto _ = m_pagemap.protect_virtual_range(
-              parent_curr->start, parent_curr->size_bytes(), orig);
+          [[maybe_unused]] auto _ =
+              m_pagemap.protect_virtual_range(parent_curr->start, parent_curr->size_bytes(), orig);
         }
       }
 
@@ -290,8 +283,8 @@ std::expected<void, Error> AddressSpace::clone_into(
     child_vma->fault_count = 0;
 
     const AccessFlags access = curr->flags.get_access();
-    const bool is_shared = has_flag(access, AccessFlags::Shared) ||
-                           has_flag(access, AccessFlags::Mmio);
+    const bool is_shared =
+        has_flag(access, AccessFlags::Shared) || has_flag(access, AccessFlags::Mmio);
 
     if (!is_shared && curr->vm_object) {
       VMObject* original_obj = curr->vm_object;
@@ -318,8 +311,8 @@ std::expected<void, Error> AddressSpace::clone_into(
       if (has_flag(access, AccessFlags::Write)) {
         const AccessFlags hw_ro_flags = cow_access & ~AccessFlags::Write;
 
-        if (auto res = m_pagemap.protect_virtual_range(
-                curr->start, curr->size_bytes(), hw_ro_flags);
+        if (auto res =
+                m_pagemap.protect_virtual_range(curr->start, curr->size_bytes(), hw_ro_flags);
             !res) {
           parent_shadow->drop_ref();
           child_shadow->drop_ref();

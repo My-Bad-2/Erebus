@@ -15,8 +15,7 @@ constexpr std::uint16_t SLUB_NO_IDX = 0xFFFF;
 
 constexpr std::uint32_t KMALLOC_MIN_SHIFT = 3;   // 2^3 = 8B
 constexpr std::uint32_t KMALLOC_MAX_SHIFT = 15;  // 2^15 = 32KB
-constexpr std::uint32_t NUM_KMALLOC_CACHES =
-    KMALLOC_MAX_SHIFT - KMALLOC_MIN_SHIFT + 1;
+constexpr std::uint32_t NUM_KMALLOC_CACHES = KMALLOC_MAX_SHIFT - KMALLOC_MIN_SHIFT + 1;
 constexpr std::size_t MIN_ALLOC_SIZE = std::size_t{1} << KMALLOC_MIN_SHIFT;
 
 KmemCache* g_meta_cache = nullptr;
@@ -30,16 +29,14 @@ char* page_to_virt(const pmm::Page* page) noexcept {
 }
 
 pmm::Page* virt_to_page(void* ptr) noexcept {
-  if (const auto phys = DirectMap::virt_to_phys(VirtualAddress{ptr}))
-      [[likely]] {
+  if (const auto phys = DirectMap::virt_to_phys(VirtualAddress{ptr})) [[likely]] {
     return pmm::phys_to_page(*phys);
   }
 
   return nullptr;
 }
 
-[[nodiscard]] constexpr std::uint32_t size_to_index(
-    const std::size_t size) noexcept {
+[[nodiscard]] constexpr std::uint32_t size_to_index(const std::size_t size) noexcept {
   if (size <= MIN_ALLOC_SIZE) {
     return 0;
   }
@@ -52,14 +49,12 @@ void initialize() noexcept {
   const std::uint32_t total_cpus = boot::mp_request.response->cpu_count;
   const std::uint32_t total_numa_nodes = pmm::g_topology.active_nodes();
 
-  constexpr std::size_t L1_CACHE_LINE =
-      std::hardware_destructive_interference_size;
+  constexpr std::size_t L1_CACHE_LINE = std::hardware_destructive_interference_size;
 
   constexpr std::size_t base_sz = sizeof(KmemCache);
-  const std::size_t cpu_sz =
-      utils::maths::align_up(sizeof(CpuCache) * total_cpus, L1_CACHE_LINE);
-  const std::size_t node_sz = utils::maths::align_up(
-      sizeof(NodeCache) * total_numa_nodes, L1_CACHE_LINE);
+  const std::size_t cpu_sz = utils::maths::align_up(sizeof(CpuCache) * total_cpus, L1_CACHE_LINE);
+  const std::size_t node_sz =
+      utils::maths::align_up(sizeof(NodeCache) * total_numa_nodes, L1_CACHE_LINE);
 
   const std::size_t single_meta_sz = base_sz + cpu_sz + node_sz;
   const std::size_t total_boot_size = single_meta_sz * 3;
@@ -112,8 +107,8 @@ void initialize() noexcept {
       }
     }
 
-    return new (c) KmemCache(obj_sz, obj_sz, c_order, CacheFlags::None, nullptr,
-                             cpu_span, node_span);
+    return new (c)
+        KmemCache(obj_sz, obj_sz, c_order, CacheFlags::None, nullptr, cpu_span, node_span);
   };
 
   // Carve out the primordial caches
@@ -138,9 +133,7 @@ void KmemCache::destroy() noexcept {
     if (state.in_use > 0) [[unlikely]] {
       // If in_use > 0, the kernel is destroying a cache while objects are still
       // allocated.
-      utils::logger::warn(
-          "KmemCache: Destroying cache with {} active objects!\n",
-          state.in_use);
+      utils::logger::warn("KmemCache: Destroying cache with {} active objects!\n", state.in_use);
     }
 
     page->slub.cache = nullptr;
@@ -177,9 +170,10 @@ void KmemCache::destroy() noexcept {
   g_meta_cache->free(this);
 }
 
-std::expected<KmemCache*, Error> KmemCache::create(
-    const std::uint32_t obj_size, const std::uint32_t alignment,
-    const CacheFlags flags, void (*ctor)(void*)) noexcept {
+std::expected<KmemCache*, Error> KmemCache::create(const std::uint32_t obj_size,
+                                                   const std::uint32_t alignment,
+                                                   const CacheFlags flags,
+                                                   void (*ctor)(void*)) noexcept {
   const std::uint32_t total_cpus = boot::mp_request.response->cpu_count;
   const std::uint32_t total_numa_nodes = pmm::g_topology.active_nodes();
 
@@ -236,12 +230,10 @@ std::expected<KmemCache*, Error> KmemCache::create(
   std::span node_span(node_arr, total_numa_nodes);
   std::uninitialized_default_construct(node_span.begin(), node_span.end());
 
-  return new (cache_ptr)
-      KmemCache(obj_size, size, order, flags, ctor, cpu_span, node_span);
+  return new (cache_ptr) KmemCache(obj_size, size, order, flags, ctor, cpu_span, node_span);
 }
 
-void* CpuCache::alloc(const std::uint32_t object_size,
-                      const KmemCache* cache) noexcept {
+void* CpuCache::alloc(const std::uint32_t object_size, const KmemCache* cache) noexcept {
   void* obj = local_freelist;
   if (obj != nullptr) [[likely]] {
     local_freelist = *static_cast<void**>(obj);
@@ -263,8 +255,7 @@ void* CpuCache::alloc(const std::uint32_t object_size,
   return nullptr;
 }
 
-std::expected<void*, Error> KmemCache::refill(
-    CpuCache& cpu, const std::uint32_t cpu_id) noexcept {
+std::expected<void*, Error> KmemCache::refill(CpuCache& cpu, const std::uint32_t cpu_id) noexcept {
   const std::uint32_t node_id = hw::percpu::numa_node_id();
 
   // Attempt to reclaim remote frees from the curr active page
@@ -304,8 +295,7 @@ std::expected<void*, Error> KmemCache::refill(
   if (partial) {
     SlabState state = partial->read_slub_state();
     if (state.remote_head_idx == SLUB_NO_IDX) [[unlikely]] {
-      utils::logger::fatal(
-          "KmemCache: Pulled a completely full page from partial list!\n");
+      utils::logger::fatal("KmemCache: Pulled a completely full page from partial list!\n");
     }
 
     SlabState new_state;
@@ -334,8 +324,7 @@ std::expected<void*, Error> KmemCache::refill(
   }
 
   pmm::Page* new_page = pmm::phys_to_page(*raw_page);
-  const std::uint16_t total =
-      static_cast<std::uint16_t>((PAGE_SIZE << m_order) / m_size);
+  const std::uint16_t total = static_cast<std::uint16_t>((PAGE_SIZE << m_order) / m_size);
 
   char* current_obj = page_to_virt(new_page);
   for (std::uint16_t i = 0; i < total; ++i) {
@@ -357,8 +346,7 @@ std::expected<void*, Error> KmemCache::refill(
       .generation = 0,
   };
 
-  new_page->slub.state.store(std::bit_cast<std::uint64_t>(init_state),
-                             std::memory_order_relaxed);
+  new_page->slub.state.store(std::bit_cast<std::uint64_t>(init_state), std::memory_order_relaxed);
   new_page->slub.cache = this;
   new_page->set_state(pmm::PageState::Active);
 
@@ -389,8 +377,7 @@ void KmemCache::free(void* obj) noexcept {
   __builtin_prefetch(&page->slub.state, 1, 0);
 
   char* base = page_to_virt(page);
-  const std::uint32_t offset =
-      static_cast<std::uint32_t>(static_cast<char*>(obj) - base);
+  const std::uint32_t offset = static_cast<std::uint32_t>(static_cast<char*>(obj) - base);
   const std::uint16_t obj_idx = static_cast<std::uint16_t>(offset / m_size);
 
   SlabState state = page->read_slub_state();
@@ -435,8 +422,7 @@ void KmemCache::free(void* obj) noexcept {
   }
 }
 
-void KmemCache::abandon_active_page(CpuCache& cpu,
-                                    std::uint32_t cpu_id) noexcept {
+void KmemCache::abandon_active_page(CpuCache& cpu, std::uint32_t cpu_id) noexcept {
   pmm::Page* page = cpu.page;
   if (!page) {
     return;
@@ -492,9 +478,8 @@ void KmemCache::abandon_active_page(CpuCache& cpu,
   do {
     new_state = state;
     new_state.in_use -= total_local_free;
-    to_cpu_partial =
-        (new_state.in_use > 0 && new_state.in_use < new_state.total &&
-         cpu.partial_count < CpuCache::MAX_CPU_PARTIAL);
+    to_cpu_partial = (new_state.in_use > 0 && new_state.in_use < new_state.total &&
+                      cpu.partial_count < CpuCache::MAX_CPU_PARTIAL);
     new_state.frozen = to_cpu_partial ? 1 : 0;
 
     if (chain_tail && state.remote_head_idx != SLUB_NO_IDX) {
@@ -505,8 +490,7 @@ void KmemCache::abandon_active_page(CpuCache& cpu,
     if (chain_head) {
       const std::uint32_t head_offset =
           static_cast<std::uint32_t>(static_cast<char*>(chain_head) - base);
-      new_state.remote_head_idx =
-          static_cast<std::uint16_t>(head_offset / m_size);
+      new_state.remote_head_idx = static_cast<std::uint16_t>(head_offset / m_size);
     }
 
     new_state.generation++;
@@ -535,15 +519,13 @@ void KmemCache::abandon_active_page(CpuCache& cpu,
   cpu.local_freelist = nullptr;
 }
 
-void KmemCache::push_to_node_partial(pmm::Page* page,
-                                     const std::uint32_t node_id,
+void KmemCache::push_to_node_partial(pmm::Page* page, const std::uint32_t node_id,
                                      const bool mostly_empty) noexcept {
   if (!page) [[unlikely]] {
     return;
   }
 
-  auto& [lock, num_partial, partial_head, partial_tail] =
-      m_node_caches[node_id];
+  auto& [lock, num_partial, partial_head, partial_tail] = m_node_caches[node_id];
   utils::NakedGuard guard(lock);
 
   if (mostly_empty) {
@@ -575,14 +557,12 @@ void KmemCache::push_to_node_partial(pmm::Page* page,
   num_partial++;
 }
 
-void KmemCache::remove_from_node_partial(pmm::Page* page,
-                                         std::uint32_t node_id) noexcept {
+void KmemCache::remove_from_node_partial(pmm::Page* page, std::uint32_t node_id) noexcept {
   if (!page) [[unlikely]] {
     return;
   }
 
-  auto& [lock, num_partial, partial_head, partial_tail] =
-      m_node_caches[node_id];
+  auto& [lock, num_partial, partial_head, partial_tail] = m_node_caches[node_id];
   utils::NakedGuard guard(lock);
 
   if (num_partial == 0) [[unlikely]] {
@@ -608,8 +588,7 @@ void KmemCache::remove_from_node_partial(pmm::Page* page,
 }
 
 pmm::Page* KmemCache::pop_from_node_partial(std::uint32_t node_id) noexcept {
-  auto& [lock, num_partial, partial_head, partial_tail] =
-      m_node_caches[node_id];
+  auto& [lock, num_partial, partial_head, partial_tail] = m_node_caches[node_id];
   utils::NakedGuard guard(lock);
 
   pmm::Page* page = partial_head;
@@ -645,10 +624,8 @@ void* kmalloc(const std::size_t size, const std::size_t alignment) noexcept {
   }
 
   // The request is >32 KB. Directly ask the PMM
-  const std::size_t page_count =
-      utils::maths::div_round_up(required_size, PAGE_SIZE);
-  const std::uint8_t order =
-      static_cast<std::uint8_t>(std::countr_zero(std::bit_ceil(page_count)));
+  const std::size_t page_count = utils::maths::div_round_up(required_size, PAGE_SIZE);
+  const std::uint8_t order = static_cast<std::uint8_t>(std::countr_zero(std::bit_ceil(page_count)));
 
   auto raw_page = pmm::alloc_pages(pmm::PageMobility::Unmovable, order);
   if (!raw_page) [[unlikely]] {
@@ -669,8 +646,7 @@ void kfree(void* ptr) noexcept {
 
   pmm::Page* page = virt_to_page(ptr);
   if (!page) [[unlikely]] {
-    utils::logger::warn(
-        "kfree: Attempted to free an unmapped or invalid pointer {}\n", ptr);
+    utils::logger::warn("kfree: Attempted to free an unmapped or invalid pointer {}\n", ptr);
     return;
   }
 
@@ -683,8 +659,7 @@ void kfree(void* ptr) noexcept {
   }
 }
 
-void* krealloc(void* ptr, const std::size_t new_size,
-               const std::size_t align) noexcept {
+void* krealloc(void* ptr, const std::size_t new_size, const std::size_t align) noexcept {
   if (new_size == 0) {
     kfree(ptr);
     return nullptr;
@@ -700,14 +675,12 @@ void* krealloc(void* ptr, const std::size_t new_size,
   }
 
   const KmemCache* old_cache = page->slub.cache;
-  const std::size_t old_size =
-      old_cache ? old_cache->size() : (PAGE_SIZE << page->get_order());
+  const std::size_t old_size = old_cache ? old_cache->size() : (PAGE_SIZE << page->get_order());
   const std::size_t required_size = std::max(new_size, align);
 
   // In-place reuse if current capacity satisfies the new constraints
   if (old_size >= required_size) [[likely]] {
-    if (utils::maths::is_aligned(reinterpret_cast<std::uintptr_t>(ptr),
-                                 align)) {
+    if (utils::maths::is_aligned(reinterpret_cast<std::uintptr_t>(ptr), align)) {
       return ptr;
     }
   }
@@ -742,12 +715,10 @@ using namespace kernel::memory::heap;
   return ptr;
 }
 
-[[nodiscard]] void* operator new(const std::size_t size,
-                                 const std::nothrow_t&) noexcept {
+[[nodiscard]] void* operator new(const std::size_t size, const std::nothrow_t&) noexcept {
   return kmalloc(size);
 }
-[[nodiscard]] void* operator new[](const std::size_t size,
-                                   const std::nothrow_t&) noexcept {
+[[nodiscard]] void* operator new[](const std::size_t size, const std::nothrow_t&) noexcept {
   return kmalloc(size);
 }
 
@@ -760,8 +731,7 @@ using namespace kernel::memory::heap;
   return ptr;
 }
 
-[[nodiscard]] void* operator new[](const std::size_t size,
-                                   std::align_val_t alignment) {
+[[nodiscard]] void* operator new[](const std::size_t size, std::align_val_t alignment) {
   void* ptr = kmalloc(size, static_cast<std::size_t>(alignment));
   if (!ptr) [[unlikely]] {
     kernel::utils::logger::fatal("Out of memory in aligned operator new[]");
@@ -784,19 +754,12 @@ void operator delete(void* ptr) noexcept { kfree(ptr); }
 void operator delete[](void* ptr) noexcept { kfree(ptr); }
 
 void operator delete(void* ptr, std::size_t /* size */) noexcept { kfree(ptr); }
-void operator delete[](void* ptr, std::size_t /* size */) noexcept {
-  kfree(ptr);
-}
+void operator delete[](void* ptr, std::size_t /* size */) noexcept { kfree(ptr); }
 
-void operator delete(void* ptr, std::align_val_t /* alignment */) noexcept {
-  kfree(ptr);
-}
-void operator delete[](void* ptr, std::align_val_t /* alignment */) noexcept {
-  kfree(ptr);
-}
+void operator delete(void* ptr, std::align_val_t /* alignment */) noexcept { kfree(ptr); }
+void operator delete[](void* ptr, std::align_val_t /* alignment */) noexcept { kfree(ptr); }
 
-void operator delete(void* ptr, std::size_t /* size */,
-                     std::align_val_t /* alignment */) noexcept {
+void operator delete(void* ptr, std::size_t /* size */, std::align_val_t /* alignment */) noexcept {
   kfree(ptr);
 }
 void operator delete[](void* ptr, std::size_t /* size */,

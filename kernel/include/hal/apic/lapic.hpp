@@ -3,6 +3,7 @@
 #include <bitfield.hpp>
 
 #include "apic.hpp"
+#include "drivers/clock.hpp"
 #include "hal/hal.hpp"
 #include "hal/io.hpp"
 #include "memory/address.hpp"
@@ -202,7 +203,17 @@ class Lapic {
   ApicMode m_mode{ApicMode::Disabled};
   Capabilities m_caps{};
 
+  drivers::FrequencyScaler m_bus_scaler{};
+  bool m_use_tsc_deadline{false};
+
+  // Shared across SMP cores so APs don not repeat the software calibration loop
+  static inline std::atomic<std::uint64_t> s_calibrated_bus_hz{0};
+
   static constexpr std::uint32_t LAPIC_BASE_MSR = 0x800;
+
+  std::uint64_t calibrate_bus_frequency() const noexcept;
+  std::pair<std::uint32_t, TimerDivide> compute_timer_count_and_div(
+      std::uint64_t ns) const noexcept;
 
   void dispatch_icr(const IcrSchema icr) const noexcept {
     if (m_mode == ApicMode::x2APIC) [[likely]] {
@@ -218,10 +229,8 @@ class Lapic {
         icr_lo = m_mmio.read<std::uint32_t>(icr_low);
       }
 
-      m_mmio.write<std::uint32_t>(icr_high,
-                                  static_cast<std::uint32_t>(icr.raw() >> 32));
-      m_mmio.write<std::uint32_t>(icr_low,
-                                  static_cast<std::uint32_t>(icr.raw()));
+      m_mmio.write<std::uint32_t>(icr_high, static_cast<std::uint32_t>(icr.raw() >> 32));
+      m_mmio.write<std::uint32_t>(icr_low, static_cast<std::uint32_t>(icr.raw()));
 
       icr_lo = m_mmio.read<std::uint32_t>(icr_low);
       while (icr_lo.get_delivery_status()) {
@@ -231,18 +240,17 @@ class Lapic {
     }
   }
 
+  static constexpr std::uint32_t TSC_DEADLINE_MSR = 0x6E0;
+
  public:
   Lapic() = default;
   Lapic(const Lapic&) = delete;
 
-  void initialize(memory::VirtualAddress mmio_base,
-                  bool prefer_x2apic = true) noexcept;
+  void initialize(memory::VirtualAddress mmio_base, bool prefer_x2apic = true) noexcept;
 
   [[nodiscard]] ApicMode mode() const noexcept { return m_mode; }
   [[nodiscard]] uint32_t id() const noexcept { return m_cached_id; }
-  [[nodiscard]] const Capabilities& capabilities() const noexcept {
-    return m_caps;
-  }
+  [[nodiscard]] const Capabilities& capabilities() const noexcept { return m_caps; }
   [[nodiscard]] static bool is_bsp() noexcept {
     return BaseMsrSchema{read::msr(IA32_APIC_BASE)}.get_bsp();
   }
@@ -250,10 +258,8 @@ class Lapic {
   template <typename Schema>
   [[nodiscard]] Schema read(const Reg reg) const noexcept {
     const std::uint32_t offset = std::to_underlying(reg);
-    if (m_mode == ApicMode::x2APIC) [[likely]] {
-      return Schema(static_cast<std::uint32_t>(
-          read::msr(LAPIC_BASE_MSR + (offset >> 4))));
-    }
+    if (m_mode == ApicMode::x2APIC) [[likely]]
+      return Schema(static_cast<std::uint32_t>(read::msr(LAPIC_BASE_MSR + (offset >> 4))));
 
     return Schema(m_mmio.read<std::uint32_t>(offset));
   }
@@ -261,21 +267,17 @@ class Lapic {
   template <typename Schema>
   void write(const Reg reg, const Schema val) const noexcept {
     const std::uint32_t offset = std::to_underlying(reg);
-    if (m_mode == ApicMode::x2APIC) [[likely]] {
+    if (m_mode == ApicMode::x2APIC) [[likely]]
       write::msr(LAPIC_BASE_MSR + (offset >> 4), val.raw());
-    } else {
+    else
       m_mmio.write<std::uint32_t>(offset, val.raw());
-    }
   }
 
-  [[gnu::always_inline]] void eoi() const noexcept {
-    write(Reg::Eoi, Raw32Schema{0});
-  }
+  [[gnu::always_inline]] void eoi() const noexcept { write(Reg::Eoi, Raw32Schema{0}); }
 
   void enable_directed_eoi(const bool enable) const noexcept {
-    if (m_caps.has_directed_eoi) {
+    if (m_caps.has_directed_eoi)
       write(Reg::Svr, read<SvrSchema>(Reg::Svr).with_eoi_suppress(enable));
-    }
   }
 
   void set_tpr(const std::uint8_t priority) const noexcept {
@@ -285,13 +287,13 @@ class Lapic {
   [[nodiscard]] std::uint8_t get_tpr() const noexcept {
     return read<PrioritySchema>(Reg::Tpr).get_priority();
   }
+
   [[nodiscard]] std::uint8_t get_ppr() const noexcept {
     return read<PrioritySchema>(Reg::Ppr).get_priority();
   }
 
-  void configure_logical_destination(
-      const std::uint32_t logical_id,
-      const std::uint8_t flat_model = 0xF) const noexcept {
+  void configure_logical_destination(const std::uint32_t logical_id,
+                                     const std::uint8_t flat_model = 0xF) const noexcept {
     if (m_mode == ApicMode::xAPIC) {
       write(Reg::Dfr, DfrSchema{}.with_model(flat_model));
       write(Reg::Ldr, LdrSchema{}.with_id(logical_id << 24));
@@ -307,8 +309,7 @@ class Lapic {
 
   void arm_periodic(const std::uint8_t vector, const std::uint32_t count,
                     const TimerDivide div) const noexcept {
-    const auto lvt =
-        LvtSchema{}.with_vector(vector).with_timer_mode(TimerMode::Periodic);
+    const auto lvt = LvtSchema{}.with_vector(vector).with_timer_mode(TimerMode::Periodic);
 
     write(Reg::TimerDivide, Raw32Schema{std::to_underlying(div)});
     write(Reg::LvtTimer, lvt);
@@ -317,76 +318,99 @@ class Lapic {
 
   void arm_oneshot(const std::uint8_t vector, const std::uint32_t count,
                    const TimerDivide div) const noexcept {
-    const auto lvt =
-        LvtSchema{}.with_vector(vector).with_timer_mode(TimerMode::OneShot);
+    const auto lvt = LvtSchema{}.with_vector(vector).with_timer_mode(TimerMode::OneShot);
 
     write(Reg::TimerDivide, Raw32Schema{std::to_underlying(div)});
     write(Reg::LvtTimer, lvt);
     write(Reg::TimerInitCnt, Raw32Schema{count});
   }
 
-  [[gnu::always_inline]] void arm_tsc_deadline(
-      std::uint8_t vector, std::uint64_t target_tsc) const noexcept {
-    const auto lvt =
-        LvtSchema{}.with_vector(vector).with_timer_mode(TimerMode::TscDeadline);
+  [[gnu::always_inline]] void arm_tsc_deadline(std::uint8_t vector,
+                                               std::uint64_t target_tsc) const noexcept {
+    const auto lvt = LvtSchema{}.with_vector(vector).with_timer_mode(TimerMode::TscDeadline);
     write(Reg::LvtTimer, lvt);
-    asm volatile("mfence" : /* No Output */ : /* No Input */ : "memory");
-    constexpr std::uint32_t TSC_DEADLINE_MSR = 0x6E0;
-    write::msr(TSC_DEADLINE_MSR, target_tsc);
+
+    // In x2APIC mode, writing LvtTimer is a WRMSR which is already strictly ordered before WRMSR to
+    // 0x6E0.
+    if (m_mode == ApicMode::xAPIC) [[unlikely]] {
+      asm volatile("mfence" : /* No Output */ : /* No Input */ : "memory");
+    }
+
+    write::msr(TSC_DEADLINE_MSR, std::max(1ul, target_tsc));
   }
 
-  [[nodiscard]] std::uint32_t get_timer_current_count() const noexcept {
+  [[nodiscard, gnu::always_inline]] std::uint32_t get_timer_current_count() const noexcept {
     return read<Raw32Schema>(Reg::TimerCurrCnt).get_value();
   }
 
-  void configure_nmi(const Reg lint_reg = Reg::LvtLint1,
-                     const bool masked = false) const noexcept {
-    write(
-        lint_reg,
-        LvtSchema{}.with_delivery_mode(DeliveryMode::NMI).with_masked(masked));
+  // Arm a one-shot interrupt at an exact SystemClock::TimePoint
+  void arm_at(const std::uint8_t vector, const klib::TimePoint deadline) const noexcept {
+    if (m_use_tsc_deadline) [[likely]] {
+      arm_tsc_deadline(vector, drivers::SystemClock::to_raw_ticks(deadline));
+      return;
+    }
+
+    arm_after(vector, deadline - drivers::SystemClock::now());
   }
 
-  void configure_pmu(const std::uint8_t vector,
-                     const DeliveryMode delivery = DeliveryMode::Fixed,
-                     const bool masked = false) const noexcept {
-    write(Reg::LvtPerf, LvtSchema{}
-                            .with_vector(vector)
-                            .with_delivery_mode(delivery)
-                            .with_masked(masked));
+  // Arm a one-shot interrupt relative to now
+  void arm_after(const std::uint8_t vector, const klib::Duration delay) const noexcept {
+    const auto ns = static_cast<std::uint64_t>(std::max(1l, delay.to_ns()));
+    if (m_use_tsc_deadline) [[likely]] {
+      const std::uint64_t delta_tsc = drivers::SystemClock::scaler().ns_to_ticks(ns);
+      arm_tsc_deadline(vector, drivers::SystemClock::raw_ticks() + delta_tsc);
+      return;
+    }
+
+    const auto [count, div] = compute_timer_count_and_div(ns);
+    arm_oneshot(vector, count, div);
   }
 
-  void configure_cmci(const std::uint8_t vector,
-                      const DeliveryMode delivery = DeliveryMode::Fixed,
+  // Arm a repeating periodic interrupt
+  void arm_every(const std::uint8_t vector, const klib::Duration period) const noexcept {
+    // Clear any pending TSC deadline before switching LvtTimer to Periodic mode
+    if (m_use_tsc_deadline) write::msr(TSC_DEADLINE_MSR, 0ul);
+
+    const auto ns = static_cast<std::uint64_t>(std::max(1l, period.to_ns()));
+    const auto [count, div] = compute_timer_count_and_div(ns);
+    arm_periodic(vector, count, div);
+  }
+
+  void configure_nmi(const Reg lint_reg = Reg::LvtLint1, const bool masked = false) const noexcept {
+    write(lint_reg, LvtSchema{}.with_delivery_mode(DeliveryMode::NMI).with_masked(masked));
+  }
+
+  void configure_pmu(const std::uint8_t vector, const DeliveryMode delivery = DeliveryMode::Fixed,
+                     const bool masked = false) const noexcept {
+    write(Reg::LvtPerf,
+          LvtSchema{}.with_vector(vector).with_delivery_mode(delivery).with_masked(masked));
+  }
+
+  void configure_cmci(const std::uint8_t vector, const DeliveryMode delivery = DeliveryMode::Fixed,
                       const bool masked = false) const noexcept {
     if (m_caps.has_cmci) {
-      write(Reg::LvtCmci, LvtSchema{}
-                              .with_vector(vector)
-                              .with_delivery_mode(delivery)
-                              .with_masked(masked));
+      write(Reg::LvtCmci,
+            LvtSchema{}.with_vector(vector).with_delivery_mode(delivery).with_masked(masked));
     }
   }
 
-  void configure_amd_ext_lvt(const std::uint8_t index,
-                             const std::uint8_t vector,
+  void configure_amd_ext_lvt(const std::uint8_t index, const std::uint8_t vector,
                              const DeliveryMode delivery = DeliveryMode::Fixed,
                              const bool masked = false) const noexcept {
     if (!m_caps.has_amd_ext_apic || index >= m_caps.amd_ext_lvt_count) {
       return;
     }
 
-    const auto target_reg = static_cast<Reg>(
-        std::to_underlying(Reg::AmdExtLvtBase) + (index * 0x10));
-    const auto lvt = LvtSchema{}
-                         .with_vector(vector)
-                         .with_delivery_mode(delivery)
-                         .with_masked(masked);
+    const auto target_reg =
+        static_cast<Reg>(std::to_underlying(Reg::AmdExtLvtBase) + (index * 0x10));
+    const auto lvt =
+        LvtSchema{}.with_vector(vector).with_delivery_mode(delivery).with_masked(masked);
     write(target_reg, lvt);
   }
 
   void send_ipi(const std::uint32_t dest_id, const std::uint8_t vector,
                 const DeliveryMode delivery = DeliveryMode::Fixed,
-                const DestinationMode dest_mode =
-                    DestinationMode::Physical) const noexcept {
+                const DestinationMode dest_mode = DestinationMode::Physical) const noexcept {
     const auto icr = IcrSchema{}
                          .with_vector(vector)
                          .with_delivery_mode(delivery)
@@ -396,8 +420,7 @@ class Lapic {
     dispatch_icr(icr);
   }
 
-  [[gnu::always_inline]] void send_self_ipi(
-      const std::uint8_t vector) const noexcept {
+  [[gnu::always_inline]] void send_self_ipi(const std::uint8_t vector) const noexcept {
     if (m_mode == ApicMode::x2APIC) {
       constexpr std::uint32_t IA32_X2APIC_SELF_IPI = 0x83F;
       write::msr(IA32_X2APIC_SELF_IPI, vector);
@@ -419,8 +442,7 @@ class Lapic {
     dispatch_icr(icr);
   }
 
-  void send_sipi(const std::uint32_t dest_id,
-                 const std::uint8_t page_frame) const noexcept {
+  void send_sipi(const std::uint32_t dest_id, const std::uint8_t page_frame) const noexcept {
     const auto icr = IcrSchema{}
                          .with_vector(page_frame)
                          .with_delivery_mode(DeliveryMode::StartUp)
