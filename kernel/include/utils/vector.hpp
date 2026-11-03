@@ -1,3 +1,6 @@
+/// @file vector.hpp
+/// @brief A growable array.
+
 #pragma once
 
 #include <algorithm>
@@ -5,6 +8,7 @@
 #include <cstddef>
 #include <expected>
 #include <iterator>
+#include <limits>
 #include <memory>
 #include <new>
 #include <ranges>
@@ -13,6 +17,7 @@
 #include <utility>
 
 #include "string.h"
+#include "utils/assert.hpp"
 
 namespace kernel::utils {
 enum class VectorError {
@@ -22,6 +27,11 @@ enum class VectorError {
   InvalidIterator,
 };
 
+/// @brief `std::vector` for the kernel.
+///
+/// Everything that allocates returns `std::expected`, and running out of memory leaves the
+/// vector as it was. Elements must be nothrow movable; trivially copyable ones are moved around
+/// with memcpy/memmove. Storage comes from the nothrow global allocator.
 template <typename T>
 class Vector {
   static_assert(std::is_nothrow_destructible_v<T>, "Types must not throw on destruction");
@@ -43,15 +53,31 @@ class Vector {
   using const_reverse_iterator = std::reverse_iterator<const_iterator>;
 
  private:
-  T* m_data;
-  size_type m_size;
-  size_type m_capacity;
+  T* m_data{nullptr};
+  size_type m_size{0};
+  size_type m_capacity{0};
 
   template <typename Self>
   using propagate_const_t =
       std::conditional_t<std::is_const_v<std::remove_reference_t<Self>>, const_pointer, pointer>;
 
-  void relocate_data(pointer dest, pointer src, const size_type count) noexcept {
+  [[nodiscard]] static pointer allocate(const size_type count) noexcept {
+    if (count > max_size()) [[unlikely]] {
+      return nullptr;
+    }
+
+    return static_cast<pointer>(
+        ::operator new(count * sizeof(T), std::align_val_t{alignof(T)}, std::nothrow_t{}));
+  }
+
+  static void deallocate(pointer data) noexcept {
+    if (data) {
+      ::operator delete(data, std::align_val_t{alignof(T)});
+    }
+  }
+
+  // Moves @p count elements to uninitialised memory and ends the lifetime of the originals.
+  static void relocate(pointer dest, pointer src, const size_type count) noexcept {
     if constexpr (std::is_trivially_copyable_v<T>) {
       if (count > 0) {
         klib::memcpy(dest, src, count * sizeof(T));
@@ -64,9 +90,54 @@ class Vector {
     }
   }
 
+  // Opens a hole of one element at @p index, with `m_size < m_capacity`. The hole is left
+  // uninitialised for trivially copyable types and moved-from otherwise.
+  void shift_up(const size_type index) noexcept {
+    if constexpr (std::is_trivially_copyable_v<T>) {
+      klib::memmove(&m_data[index + 1], &m_data[index], (m_size - index) * sizeof(T));
+    } else {
+      std::construct_at(&m_data[m_size], std::move(m_data[m_size - 1]));
+      std::move_backward(&m_data[index], &m_data[m_size - 1], &m_data[m_size]);
+    }
+  }
+
   [[nodiscard]] constexpr size_type calculate_growth(const size_type required) const noexcept {
-    const size_type factor = m_capacity == 0 ? 4 : m_capacity + (m_capacity >> 1);
-    return std::max(factor, required);
+    const size_type grown = m_capacity == 0 ? 4 : m_capacity + (m_capacity >> 1);
+    return std::max(grown, required);
+  }
+
+  // Swaps in a new buffer of @p new_capacity holding the current elements.
+  [[nodiscard]] bool reallocate(const size_type new_capacity) noexcept {
+    pointer new_data = allocate(new_capacity);
+    if (!new_data) [[unlikely]] {
+      return false;
+    }
+
+    relocate(new_data, m_data, m_size);
+    deallocate(m_data);
+    m_data = new_data;
+    m_capacity = new_capacity;
+    return true;
+  }
+
+  // emplace_back() when the buffer is full. The new element is built in the new buffer before
+  // the old one goes away, so arguments that refer to elements of this vector stay valid.
+  template <typename... Args>
+  [[gnu::noinline]] std::expected<iterator, VectorError> emplace_back_slow(
+      Args&&... args) noexcept {
+    const size_type new_capacity = calculate_growth(m_size + 1);
+    pointer new_data = allocate(new_capacity);
+    if (!new_data) [[unlikely]] {
+      return std::unexpected(VectorError::AllocationFailed);
+    }
+
+    std::construct_at(&new_data[m_size], std::forward<Args>(args)...);
+    relocate(new_data, m_data, m_size);
+    deallocate(m_data);
+
+    m_data = new_data;
+    m_capacity = new_capacity;
+    return &m_data[m_size++];
   }
 
  public:
@@ -83,9 +154,7 @@ class Vector {
   constexpr Vector& operator=(Vector&& other) noexcept {
     if (this != &other) {
       clear();
-      if (m_data) {
-        operator delete[](reinterpret_cast<std::byte*>(m_data), std::align_val_t{alignof(T)});
-      }
+      deallocate(m_data);
 
       m_data = std::exchange(other.m_data, nullptr);
       m_size = std::exchange(other.m_size, 0);
@@ -97,9 +166,7 @@ class Vector {
 
   ~Vector() noexcept {
     clear();
-    if (m_data) {
-      operator delete[](reinterpret_cast<std::byte*>(m_data), std::align_val_t{alignof(T)});
-    }
+    deallocate(m_data);
   }
 
   template <class Self>
@@ -128,7 +195,6 @@ class Vector {
     return const_reverse_iterator(cbegin());
   }
 
-  // --- Capacity ---
   [[nodiscard]] constexpr size_type size() const noexcept { return m_size; }
   [[nodiscard]] constexpr size_type capacity() const noexcept { return m_capacity; }
   [[nodiscard]] constexpr bool empty() const noexcept { return m_size == 0; }
@@ -141,50 +207,32 @@ class Vector {
       return {};
     }
 
-    auto* new_memory = new (std::align_val_t{alignof(T)}) std::byte[new_capacity * sizeof(T)];
-    if (!new_memory) [[unlikely]] {
+    if (!reallocate(new_capacity)) [[unlikely]] {
       return std::unexpected(VectorError::AllocationFailed);
     }
 
-    pointer new_data = reinterpret_cast<pointer>(new_memory);
-    if (m_data) {
-      relocate_data(new_data, m_data, m_size);
-      operator delete[](reinterpret_cast<std::byte*>(m_data), std::align_val_t{alignof(T)});
-    }
-
-    m_data = new_data;
-    m_capacity = new_capacity;
     return {};
   }
 
+  /// @brief Drops unused capacity. Keeps the old buffer if a smaller one cannot be allocated.
   bool shrink_to_fit() noexcept {
     if (m_capacity == m_size) {
       return true;
     }
 
     if (m_size == 0) {
-      operator delete[](reinterpret_cast<std::byte*>(m_data), std::align_val_t{alignof(T)});
+      deallocate(m_data);
       m_data = nullptr;
       m_capacity = 0;
       return true;
     }
 
-    auto* new_memory = new (std::align_val_t{alignof(T)}) std::byte[m_size * sizeof(T)];
-    if (!new_memory) [[unlikely]] {
-      return false;  // Just keep old capacity if allocation fails
-    }
-
-    pointer new_data = reinterpret_cast<pointer>(new_memory);
-    relocate_data(new_data, m_data, m_size);
-    operator delete[](reinterpret_cast<std::byte*>(m_data), std::align_val_t{alignof(T)});
-
-    m_data = new_data;
-    m_capacity = m_size;
-    return true;
+    return reallocate(m_size);
   }
 
   template <class Self>
   [[nodiscard]] constexpr auto&& operator[](this Self&& self, size_type index) noexcept {
+    KASSERT(index < self.m_size);
     return std::forward_like<Self>(self.m_data[index]);
   }
 
@@ -199,11 +247,13 @@ class Vector {
 
   template <class Self>
   [[nodiscard]] constexpr auto&& front(this Self&& self) noexcept {
+    KASSERT(self.m_size != 0);
     return std::forward_like<Self>(self.m_data[0]);
   }
 
   template <class Self>
   [[nodiscard]] constexpr auto&& back(this Self&& self) noexcept {
+    KASSERT(self.m_size != 0);
     return std::forward_like<Self>(self.m_data[self.m_size - 1]);
   }
 
@@ -214,22 +264,22 @@ class Vector {
 
   template <typename... Args>
   [[nodiscard]] std::expected<iterator, VectorError> emplace_back(Args&&... args) noexcept {
-    if (m_size >= m_capacity) [[unlikely]] {
-      if (auto res = reserve(calculate_growth(m_size + 1)); !res) {
-        return std::unexpected(res.error());
-      }
+    if (m_size == m_capacity) [[unlikely]] {
+      return emplace_back_slow(std::forward<Args>(args)...);
     }
 
     std::construct_at(&m_data[m_size], std::forward<Args>(args)...);
     return &m_data[m_size++];
   }
 
-  [[nodiscard]] std::expected<void, VectorError> push_back(T value) noexcept {
-    if (auto res = emplace_back(std::move(value)); !res) {
-      return std::unexpected(res.error());
-    }
+  [[nodiscard]] std::expected<void, VectorError> push_back(const T& value) noexcept
+    requires std::is_nothrow_copy_constructible_v<T>
+  {
+    return emplace_back(value).transform([](iterator) {});
+  }
 
-    return {};
+  [[nodiscard]] std::expected<void, VectorError> push_back(T&& value) noexcept {
+    return emplace_back(std::move(value)).transform([](iterator) {});
   }
 
   void pop_back() noexcept {
@@ -239,26 +289,25 @@ class Vector {
   }
 
   [[nodiscard]] std::expected<iterator, VectorError> insert(const_iterator pos, T value) noexcept {
-    size_type index = static_cast<size_type>(pos - m_data);
+    const auto index = static_cast<size_type>(pos - m_data);
     if (index > m_size) [[unlikely]] {
       return std::unexpected(VectorError::InvalidIterator);
     }
 
-    if (m_size >= m_capacity) [[unlikely]] {
+    if (m_size == m_capacity) [[unlikely]] {
       if (auto res = reserve(calculate_growth(m_size + 1)); !res) {
         return std::unexpected(res.error());
       }
     }
 
-    if (index < m_size) {
-      std::construct_at(&m_data[m_size], std::move(m_data[m_size - 1]));
-      for (size_type i = m_size - 1; i > index; --i) {
-        m_data[i] = std::move(m_data[i - 1]);
-      }
-
-      m_data[index] = std::move(value);
-    } else {
+    if (index == m_size) {
       std::construct_at(&m_data[index], std::move(value));
+    } else if constexpr (std::is_trivially_copyable_v<T>) {
+      shift_up(index);
+      std::construct_at(&m_data[index], std::move(value));
+    } else {
+      shift_up(index);
+      m_data[index] = std::move(value);
     }
 
     ++m_size;
@@ -266,13 +315,32 @@ class Vector {
   }
 
   iterator erase(const_iterator pos) noexcept {
-    size_type index = static_cast<size_type>(pos - m_data);
+    const auto index = static_cast<size_type>(pos - m_data);
     if (index >= m_size) [[unlikely]] {
       return end();
     }
 
-    for (size_type i = index; i < m_size - 1; ++i) {
-      m_data[i] = std::move(m_data[i + 1]);
+    if constexpr (std::is_trivially_copyable_v<T>) {
+      klib::memmove(&m_data[index], &m_data[index + 1], (m_size - index - 1) * sizeof(T));
+      --m_size;
+    } else {
+      std::move(&m_data[index + 1], &m_data[m_size], &m_data[index]);
+      std::destroy_at(&m_data[--m_size]);
+    }
+
+    return m_data + index;
+  }
+
+  /// @brief Removes the element at @p pos by moving the last one into its place. O(1), but
+  ///        does not keep the order.
+  iterator swap_erase(const_iterator pos) noexcept {
+    const auto index = static_cast<size_type>(pos - m_data);
+    if (index >= m_size) [[unlikely]] {
+      return end();
+    }
+
+    if (index != m_size - 1) {
+      m_data[index] = std::move(m_data[m_size - 1]);
     }
 
     std::destroy_at(&m_data[--m_size]);
@@ -308,13 +376,14 @@ class Vector {
     if (count < m_size) {
       std::destroy_n(m_data + count, m_size - count);
     } else if (count > m_size) {
-      if (auto res = reserve(count); !res) {
-        return res;
+      // Geometric growth, so that growing one element at a time stays amortised O(1).
+      if (count > m_capacity) {
+        if (auto res = reserve(calculate_growth(count)); !res) {
+          return res;
+        }
       }
 
-      for (size_type i = m_size; i < count; ++i) {
-        std::construct_at(&m_data[i]);
-      }
+      std::uninitialized_value_construct_n(m_data + m_size, count - m_size);
     }
 
     m_size = count;

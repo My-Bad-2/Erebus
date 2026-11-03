@@ -1,168 +1,174 @@
 #include "patch/static_call.hpp"
 
+#include <atomic>
+#include <span>
+
 #include "memory/vmm/vma/vma.hpp"
+#include "utils/logger.hpp"
 
 extern "C" {
 [[gnu::visibility("hidden")]] extern const std::uint8_t __text_start[];
 [[gnu::visibility("hidden")]] extern const std::uint8_t __text_end[];
-[[gnu::visibility("hidden")]] extern const std::uint8_t __start_static_calls[];
-[[gnu::visibility("hidden")]] extern const std::uint8_t __stop_static_calls[];
+[[gnu::visibility("hidden")]] extern const std::uint8_t __static_call_tramps_start[];
+[[gnu::visibility("hidden")]] extern const std::uint8_t __static_call_tramps_end[];
+[[gnu::visibility("hidden")]] extern const std::uint8_t __static_call_table_start[];
+[[gnu::visibility("hidden")]] extern const std::uint8_t __static_call_table_end[];
 }
 
 namespace kernel::patch {
-auto StaticCallPatcher::apply_patches() noexcept -> std::expected<void, Error> {
-  using namespace memory::vmm;
-  const std::size_t table_bytes = __stop_static_calls - __start_static_calls;
-  const std::size_t count = table_bytes / sizeof(StaticCallEntry);
-  if (count == 0) return {};
+namespace {
+// The two shapes a trampoline can have, read as one little-endian word: `jmp rel32; int3 x3`,
+// and `ret; nopl 0(%rax); int3 x3`.
+constexpr std::uint64_t JMP_REL32 = 0xE9;
+constexpr std::uint64_t INT3_PADDING = 0xCC'CCCCull << 40;
+constexpr std::uint64_t RETURN_TRAMPOLINE = 0xCC'CCCC'0040'1F0F'C3ull;
+constexpr std::size_t TRAMPOLINE_ALIGN = 16;
 
-  const std::span entries{
-      reinterpret_cast<const StaticCallEntry*>(__start_static_calls),
-      count,
-  };
+[[nodiscard]] constexpr bool is_trampoline(const std::uint64_t word) noexcept {
+  return word == RETURN_TRAMPOLINE || ((word & 0xFF) == JMP_REL32 && (word >> 40) == 0xCC'CCCC);
+}
 
-  // Obtain .text boundaries from the linker script
-  const auto text_start = memory::VirtualAddress{__text_start};
-  const auto text_end = memory::VirtualAddress{__text_end}.align_up(memory::PAGE_SIZE);
-  const std::size_t text_size = text_end - text_start;
+[[nodiscard]] constexpr std::uint64_t jump_trampoline(const std::int32_t rel) noexcept {
+  return JMP_REL32 | (std::uint64_t{static_cast<std::uint32_t>(rel)} << 8) | INT3_PADDING;
+}
 
-  // Create a single RW (non-executatble) alias for the .text section
-  AddressSpace* kspace = kernel_space();
-  auto alias_res =
-      kspace->create_alias(text_start, text_size, AccessFlags::Read | AccessFlags::Write);
-  if (!alias_res) return std::unexpected(alias_res.error());
-  const memory::VirtualAddress alias_base = *alias_res;
+[[nodiscard]] bool in_range(const std::uintptr_t addr, const std::uint8_t* start,
+                            const std::uint8_t* end) noexcept {
+  return addr >= reinterpret_cast<std::uintptr_t>(start) &&
+         addr < reinterpret_cast<std::uintptr_t>(end);
+}
 
-  ZydisDecoder decoder;
-  ZydisDecoderInit(&decoder, ZYDIS_MACHINE_MODE_LONG_64, ZYDIS_STACK_WIDTH_64);
-  ZydisDecoderEnableMode(&decoder, ZYDIS_DECODER_MODE_MINIMAL, ZYAN_TRUE);
+// The trampoline word the entry asks for, or why it cannot have it.
+std::expected<std::uint64_t, Error> encode(const StaticCallEntry& entry) noexcept {
+  const std::uintptr_t site = entry.site;
+  if (!in_range(site, __static_call_tramps_start, __static_call_tramps_end) ||
+      site % TRAMPOLINE_ALIGN != 0) [[unlikely]] {
+    return std::unexpected(Error::SiteOutOfTextBounds);
+  }
 
-  const hw::CpuInfo* info = hw::profile_manager.get_current();
-  std::expected<void, Error> status{};
-  for (std::size_t i = 0; i < entries.size(); ++i) {
-    const memory::VirtualAddress curr_site = entries[i].site_address();
+  if (entry.target == 0) {
+    return RETURN_TRAMPOLINE;
+  }
 
-    // Skip if we already processed this call site earlier in the scan
-    bool already_processed = false;
-    for (std::size_t prev = 0; prev < i; ++prev) {
-      if (entries[prev].site_address() == curr_site) {
-        already_processed = true;
-        break;
-      }
-    }
+  // A target among the trampolines would make the outcome depend on the order of patching.
+  if (!in_range(entry.target, __text_start, __text_end) ||
+      in_range(entry.target, __static_call_tramps_start, __static_call_tramps_end)) [[unlikely]] {
+    return std::unexpected(Error::OutOfBounds);
+  }
 
-    if (already_processed) continue;
+  // The displacement counts from the end of the 5-byte jump. The kernel spans far less than
+  // 2 GiB, so it always fits; check anyway rather than jump somewhere else.
+  const auto rel = static_cast<std::int64_t>(entry.target - (site + 5));
+  if (rel != static_cast<std::int32_t>(rel)) [[unlikely]] {
+    return std::unexpected(Error::OutOfBounds);
+  }
 
-    // Scan all entried targeting `curr_site` and pick the highest priority
-    // whose feature requirements are satisfied.
-    const StaticCallEntry* best_entry = nullptr;
-    for (std::size_t j = i; j < entries.size(); ++j) {
-      if (entries[j].site_address() != curr_site) continue;
-      if (!entries[j].is_supported(info)) continue;
+  return jump_trampoline(static_cast<std::int32_t>(rel));
+}
 
-      if (best_entry == nullptr || entries[j].priority >= best_entry->priority)
-        best_entry = &entries[j];
-    }
-
-    if (best_entry) {
-      status = patch_site(decoder, *best_entry, text_start, text_size, alias_base);
-      if (!status) break;
+// The entry that should decide the trampoline at `site`, if any applies to this CPU.
+const StaticCallEntry* best_entry(const std::span<const StaticCallEntry> entries,
+                                  const std::uintptr_t site, const hw::CpuInfo& cpu) noexcept {
+  const StaticCallEntry* best = nullptr;
+  for (const StaticCallEntry& entry : entries) {
+    if (entry.site == site && entry.requirements.is_met_by(cpu) &&
+        (best == nullptr || entry.priority >= best->priority)) {
+      best = &entry;
     }
   }
 
-  auto _ = kspace->destroy_alias(alias_base);
-  serialize_pipeline(info);
-  return status;
+  return best;
 }
 
-auto StaticCallPatcher::patch_site(const ZydisDecoder& decoder, const StaticCallEntry& entry,
-                                   memory::VirtualAddress text_start, std::size_t text_size,
-                                   memory::VirtualAddress alias_base) noexcept
-    -> std::expected<void, Error> {
-  const memory::VirtualAddress site_va = entry.site_address();
-  const memory::VirtualAddress target_va = entry.target_address();
+// The CPU is the only one running and has just rewritten code through a different mapping;
+// make sure it does not execute stale instructions it may already have fetched.
+void serialize(const hw::CpuInfo& cpu) noexcept {
+  if (cpu.has(hw::Feature::SERIALIZE)) {
+    asm volatile("serialize" ::: "memory");
+  } else {
+    std::uint32_t eax = 0;
+    std::uint32_t ebx = 0;
+    std::uint32_t ecx = 0;
+    std::uint32_t edx = 0;
+    asm volatile("cpuid" : "+a"(eax), "=b"(ebx), "+c"(ecx), "=d"(edx)::"memory");
+  }
+}
+}  // namespace
 
-  if (site_va < text_start || site_va + kDirectBranchSize > text_start + text_size)
-    return std::unexpected(Error::SiteOutOfTextBounds);
+std::expected<void, Error> StaticCallPatcher::apply_patches() noexcept {
+  using namespace memory;
 
-  const std::size_t max_readable =
-      std::min<std::size_t>(kMaxSiteSize, (text_start + text_size) - site_va);
+  // Two linker symbols, not one array: subtract them as integers.
+  const std::size_t table_bytes = reinterpret_cast<std::uintptr_t>(__static_call_table_end) -
+                                  reinterpret_cast<std::uintptr_t>(__static_call_table_start);
+  if (table_bytes % sizeof(StaticCallEntry) != 0) [[unlikely]] {
+    return std::unexpected(Error::InvalidState);
+  }
 
-  // Translate the .text address to the corresponding alias address
-  const std::size_t text_offset = site_va - text_start;
-  auto* const writable_site = memory::VirtualAddress{alias_base + text_offset}.as<std::uint8_t>();
-  const auto* const rx_site = site_va.as<const std::uint8_t>();
-
-  // Decode the existing instruction at the patch site
-  ZydisDecodedInstruction existing_insn{};
-  if (ZYAN_FAILED(
-          ZydisDecoderDecodeInstruction(&decoder, nullptr, rx_site, max_readable, &existing_insn)))
-    return std::unexpected(Error::ZydisDecodeFailed);
-
-  // Covers either 5 bytes (direct branch) or 6 bytes(FF 25 indirect jmp)
-  const std::size_t span_to_cover = std::max<std::size_t>(kDirectBranchSize, existing_insn.length);
-
-  // Case A: Disabling a site (target_va == nullptr)
-  if (target_va.is_null()) {
-    if (existing_insn.mnemonic == ZYDIS_MNEMONIC_CALL) {
-      // In-place CALL -> 5-byte NOP
-      if (ZYAN_FAILED(ZydisEncoderNopFill(writable_site, span_to_cover)))
-        return std::unexpected(Error::ZydisEncodeFailed);
-    } else if (existing_insn.mnemonic == ZYDIS_MNEMONIC_JMP ||
-               existing_insn.mnemonic == ZYDIS_MNEMONIC_RET) {
-      // Trampoline JMP -> RET (0xC3) + 4-byte NOP
-      writable_site[0] = 0xC3;
-      if (ZYAN_FAILED(ZydisEncoderNopFill(writable_site + 1, span_to_cover - 1)))
-        return std::unexpected(Error::ZydisEncodeFailed);
-    } else {
-      return std::unexpected(Error::UnexpectedSiteMnemonic);
-    }
-
+  const std::span entries{reinterpret_cast<const StaticCallEntry*>(__static_call_table_start),
+                          table_bytes / sizeof(StaticCallEntry)};
+  if (entries.empty()) {
     return {};
   }
 
-  // Case B: Redirecting a site to target_va via 5-byte direct CALL/JMP rel32
-  ZydisMnemonic target_mnemoic;
-  if (existing_insn.mnemonic == ZYDIS_MNEMONIC_CALL ||
-      existing_insn.mnemonic == ZYDIS_MNEMONIC_NOP) {
-    target_mnemoic = ZYDIS_MNEMONIC_CALL;
-  } else if (existing_insn.mnemonic == ZYDIS_MNEMONIC_JMP ||
-             existing_insn.mnemonic == ZYDIS_MNEMONIC_RET) {
-    target_mnemoic = ZYDIS_MNEMONIC_JMP;
-  } else {
-    return std::unexpected(Error::UnexpectedSiteMnemonic);
+  // The trampolines share a few pages of .text; a writable alias of just those is enough.
+  const auto tramps_start = VirtualAddress{__static_call_tramps_start}.align_down(PAGE_SIZE);
+  const auto tramps_end = VirtualAddress{__static_call_tramps_end}.align_up(PAGE_SIZE);
+  vmm::AddressSpace* kspace = vmm::kernel_space();
+  const auto alias = kspace->create_alias(tramps_start, tramps_end - tramps_start,
+                                          vmm::AccessFlags::Read | vmm::AccessFlags::Write);
+  if (!alias) {
+    return std::unexpected(alias.error());
   }
 
-  // Construct the Zydis Encoder request forcing a 5-byte 32-bit near branch
-  ZydisEncoderRequest req{};
-  req.machine_mode = ZYDIS_MACHINE_MODE_LONG_64;
-  req.mnemonic = target_mnemoic;
-  req.branch_type = ZYDIS_BRANCH_TYPE_NEAR;
-  req.branch_width = ZYDIS_BRANCH_WIDTH_32;
-  req.operand_count = 1;
-  req.operands[0].type = ZYDIS_OPERAND_TYPE_IMMEDIATE;
-  req.operands[0].imm.u = target_va.value();
+  const hw::CpuInfo& cpu = *hw::profile_manager.get_current();
+  std::expected<void, Error> status{};
+  std::size_t sites = 0;
+  std::size_t patched = 0;
 
-  ZyanUSize encoded_len = span_to_cover;
-  if (ZYAN_FAILED(ZydisEncoderEncodeInstructionAbsolute(&req, writable_site, &encoded_len,
-                                                        site_va.value())))
-    return std::unexpected(Error::ZydisEncodeFailed);
+  for (std::size_t i = 0; i < entries.size() && status; ++i) {
+    // Each trampoline is decided once, when its first entry comes up.
+    const std::uintptr_t site = entries[i].site;
+    bool seen = false;
+    for (std::size_t prev = 0; prev < i && !seen; ++prev) {
+      seen = entries[prev].site == site;
+    }
 
-  // If replacing a 6-byte initial `FF 25` indirect jump with a 5-byte `E9`
-  // direct jump, pad the remaining 6th byte with a 1-byte NOP.
-  if (encoded_len < span_to_cover)
-    if (ZYAN_FAILED(ZydisEncoderNopFill(writable_site + encoded_len, span_to_cover - encoded_len)))
-      return std::unexpected(Error::ZydisEncodeFailed);
+    if (seen) {
+      continue;
+    }
 
-  return {};
-}
+    ++sites;
+    const StaticCallEntry* entry = best_entry(entries.subspan(i), site, cpu);
+    if (entry == nullptr) {
+      continue;
+    }
 
-void StaticCallPatcher::serialize_pipeline(const hw::CpuInfo* info) noexcept {
-  if (info->has(hw::Feature::SERIALIZE)) {
-    asm volatile("serialize" : /* No Output */ : /* No Input */ : "memory");
-  } else {
-    int a, b, c, d;
-    asm volatile("cpuid" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "0"(0) : "memory");
+    const auto word = encode(*entry);
+    if (!word) {
+      status = std::unexpected(word.error());
+      break;
+    }
+
+    auto* const current = reinterpret_cast<const std::uint64_t*>(site);
+    if (!is_trampoline(*current)) [[unlikely]] {
+      status = std::unexpected(Error::UnexpectedSiteMnemonic);
+      break;
+    }
+
+    // One aligned store: whoever runs the trampoline meanwhile sees the old jump or the new one.
+    auto* const writable = (*alias + (VirtualAddress{site} - tramps_start)).as<std::uint64_t>();
+    std::atomic_ref{*writable}.store(*word, std::memory_order_relaxed);
+    ++patched;
   }
+
+  serialize(cpu);
+  (void)kspace->destroy_alias(*alias);
+
+  if (status) {
+    utils::logger::info("Static calls: {} of {} retargeted for this CPU.\n", patched, sites);
+  }
+
+  return status;
 }
 }  // namespace kernel::patch

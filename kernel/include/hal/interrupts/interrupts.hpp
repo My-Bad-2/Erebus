@@ -131,10 +131,12 @@ enum class InterruptVector : std::uint8_t {
 
   ExternalInterruptStart = 32,
 
-  LocalApicSpurious = 255,
+  // Vectors 0xF0-0xFF are reserved for the kernel's own interrupts. Their priority class is the
+  // highest, so device interrupts never hold them up.
+  LocalApicSpurious = 255,  // Must not be acknowledged with an EOI
   LocalApicTimer = 254,
   IpiSchedule = 253,
-  IpiTlbShootdown = 252,
+  IpiCall = 252,  // Cross-CPU function calls (hal/smp/ipi.hpp)
 };
 
 [[nodiscard]] consteval bool has_error_code(InterruptVector vector) noexcept {
@@ -151,6 +153,12 @@ using StubPtr = void (*)();
 constexpr std::size_t IDT_SIZE = 256;
 extern std::array<StubPtr, IDT_SIZE> legacy_idt_stubs;
 
+/// @brief FRED event entry. User events enter at this address, kernel events 256 bytes in.
 [[gnu::naked]] void fred_entrypoint() noexcept;
+
+/// @brief Installs this CPU's event delivery: FRED if the CPU has it, the IDT otherwise.
+/// @param ring0_stack    Stack for events that arrive from user mode.
+/// @param critical_stack Stack for NMI, #DF and #MC under FRED. The IDT path takes these from
+///                       the TSS's IST slots instead (see gdt::NMI_IST and friends).
 void initialize(memory::VirtualAddress ring0_stack, memory::VirtualAddress critical_stack) noexcept;
 }  // namespace kernel::hw::interrupts

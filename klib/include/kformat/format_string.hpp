@@ -1,12 +1,10 @@
-/**
- * @file format_string.hpp
- * @brief Compile-time validated format string wrapper.
- *
- * This file provides the `klib::basic_format_string` template and its
- * associated syntax validator. It performs compile-time verification of curly
- * brace `{}` format specifiers against the provided variadic argument types,
- * ensuring arity and indexing correctness.
- */
+/// @file format_string.hpp
+/// @brief Compile-time validated format string wrapper.
+///
+/// This file provides the `klib::basic_format_string` template and its
+/// associated syntax validator. It performs compile-time verification of curly
+/// brace `{}` format specifiers against the provided variadic argument types,
+/// ensuring arity and indexing correctness.
 
 #pragma once
 
@@ -38,13 +36,11 @@ void compile_error_implicit_arg_mismatch();
 [[gnu::error("Explicit format index out of bounds for provided arguments")]]
 void compile_error_explicit_arg_out_of_bounds();
 
-/**
- * @brief Validates format string syntax and argument mapping at compile time.
- *
- * @note This class traverses the string view to assert that the number of
- * format placeholders strictly matches the given variadic argument count,
- * preventing syntactic anomalies like unmatched braces or mixed indexing modes.
- */
+/// @brief Validates format string syntax and argument mapping at compile time.
+///
+/// @note This class traverses the string view to assert that the number of
+/// format placeholders strictly matches the given variadic argument count,
+/// preventing syntactic anomalies like unmatched braces or mixed indexing modes.
 class FormatValidator {
   std::string_view m_str;
   std::size_t m_num_args;
@@ -69,18 +65,14 @@ class FormatValidator {
   }
 
  public:
-  /**
-   * @brief Constructs a validator for the target format string.
-   *
-   * @param str The format string to validate.
-   * @param num_args The total number of arguments passed for formatting.
-   */
+  /// @brief Constructs a validator for the target format string.
+  ///
+  /// @param str The format string to validate.
+  /// @param num_args The total number of arguments passed for formatting.
   constexpr FormatValidator(std::string_view str, std::size_t num_args) noexcept
       : m_str(str), m_num_args(num_args) {}
 
-  /**
-   * @brief Executes the validation pass over the format string.
-   */
+  /// @brief Executes the validation pass over the format string.
   constexpr void validate() {
     for (std::size_t i = 0; i < m_str.size(); ++i) {
       if (m_str[i] == '{') {
@@ -112,8 +104,7 @@ class FormatValidator {
           ++i;
         }
 
-        if (i == m_str.size() || m_str[i] != '}')
-          compile_error_missing_close_brace();
+        if (i == m_str.size() || m_str[i] != '}') compile_error_missing_close_brace();
       } else if (m_str[i] == '}') {
         // Handle escaped '}}'
         if (i + 1 < m_str.size() && m_str[i + 1] == '}')
@@ -123,53 +114,40 @@ class FormatValidator {
       }
     }
 
-    if (m_implicit_mode && m_auto_idx != m_num_args)
-      compile_error_implicit_arg_mismatch();
+    if (m_implicit_mode && m_auto_idx != m_num_args) compile_error_implicit_arg_mismatch();
 
-    if (m_explicit_mode && m_max_idx > m_num_args)
-      compile_error_explicit_arg_out_of_bounds();
+    if (m_explicit_mode && m_max_idx > m_num_args) compile_error_explicit_arg_out_of_bounds();
   }
 };
 }  // namespace detail
 
-/**
- * @brief A string wrapper evaluated at compile time to ensure valid format
- * parameters.
- *
- * @tparam Args The types of the formatting arguments being evaluated against.
- */
+/// @brief A string wrapper evaluated at compile time to ensure valid format
+/// parameters.
+///
+/// @tparam Args The types of the formatting arguments being evaluated against.
 template <typename... Args>
 class basic_format_string {
   std::string_view m_format_str;
 
  public:
-  /**
-   * @brief Constructs and validates the format string from a string literal.
-   *
-   * @tparam N The length of the string literal array.
-   * @param str A literal representing the format payload.
-   */
+  /// @brief Constructs and validates the format string from a string literal.
+  ///
+  /// @tparam N The length of the string literal array.
+  /// @param str A literal representing the format payload.
   template <std::size_t N>
-  consteval basic_format_string(const char (&str)[N]) noexcept
-      : m_format_str(str, N - 1) {
+  consteval basic_format_string(const char (&str)[N]) noexcept : m_format_str(str, N - 1) {
     detail::FormatValidator validator(m_format_str, sizeof...(Args));
     validator.validate();
   }
 
-  /**
-   * @brief Retrieves the validated string view.
-   *
-   * @return The underlying validated format string.
-   */
-  [[nodiscard]] constexpr std::string_view get() const noexcept {
-    return m_format_str;
-  }
+  /// @brief Retrieves the validated string view.
+  ///
+  /// @return The underlying validated format string.
+  [[nodiscard]] constexpr std::string_view get() const noexcept { return m_format_str; }
 
-  /**
-   * @brief Implicit conversion to string view.
-   *
-   * @return The underlying validated format string.
-   */
+  /// @brief Implicit conversion to string view.
+  ///
+  /// @return The underlying validated format string.
   constexpr operator std::string_view() const noexcept { return m_format_str; }
 };
 

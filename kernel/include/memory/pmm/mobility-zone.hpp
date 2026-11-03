@@ -1,3 +1,6 @@
+/// @file mobility-zone.hpp
+/// @brief One buddy allocator instance: the free memory of one mobility class on one NUMA node.
+
 #pragma once
 
 #include <atomic>
@@ -9,14 +12,36 @@
 #include "utils/ring_buffer.hpp"
 
 namespace kernel::memory::pmm {
+/// @brief Free-page thresholds, in pages, that drive the background daemons.
 struct ZoneWatermarks {
-  std::uint64_t min;   // absolute min. reserve (OOM)
-  std::uint64_t low;   // trigger background reclaim/compaction
-  std::uint64_t high;  // stop background reclaim/compaction
+  std::uint64_t min;   ///< Emergency reserve.
+  std::uint64_t low;   ///< Below this, reclaim is kicked.
+  std::uint64_t high;  ///< Reclaim stops once the zone is back above this.
 };
 
 class NumaNode;
 
+/// @brief A binary buddy allocator for one (node, mobility) pair.
+///
+/// Free memory is kept as naturally aligned blocks of 2^order pages in one FreeArea per order.
+/// A bitmap of non-empty orders lets allocation find the smallest usable block with a single
+/// `tzcnt`. Allocating splits a larger block in halves until it has the requested order, putting
+/// the unused halves back; freeing does the reverse and merges a block with its buddy (the block
+/// whose PFN differs only in bit `order`) for as long as the buddy is free, has the same order
+/// and belongs to this zone.
+///
+/// Three things sit in front of the locked core:
+///  - Per-CPU caches (PcpList) for orders up to PCP_MAX_ORDER. The common alloc/free never
+///    takes the lock.
+///  - Deferred frees: a CPU on a different NUMA node frees into an MPSC ring instead of
+///    bouncing the zone lock across the interconnect. Whoever takes the lock next merges them.
+///  - Watermarks that wake the reclaim/compaction daemons (once those exist).
+///
+/// Block heads in the free lists are marked PageState::Free. Every other frame of the zone,
+/// including the interior frames of free blocks, is PageState::Active; the merge logic relies on
+/// that to tell a free buddy from a stale descriptor.
+///
+/// Pages sitting in per-CPU caches or the deferred ring are not counted in get_free_pages().
 class alignas(std::hardware_destructive_interference_size) MobilityZone {
   friend NumaNode;
   friend class Router;
@@ -46,8 +71,11 @@ class alignas(std::hardware_destructive_interference_size) MobilityZone {
   [[nodiscard]] Page* alloc_pages_locked(std::uint8_t requested_order) noexcept;
   void free_page_locked(Page* page, std::uint8_t order) noexcept;
 
-  bool batch_refill_pcp(PcpList& list, std::uint8_t order) noexcept;
+  [[nodiscard]] bool batch_refill_pcp(PcpList& list, std::uint8_t order) noexcept;
   void batch_drain_pcp(PcpList& list, std::uint8_t order) noexcept;
+
+  [[nodiscard]] Page* adopt_stolen_block(Page* block, std::uint8_t block_order,
+                                         std::uint8_t requested_order) noexcept;
 
  public:
   MobilityZone(NumaNode* parent, PageMobility mobility) noexcept
@@ -97,20 +125,28 @@ class alignas(std::hardware_destructive_interference_size) MobilityZone {
     return m_areas[order];
   }
 
+  /// @brief Hands a free block to the zone during boot, without merging.
+  /// @pre The block's head descriptor was set up with PageState::Free and this zone's mobility.
   [[gnu::always_inline]] void inject_free_page_cold(Page* page, const std::uint8_t order) noexcept {
     m_areas[order].push_cold(page);
     set_order_active(order);
     add_free_pages(1ul << order);
   }
 
+  /// @brief Derives the watermarks from the zone's size (1%, 3% and 5%).
   void set_watermarks(const std::uint64_t total_present_pages) noexcept {
-    m_watermarks.min = total_present_pages / 100;         // 1%
-    m_watermarks.low = (total_present_pages * 3) / 100;   // 3%
-    m_watermarks.high = (total_present_pages * 5) / 100;  // 5%
+    m_watermarks.min = total_present_pages / 100;
+    m_watermarks.low = (total_present_pages * 3) / 100;
+    m_watermarks.high = (total_present_pages * 5) / 100;
   }
 
+  /// @brief Attaches the zone's per-CPU caches (one PcpCache per CPU, zero-initialised).
   void allocate_pcp(void* pcp_memory) noexcept { m_pcp_cache = static_cast<PcpCache*>(pcp_memory); }
 
+  /// @brief Sizes every CPU's cache lists for the zone's current amount of free memory.
+  ///
+  /// Must be called for every zone that has caches attached, including empty ones: an untuned
+  /// list has `batch == 0` and would never pull pages that later migrate into the zone.
   void tune_pcp(const std::uint32_t total_cpus) const noexcept {
     if (!m_pcp_cache) {
       return;
@@ -125,12 +161,23 @@ class alignas(std::hardware_destructive_interference_size) MobilityZone {
     }
   }
 
+  /// @brief Allocates a block of 2^@p requested_order pages from this zone only.
+  /// @return The head descriptor (PageState::Active, order set), or nullptr if the zone is out of
+  ///         blocks of that size.
   [[nodiscard]] Page* alloc_pages(std::uint8_t requested_order) noexcept;
+
+  /// @brief Returns a block to the zone. @p order must be the order it was allocated with.
   void free_page(Page* page, std::uint8_t order) noexcept;
 
+  /// @brief Removes the largest free block of at least @p min_order for a sibling zone to adopt.
+  /// @return The block, already marked Active so concurrent merges cannot touch it, or nullptr.
   [[nodiscard]] Page* extract_largest_block_for_steal(std::uint8_t min_order) noexcept;
+
+  /// @brief Rough fragmentation estimate: the share of free memory *not* in MAX_ORDER blocks.
   [[nodiscard]] std::uint32_t calculate_fragmentation_index() const noexcept;
 };
 
+/// @brief Flipped once the reclaim/compaction threads exist. Until then watermarks are tracked
+///        but never acted upon.
 inline std::atomic g_daemons_active{false};
 }  // namespace kernel::memory::pmm

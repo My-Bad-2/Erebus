@@ -14,8 +14,9 @@
 
 namespace kernel::hw::apic {
 struct IoApicConfig {
-  static constexpr std::size_t max_controllers = 8;
   static constexpr std::size_t max_isa_overrides = 16;
+  /// Redirection entries start at register 0x10 and take two registers each; the 8-bit register
+  /// index runs out after 120 of them.
   static constexpr std::size_t max_pins_per_controller = 120;
 };
 
@@ -94,7 +95,7 @@ struct RedirectionEntryLow {
   BF_RW(DeliveryMode, delivery_mode, 8, 3)
 
   BF_RW(DestinationMode, destination_mode, 11, 1)
-  BF_BIT_RW(interrupt_format, 11)  // IOMMU VT-d Remapping mode toggle
+  BF_BIT_RW(interrupt_index_15, 11)  // Remappable format: bit 15 of the IRTE index
 
   BF_BIT_RO(delivery_status, 12)
   BF_RW(PinPolarity, pin_polarity, 13, 1)
@@ -111,7 +112,11 @@ struct RedirectionEntryHigh {
   constexpr RedirectionEntryHigh(const std::uint32_t v = 0) : m_data(v) {}
   constexpr std::uint32_t raw() const noexcept { return m_data; }
   BF_RW(std::uint8_t, destination, 24, 8)
-  BF_RW(std::uint16_t, interrupt_index, 2, 15)  // Index into the IOMMU IRT
+
+  // Remappable format (Intel VT-d 5.1.5.1): bit 48 of the entry selects it, and bits 63:49 hold
+  // the low 15 bits of the interrupt remapping table index.
+  BF_BIT_RW(remappable_format, 16)
+  BF_RW(std::uint16_t, interrupt_index, 17, 15)
 };
 
 struct ShadowEntry {
@@ -171,7 +176,7 @@ class IoApicController {
 
  public:
   constexpr IoApicController() noexcept = default;
-  ~IoApicController() { delete[] m_shadow_table; }
+  ~IoApicController();
 
   IoApicController(const IoApicController&) = delete;
   IoApicController& operator=(const IoApicController&) = delete;
@@ -184,18 +189,7 @@ class IoApicController {
         m_shadow_table(std::exchange(other.m_shadow_table, nullptr)),
         m_lock() {}
 
-  IoApicController& operator=(IoApicController&& other) noexcept {
-    if (this != &other) {
-      delete[] m_shadow_table;
-      m_io = other.m_io;
-      m_gsi_base = other.m_gsi_base;
-      m_max_entries = other.m_max_entries;
-      m_version = other.m_version;
-      m_shadow_table = std::exchange(other.m_shadow_table, nullptr);
-    }
-
-    return *this;
-  }
+  IoApicController& operator=(IoApicController&& other) noexcept;
 
   std::expected<void, Error> initialize(memory::VirtualAddress mmio_base,
                                         std::uint32_t gsi_base) noexcept;
@@ -230,9 +224,13 @@ struct InterruptOverride {
   bool active;
 };
 
+/// @brief All I/O APICs of the system and the ISA IRQ overrides that go with them.
+///
+/// Controllers are registered once, from the MADT, before any interrupt is routed. Routing keeps
+/// pointers to them (for the EOI of level-triggered interrupts), so none may be added after that.
 class IoApicManager {
   utils::Vector<IoApicController> m_controllers{};
-  utils::Vector<InterruptOverride> m_overrides{};
+  std::array<InterruptOverride, IoApicConfig::max_isa_overrides> m_overrides{};
 
   [[nodiscard]] uint32_t resolve_isa_to_gsi(std::uint8_t isa_irq) const noexcept;
   [[nodiscard]] std::pair<PinPolarity, TriggerMode> resolve_acpi_flags(
@@ -241,6 +239,10 @@ class IoApicManager {
 
  public:
   IoApicManager() = default;
+
+  /// @brief Masks the legacy 8259 PICs and registers every I/O APIC and ISA override in the
+  ///        MADT. Called once, by the BSP.
+  void initialize() noexcept;
 
   std::expected<void, Error> register_controller(memory::VirtualAddress mmio_base,
                                                  std::uint32_t gsi_base) noexcept;
@@ -260,7 +262,23 @@ class IoApicManager {
   std::expected<void, Error> mask_gsi(std::uint32_t gsi) noexcept;
   std::expected<void, Error> unmask_gsi(std::uint32_t gsi) noexcept;
 
-  bool supports_directed_eoi() const noexcept { return m_controllers[0].version() >= 0x20; }
+  /// @brief Whether every I/O APIC has an EOI register.
+  ///
+  /// Only then may the local APICs stop broadcasting EOIs for level-triggered interrupts, since
+  /// the I/O APIC that raised one would otherwise never hear that it was handled.
+  [[nodiscard]] bool supports_directed_eoi() const noexcept {
+    if (m_controllers.empty()) {
+      return false;
+    }
+
+    for (const auto& controller : m_controllers) {
+      if (controller.version() < 0x20) {
+        return false;
+      }
+    }
+
+    return true;
+  }
 };
 
 extern IoApicManager io_apic_manager;

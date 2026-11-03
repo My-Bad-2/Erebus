@@ -1,70 +1,90 @@
-# ====================================================================================
+# ==============================================================================
 # Module: CodeQuality
-# Description: Attaches clang-tidy (on-build) and clang-format (on-demand) to targets
-# ====================================================================================
+# Description: clang-tidy during the build (opt-in) and clang-format on demand,
+#              for Erebus's own targets only; third-party code is never checked.
+#
+#   erebus_code_quality(<target>)   enrolls a target
+#   format                          reformats every enrolled source
+#   format_check                    fails if any of them is not formatted
+#
+# The checks themselves live in .clang-tidy: they look for bugs, not style, so
+# whatever clang-tidy reports is worth reading.
+# ==============================================================================
 
-if(NOT LLVM_PREFIX STREQUAL "")
-	set(LINTER_SEARCH_PATHS "${LLVM_PREFIX}/bin")
-endif()
+include_guard(GLOBAL)
 
-find_program(CLANG_TIDY_PROGRAM NAMES clang-tidy PATHS ${LINTER_SEARCH_PATHS})
-find_program(CLANG_FORMAT_PROGRAM NAMES clang-format PATHS ${LINTER_SEARCH_PATHS})
+option(EREBUS_CLANG_TIDY "Run clang-tidy on Erebus's own sources while building" OFF)
 
-if (CLANG_TIDY_PROGRAM)
-	message(STATUS "Code Quality: Found clang-tidy -> ${CLANG_TIDY_PROGRAM}")
-else ()
-	message(WARNING "Code Quality: clang-tidy not found.")
+find_program(CLANG_TIDY_PROGRAM NAMES clang-tidy HINTS "${LLVM_PREFIX}/bin")
+find_program(CLANG_FORMAT_PROGRAM NAMES clang-format HINTS "${LLVM_PREFIX}/bin")
+
+if (EREBUS_CLANG_TIDY AND NOT CLANG_TIDY_PROGRAM)
+  message(FATAL_ERROR "EREBUS_CLANG_TIDY is on, but clang-tidy was not found.")
 endif ()
+
+# Vendored files that keep their upstream formatting.
+set(EREBUS_FORMAT_EXCLUDE_REGEX "/kernel/include/boot/limine\\.h$")
 
 if (CLANG_FORMAT_PROGRAM)
-	message(STATUS "Code Quality: Found clang-format -> ${CLANG_FORMAT_PROGRAM}")
-
-	if (NOT TARGET format)
-		add_custom_target(format COMMENT "Running clang-format across all configured targets...")
-	endif ()
+  add_custom_target(format COMMENT "clang-format: reformatting the sources")
+  add_custom_target(format_check COMMENT "clang-format: checking the sources")
 else ()
-	message(WARNING "Code Quality: clang-format not found.")
+  message(STATUS "Code Quality: clang-format not found; the format targets are not available.")
 endif ()
 
 # ==============================================================================
-# Function: apply_code_quality
-# Description: Enables clang-tidy during compilation and adds the target's
-#              sources to the global 'format' command.
-#
-# Arguments:
-#   TARGET_NAME - The CMake target to analyze/format
+# Function: erebus_code_quality
+# Usage:    erebus_code_quality(<target>)
 # ==============================================================================
-function(apply_code_quality TARGET_NAME)
-	if (CLANG_TIDY_PROGRAM)
-#		set_target_properties(${TARGET_NAME} PROPERTIES
-#				C_CLANG_TIDY "${CLANG_TIDY_PROGRAM};-p;${CMAKE_BINARY_DIR}"
-#				CXX_CLANG_TIDY "${CLANG_TIDY_PROGRAM};-p;${CMAKE_BINARY_DIR}"
-#		)
-	endif ()
+function(erebus_code_quality target)
+  if (EREBUS_CLANG_TIDY)
+    set(tidy_command
+        "${CLANG_TIDY_PROGRAM}"
+        --quiet
+        "--config-file=${PROJECT_SOURCE_DIR}/.clang-tidy"
+    )
+    set_target_properties(${target} PROPERTIES
+        C_CLANG_TIDY "${tidy_command}"
+        CXX_CLANG_TIDY "${tidy_command}"
+    )
+  endif ()
 
-	if (CLANG_FORMAT_PROGRAM)
-		get_target_property(TARGET_SOURCES ${TARGET_NAME} SOURCES)
+  if (NOT CLANG_FORMAT_PROGRAM)
+    return()
+  endif ()
 
-		set(FORMATTABLE_SOURCES "")
+  get_target_property(source_dir ${target} SOURCE_DIR)
+  get_target_property(sources ${target} SOURCES)
+  get_target_property(headers ${target} HEADER_SET)
 
-		foreach (SOURCE ${TARGET_SOURCES})
-			if (SOURCE MATCHES "\\.(c|cpp|cxx|cc|h|hpp|hxx)$")
-				get_filename_component(ABS_PATH "${SOURCE}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
-				list(APPEND FORMATTABLE_SOURCES "${ABS_PATH}")
-			endif ()
-		endforeach ()
+  set(files "")
+  foreach (file IN LISTS sources headers)
+    if (NOT file MATCHES "\\.(c|cc|cpp|cxx|h|hh|hpp|hxx)$")
+      continue()
+    endif ()
 
-		if (FORMATTABLE_SOURCES)
-			set(FORMAT_TARGET_NAME "format_${TARGET_NAME}")
+    cmake_path(ABSOLUTE_PATH file BASE_DIRECTORY "${source_dir}" NORMALIZE)
+    if (NOT file MATCHES "${EREBUS_FORMAT_EXCLUDE_REGEX}")
+      list(APPEND files "${file}")
+    endif ()
+  endforeach ()
 
-			add_custom_target(
-					${FORMAT_TARGET_NAME}
-					COMMAND ${CLANG_FORMAT_PROGRAM} -i -style=file ${FORMATTABLE_SOURCES}
-					COMMENT "Formatting ${TARGET_NAME}..."
-					VERBATIM
-			)
+  list(REMOVE_DUPLICATES files)
+  if (NOT files)
+    return()
+  endif ()
 
-			add_dependencies(format ${FORMAT_TARGET_NAME})
-		endif ()
-	endif ()
+  add_custom_target(format_${target}
+      COMMAND "${CLANG_FORMAT_PROGRAM}" -i --style=file ${files}
+      COMMENT "clang-format: ${target}"
+      VERBATIM
+  )
+  add_custom_target(format_check_${target}
+      COMMAND "${CLANG_FORMAT_PROGRAM}" --dry-run --Werror --style=file ${files}
+      COMMENT "clang-format: checking ${target}"
+      VERBATIM
+  )
+
+  add_dependencies(format format_${target})
+  add_dependencies(format_check format_check_${target})
 endfunction()

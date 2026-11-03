@@ -7,17 +7,19 @@
 #include "hal/hal.hpp"
 #include "lock.hpp"
 
+namespace kernel::drivers::uart {
+class SerialPort;
+}
+
 namespace kernel::utils::logger {
 enum class Level { Trace, Debug, Info, Warn, Error, Fatal };
 
 constexpr auto ACTIVE_LOG_LEVEL = Level::Trace;
 
-/**
- * @brief Compound structure binding a compile-time format string to its
- * invocation site.
- *
- * @tparam Args The types of the arguments to format.
- */
+/// @brief Compound structure binding a compile-time format string to its
+///        invocation site.
+///
+/// @tparam Args The types of the arguments to format.
 template <typename... Args>
 struct log_loc_str {
   klib::format_string<Args...> fmt;
@@ -110,7 +112,10 @@ constexpr std::string_view basename(std::string_view path) noexcept {
 }
 }  // namespace detail
 
-void initialize(const void* spcr = nullptr) noexcept;
+/// @brief Moves console output to @p port, which must be initialised already.
+void initialize(const drivers::uart::SerialPort& port) noexcept;
+
+/// @brief Writes @p msg to the console as one piece. Safe from interrupt context.
 void write_console(std::string_view msg) noexcept;
 
 template <Level Lvl, typename... Args>
@@ -166,10 +171,11 @@ constexpr void error(log_loc_str<std::type_identity_t<Args>...> fmt, Args&&... a
   log<Level::Error>(fmt, std::forward<Args>(args)...);
 }
 
+/// @brief Logs the message and halts the machine: every other CPU is stopped, then this one.
 template <typename... Args>
 [[noreturn]] constexpr void fatal(log_loc_str<std::type_identity_t<Args>...> fmt,
                                   Args&&... args) noexcept {
   log<Level::Fatal>(fmt, std::forward<Args>(args)...);
-  hw::dead_loop();
+  hw::panic_halt();
 }
 }  // namespace kernel::utils::logger

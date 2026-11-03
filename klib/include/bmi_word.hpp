@@ -1,126 +1,115 @@
+/// @file bmi_word.hpp
+/// @brief A lock-free allocator of up to 64 slots, one bit per slot.
 #pragma once
 
 #include <algorithm>
 #include <atomic>
 #include <bit>
 #include <cstdint>
-#include <immintrin.h>
 
 namespace klib {
+/// @brief 64 slots, each free (bit set) or taken (bit clear), claimed and released atomically.
+///
+/// Built with BMI enabled, the bit tricks compile to `blsr`, `tzcnt` and `bzhi`, hence the name.
+/// Every operation that finds no room returns 64.
 class BmiWord {
-  alignas(8) std::atomic<std::uint64_t> m_mask{~0ul};
+  alignas(8) std::atomic<std::uint64_t> m_mask{~std::uint64_t{0}};
 
-  [[nodiscard]] static constexpr std::uint64_t
-  clear_lowest_bit(const std::uint64_t val) noexcept {
-#if defined(__BMI__)
-    return _blsr_u64(val);
-#else
-    return val & (val - 1);
-#endif
+  // `count` ones starting at bit `idx`; `idx + count` must not exceed 64.
+  [[nodiscard]] static constexpr std::uint64_t run_mask(const std::uint32_t idx,
+                                                        const std::uint32_t count) noexcept {
+    return (count >= 64 ? ~std::uint64_t{0} : (std::uint64_t{1} << count) - 1) << idx;
   }
 
-  [[nodiscard]] static constexpr std::uint64_t
-  generate_mask(const std::uint8_t idx, const std::uint8_t count) noexcept {
-#if defined(__BMI2__)
-    // _bzhi_u64 copies the source and zeroes all bits above index `count`.
-    const std::uint64_t base_mask = _bzhi_u64(~0ul, count);
-    return base_mask << idx;
-#else
-    return (count == 64) ? ~0ul : ((1ul << count) - 1) << idx;
-#endif
-  }
-
-public:
+ public:
+  /// @brief All 64 slots free.
   constexpr BmiWord() noexcept = default;
 
-  constexpr explicit BmiWord(const std::uint64_t mask) noexcept
-      : m_mask{mask} {}
+  /// @brief Slots free where `mask` has a one.
+  constexpr explicit BmiWord(const std::uint64_t mask) noexcept : m_mask{mask} {}
 
-  BmiWord(const BmiWord &) = delete;
-  BmiWord &operator=(const BmiWord &) = delete;
+  BmiWord(const BmiWord&) = delete;
+  BmiWord& operator=(const BmiWord&) = delete;
 
-  void release_bit(const std::uint8_t idx) noexcept {
+  /// @brief Frees slot `idx`.
+  void release_bit(const std::uint32_t idx) noexcept {
     [[assume(idx < 64)]];
-    m_mask.fetch_or(1ul << idx, std::memory_order_release);
+    m_mask.fetch_or(std::uint64_t{1} << idx, std::memory_order_release);
   }
 
-  void release_contiguous(const std::uint8_t idx,
-                          const std::uint8_t count) noexcept {
+  /// @brief Frees `count` slots starting at `idx`.
+  void release_contiguous(const std::uint32_t idx, const std::uint32_t count) noexcept {
     [[assume(idx < 64 && count > 0 && idx + count <= 64)]];
-    const std::uint64_t free_mask = generate_mask(idx, count);
-    m_mask.fetch_or(free_mask, std::memory_order_release);
+    m_mask.fetch_or(run_mask(idx, count), std::memory_order_release);
   }
 
-  [[nodiscard]] bool acquire_specific(const std::uint8_t idx) noexcept {
+  /// @brief Takes slot `idx`. False if it was taken already.
+  [[nodiscard]] bool acquire_specific(const std::uint32_t idx) noexcept {
     [[assume(idx < 64)]];
-    const std::uint64_t target = 1ul << idx;
-
-    const std::uint64_t prev =
-        m_mask.fetch_and(~target, std::memory_order_acq_rel);
-
-    return (prev & target) != 0;
+    const std::uint64_t target = std::uint64_t{1} << idx;
+    return (m_mask.fetch_and(~target, std::memory_order_acq_rel) & target) != 0;
   }
 
-  [[nodiscard]] std::uint8_t acquire_first_free() noexcept {
-    std::uint64_t curr = m_mask.load(std::memory_order_acquire);
+  /// @brief Takes the lowest free slot and returns its index, or 64 if all are taken.
+  [[nodiscard]] std::uint32_t acquire_first_free() noexcept {
+    std::uint64_t curr = m_mask.load(std::memory_order_relaxed);
 
     while (curr != 0) {
-      const std::uint8_t idx = std::countr_zero(curr);
-      const std::uint64_t next = clear_lowest_bit(curr);
-
-      if (m_mask.compare_exchange_weak(curr, next, std::memory_order_acq_rel))
-          [[likely]] {
-        return idx;
+      if (m_mask.compare_exchange_weak(curr, curr & (curr - 1), std::memory_order_acq_rel,
+                                       std::memory_order_relaxed)) [[likely]] {
+        return static_cast<std::uint32_t>(std::countr_zero(curr));
       }
     }
 
     return 64;
   }
 
-  [[nodiscard]] std::uint8_t
-  acquire_contiguous(const std::uint8_t count) noexcept {
+  /// @brief Takes the lowest run of `count` free slots and returns where it starts, or 64 if
+  ///        there is none.
+  [[nodiscard]] std::uint32_t acquire_contiguous(const std::uint32_t count) noexcept {
     [[assume(count > 0 && count <= 64)]];
-    std::uint64_t curr = m_mask.load(std::memory_order_acquire);
+    std::uint64_t curr = m_mask.load(std::memory_order_relaxed);
 
     while (true) {
-      std::uint64_t contiguous = curr;
-      std::uint8_t needed = count - 1;
-      std::uint8_t shift = 1;
-
-      while (needed > 0 && contiguous != 0) {
-        contiguous &= (contiguous >> shift);
-        needed -= shift;
-        shift = std::min<std::uint8_t>(shift << 1, needed);
+      // Bit i of `starts` ends up set when bits i to i + count - 1 of `curr` all are. Each step
+      // doubles the length of the runs it tracks, so this takes log2(count) steps.
+      std::uint64_t starts = curr;
+      for (std::uint32_t covered = 1; covered < count && starts != 0;) {
+        const std::uint32_t step = std::min(covered, count - covered);
+        starts &= starts >> step;
+        covered += step;
       }
 
-      if (contiguous == 0) [[unlikely]] {
+      if (starts == 0) [[unlikely]] {
         return 64;
       }
 
-      const std::uint8_t idx = std::countr_zero(contiguous);
-      const std::uint64_t claim_mask = generate_mask(idx, count);
-      const std::uint64_t next = curr & ~claim_mask;
-
-      if (m_mask.compare_exchange_weak(curr, next, std::memory_order_acq_rel)) {
+      const auto idx = static_cast<std::uint32_t>(std::countr_zero(starts));
+      if (m_mask.compare_exchange_weak(curr, curr & ~run_mask(idx, count),
+                                       std::memory_order_acq_rel, std::memory_order_relaxed)) {
         return idx;
       }
     }
   }
 
+  /// @brief The free slots right now, as a mask.
   [[nodiscard]] std::uint64_t snapshot() const noexcept {
     return m_mask.load(std::memory_order_acquire);
   }
 
-  [[nodiscard]] std::uint8_t free_count() const noexcept {
-    return static_cast<std::uint8_t>(std::popcount(snapshot()));
+  [[nodiscard]] std::uint32_t free_count() const noexcept {
+    return static_cast<std::uint32_t>(std::popcount(snapshot()));
   }
 
+  /// @brief Whether every slot is taken.
   [[nodiscard]] bool is_full() const noexcept { return snapshot() == 0; }
 
-  [[nodiscard]] bool is_empty() const noexcept { return snapshot() == ~0ul; }
+  /// @brief Whether every slot is free.
+  [[nodiscard]] bool is_empty() const noexcept { return snapshot() == ~std::uint64_t{0}; }
 
-  uint64_t reset(const uint64_t new_mask = ~0ul) noexcept {
+  /// @brief Replaces the whole mask and returns the old one.
+  std::uint64_t reset(const std::uint64_t new_mask = ~std::uint64_t{0}) noexcept {
     return m_mask.exchange(new_mask, std::memory_order_acq_rel);
   }
 };
-} // namespace klib
+}  // namespace klib

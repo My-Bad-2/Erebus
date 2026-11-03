@@ -1,13 +1,19 @@
+#include "boot/boot.hpp"
+#include "crypto/random.hpp"
 #include "drivers/acpi.hpp"
 #include "drivers/clock.hpp"
 #include "drivers/uart.hpp"
 #include "hal/hal.hpp"
-#include "hal/patcher.hpp"
 #include "hal/smp/percpu.hpp"
+#include "hal/smp/smp.hpp"
 #include "memory/memory.hpp"
 #include "memory/vmm/vma/vma.hpp"
 #include "patch/static_call.hpp"
 #include "utils/logger.hpp"
+
+#ifdef EREBUS_KERNEL_TESTS
+#include "ktest.hpp"
+#endif
 
 namespace kernel {
 namespace {
@@ -16,18 +22,29 @@ std::uint32_t runqueue_count = 0;
 
 [[noreturn]] void kmain(void* stack) {
   const memory::VirtualAddress bsp_stack{stack};
-  hw::percpu::initialize(bsp_stack);
 
+#ifdef EREBUS_KERNEL_TESTS
+  // The test kernel keeps the APs for its multi-CPU tests.
+  hw::smp::set_ap_main(&testing::run_on_ap);
+#endif
+
+  hw::smp::initialize(bsp_stack);
   utils::logger::info("Hello, World!\n");
+
+#ifdef EREBUS_KERNEL_TESTS
+  testing::run_all();
+#endif
+
   hw::cpu_idle_loop(&runqueue_count);
 }
 
 extern "C" void _start() noexcept {
   utils::logger::info("Hello, World!\n");
+  boot::validate();
 
   hw::percpu::early_initialize();
   hw::initialize();
-  hw::patcher::apply_all_boot_patches();
+  crypto::random::initialize();
 
   drivers::acpi::early_initialize();
   memory::initialize();
@@ -35,7 +52,7 @@ extern "C" void _start() noexcept {
   drivers::SystemClock::initialize();
 
   if (auto res = patch::StaticCallPatcher::apply_patches(); !res) {
-    utils::logger::fatal("Failed to apply patches! error: {}", res.error());
+    utils::logger::fatal("Failed to apply static call patches: error {:#x}\n", res.error());
   }
 
   const auto bsp_rsp = memory::vmm::kernel_space()->alloc(

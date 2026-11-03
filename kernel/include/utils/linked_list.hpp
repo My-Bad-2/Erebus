@@ -1,3 +1,11 @@
+/// @file linked_list.hpp
+/// @brief Intrusive singly linked list.
+///
+/// Items derive from SListNode and carry their own link, so the list never allocates. A list is
+/// terminated by a sentinel node shared by every list of the same type rather than by null,
+/// which leaves null free to mean "not on any list": `is_linked()` is exact, and linking a node
+/// twice is caught by an assertion in debug builds.
+
 #pragma once
 
 #include <concepts>
@@ -6,12 +14,15 @@
 #include <type_traits>
 #include <utility>
 
+#include "utils/assert.hpp"
+
 namespace kernel::utils {
 template <typename T, typename Tag = void>
 class SList;
 template <typename T, typename Tag, bool Const>
 class SListIterator;
 
+/// @brief The link an item needs to be on an SList. @p Tag tells apart several links in one item.
 template <typename T, typename Tag = void>
 class SListNode {
   SListNode* m_next{nullptr};
@@ -30,8 +41,16 @@ class SListNode {
 
   [[nodiscard]] constexpr T* as_item() noexcept { return static_cast<T*>(this); }
   [[nodiscard]] constexpr const T* as_item() const noexcept { return static_cast<const T*>(this); }
+
+  /// @brief Whether the item is on a list right now.
   [[nodiscard]] constexpr bool is_linked() const noexcept { return m_next != nullptr; }
 };
+
+namespace detail {
+// End of every SList<T, Tag>. Never dereferenced as an item.
+template <typename T, typename Tag>
+inline constinit SListNode<T, Tag> slist_end{};
+}  // namespace detail
 
 template <typename T, typename Tag, bool Const>
 class SListIterator {
@@ -63,18 +82,11 @@ class SListIterator {
     requires Const
       : m_current(other.m_current) {}
 
-  [[nodiscard]] constexpr reference operator*() const noexcept {
-    [[assume(m_current != nullptr)]];
-    return *m_current->as_item();
-  }
+  [[nodiscard]] constexpr reference operator*() const noexcept { return *m_current->as_item(); }
 
-  [[nodiscard]] constexpr pointer operator->() const noexcept {
-    [[assume(m_current != nullptr)]];
-    return m_current->as_item();
-  }
+  [[nodiscard]] constexpr pointer operator->() const noexcept { return m_current->as_item(); }
 
   constexpr SListIterator& operator++() noexcept {
-    [[assume(m_current != nullptr)]];
     m_current = m_current->m_next;
     return *this;
   }
@@ -89,12 +101,26 @@ class SListIterator {
                                                  const SListIterator&) noexcept = default;
 };
 
+/// @brief Intrusive singly linked list of @p T, which must derive from `SListNode<T, Tag>`.
+///
+/// The list does not own its items. push_front(), pop_front() and the `_after` operations are
+/// O(1); remove() has to find the predecessor and is O(n).
 template <typename T, typename Tag>
 class SList {
   static_assert(std::derived_from<T, SListNode<T, Tag>>,
                 "SList type T must derive from SListNode<T>");
   using node_type = SListNode<T, Tag>;
+
+  [[nodiscard]] static constexpr node_type* sentinel() noexcept {
+    return &detail::slist_end<T, Tag>;
+  }
+
   node_type m_head{};
+
+  template <class Self>
+  using iterator_for =
+      std::conditional_t<std::is_const_v<std::remove_reference_t<Self>>,
+                         SListIterator<T, Tag, true>, SListIterator<T, Tag, false>>;
 
  public:
   using value_type = T;
@@ -102,18 +128,20 @@ class SList {
   using iterator = SListIterator<T, Tag, false>;
   using const_iterator = SListIterator<T, Tag, true>;
 
-  constexpr SList() noexcept = default;
+  constexpr SList() noexcept { m_head.m_next = sentinel(); }
 
   SList(const SList&) = delete;
   SList& operator=(const SList&) = delete;
 
   constexpr SList(SList&& other) noexcept {
-    m_head.m_next = std::exchange(other.m_head.m_next, nullptr);
+    m_head.m_next = std::exchange(other.m_head.m_next, sentinel());
   }
 
+  /// @brief Takes over @p other's items. Items already on this list are unlinked first.
   constexpr SList& operator=(SList&& other) noexcept {
     if (this != &other) {
-      m_head.m_next = std::exchange(other.m_head.m_next, nullptr);
+      clear();
+      m_head.m_next = std::exchange(other.m_head.m_next, sentinel());
     }
 
     return *this;
@@ -121,51 +149,38 @@ class SList {
 
   template <class Self>
   [[nodiscard]] constexpr auto begin(this Self&& self) noexcept {
-    using Iter = std::conditional_t<std::is_const_v<std::remove_reference_t<Self>>, const_iterator,
-                                    iterator>;
-    using NodePtr = std::conditional_t<std::is_const_v<std::remove_reference_t<Self>>,
-                                       const node_type*, node_type*>;
-    return Iter(static_cast<NodePtr>(self.m_head.m_next));
+    return iterator_for<Self>(self.m_head.m_next);
   }
 
   template <class Self>
   [[nodiscard]] constexpr auto end(this Self&&) noexcept {
-    using Iter = std::conditional_t<std::is_const_v<std::remove_reference_t<Self>>, const_iterator,
-                                    iterator>;
-    return Iter(nullptr);
+    return iterator_for<Self>(sentinel());
   }
 
   template <class Self>
   [[nodiscard]] constexpr auto before_begin(this Self&& self) noexcept {
-    using Iter = std::conditional_t<std::is_const_v<std::remove_reference_t<Self>>, const_iterator,
-                                    iterator>;
-    using NodePtr = std::conditional_t<std::is_const_v<std::remove_reference_t<Self>>,
-                                       const node_type*, node_type*>;
-    return Iter(static_cast<NodePtr>(&self.m_head));
+    return iterator_for<Self>(&self.m_head);
   }
 
   template <class Self>
   [[nodiscard]] constexpr decltype(auto) front(this Self&& self) noexcept {
-    [[assume(self.m_head.m_next != nullptr)]];
-    using NodePtr = std::conditional_t<std::is_const_v<std::remove_reference_t<Self>>,
-                                       const node_type*, node_type*>;
-    return *static_cast<NodePtr>(self.m_head.m_next)->as_item();
+    KASSERT(!self.empty());
+    return *iterator_for<Self>(self.m_head.m_next);
   }
 
-  [[nodiscard]] constexpr bool empty() const noexcept { return m_head.m_next == nullptr; }
+  [[nodiscard]] constexpr bool empty() const noexcept { return m_head.m_next == sentinel(); }
 
   constexpr void push_front(T& item) noexcept {
     node_type* node = static_cast<node_type*>(&item);
-    if (node->m_next != nullptr) {
-      std::unreachable();
-    }
+    KASSERT(!node->is_linked());
 
     node->m_next = m_head.m_next;
     m_head.m_next = node;
   }
 
+  /// @pre The list is not empty.
   constexpr T* pop_front() noexcept {
-    [[assume(m_head.m_next != nullptr)]];
+    KASSERT(!empty());
 
     node_type* front_node = m_head.m_next;
     m_head.m_next = front_node->m_next;
@@ -174,11 +189,11 @@ class SList {
     return front_node->as_item();
   }
 
+  /// @brief Links @p item right after @p pos, which may be before_begin().
   constexpr iterator insert_after(const_iterator pos, T& item) noexcept {
     node_type* pos_node = const_cast<node_type*>(pos.m_current);
     node_type* new_node = static_cast<node_type*>(&item);
-
-    [[assume(new_node->m_next == nullptr)]];
+    KASSERT(!new_node->is_linked() && pos_node != sentinel());
 
     new_node->m_next = pos_node->m_next;
     pos_node->m_next = new_node;
@@ -186,41 +201,44 @@ class SList {
     return iterator(new_node);
   }
 
+  /// @brief Unlinks the item after @p pos and returns it.
+  /// @pre There is an item after @p pos.
   constexpr T* erase_after(const_iterator pos) noexcept {
     node_type* pos_node = const_cast<node_type*>(pos.m_current);
-    [[assume(pos_node->m_next != nullptr)]];
+    KASSERT(pos_node != sentinel() && pos_node->m_next != sentinel());
 
     node_type* target_node = pos_node->m_next;
     pos_node->m_next = target_node->m_next;
 
-    target_node->m_next = nullptr;  // Unlink
+    target_node->m_next = nullptr;
     return target_node->as_item();
   }
 
+  /// @brief Unlinks @p item if it is on this list.
+  /// @return false if it is not.
   constexpr bool remove(T& item) noexcept {
     node_type* target = static_cast<node_type*>(&item);
-    node_type* curr = &m_head;
+    if (!target->is_linked()) {
+      return false;
+    }
 
-    while (curr->m_next != nullptr) {
+    for (node_type* curr = &m_head; curr->m_next != sentinel(); curr = curr->m_next) {
       if (curr->m_next == target) {
         curr->m_next = target->m_next;
-        target->m_next = nullptr;  // Unlink
+        target->m_next = nullptr;
         return true;
       }
-
-      curr = curr->m_next;
     }
 
     return false;
   }
 
   constexpr void reverse() noexcept {
-    node_type* prev = nullptr;
+    node_type* prev = sentinel();
     node_type* curr = m_head.m_next;
-    node_type* next = nullptr;
 
-    while (curr != nullptr) {
-      next = curr->m_next;
+    while (curr != sentinel()) {
+      node_type* next = curr->m_next;
       curr->m_next = prev;
       prev = curr;
       curr = next;
@@ -229,6 +247,14 @@ class SList {
     m_head.m_next = prev;
   }
 
-  constexpr void clear() noexcept { m_head.m_next = nullptr; }
+  /// @brief Unlinks every item. O(n), since each item has to learn it is free again.
+  constexpr void clear() noexcept {
+    node_type* curr = m_head.m_next;
+    while (curr != sentinel()) {
+      curr = std::exchange(curr->m_next, nullptr);
+    }
+
+    m_head.m_next = sentinel();
+  }
 };
 }  // namespace kernel::utils

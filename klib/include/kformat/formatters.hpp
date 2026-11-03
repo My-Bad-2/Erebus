@@ -1,71 +1,91 @@
-/**
- * @file formatters.hpp
- * @brief Core formatting specializations for various data types.
- *
- * This file provides the `klib::formatter<T>` template and its specializations.
- * It is responsible for converting runtime values (strings, integers, pointers,
- * enums, byte spans) into formatted string representations and appending them
- * to a provided buffer sink.
- *
- * @note Formatting Behavior & Specifiers:
- * - Fill & Align: `<` (Left), `>` (Right), `^` (Center). Strings default
- * left, numbers right.
- * - Sign: `+` (Always show), `-` (Show for negatives only), ` ` (Space for
- * positive).
- * - Alt Form (`#`): Adds base prefixes (`0x`, `0b`, `0`).
- * - Zero Pad (`0`): Pads numeric magnitude directly with leading zeros.
- * - Negative Bases: Complies with C++20 `std::format` (e.g., Hex of -26 is
- * `-1a`, not 2's complement).
- */
-
+/// @file formatters.hpp
+/// @brief `klib::formatter<T>` and its specializations for strings, integers, pointers, enums,
+///        byte spans, ranges and the styling wrappers.
+///
+/// Specifiers follow std::format where they overlap:
+/// - fill and align: `<` left, `>` right, `^` centre. Strings default to left, numbers to right.
+/// - sign: `+` always, `-` negatives only (the default), ` ` a space for non-negatives.
+/// - `#` adds the base prefix (`0x`, `0b`, `0`); `0` pads with zeros after sign and prefix.
+/// - negative numbers keep their sign in every base: `{:x}` of -26 is `-1a`.
+///
+/// Integers also take a precision, as the minimum number of digits, as printf does.
+///
+/// A sink needs `push(char)` and `append(std::string_view)`; `append_fill(count, char)` is used
+/// for padding when it has one.
 #pragma once
 
+#include <climits>
 #include <concepts>
+#include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <span>
 #include <string_view>
 #include <type_traits>
 
 namespace klib {
-struct [[gnu::aligned(16)]] FormatSpec {
+/// @brief One parsed `{:...}` specifier.
+struct FormatSpec {
   int width = 0;
+  /// -1 when absent.
   int precision = -1;
   int base = 10;
   char fill = ' ';
+  /// '\0' when absent, so that each type can pick its own default.
   char align = '\0';
   char sign = '-';
   bool uppercase = false;
   bool alt_form = false;
+  /// Everything between ':' and '}', for formatters with a dialect of their own.
   std::string_view custom{};
 };
 
 namespace detail {
-/**
- * @brief Lookup table for base-10 integer-to-string conversion.
- */
-inline constexpr std::string_view kDigitPairs =
+inline constexpr std::string_view DIGIT_PAIRS =
     "0001020304050607080910111213141516171819"
     "2021222324252627282930313233343536373839"
     "4041424344454647484950515253545556575859"
     "6061626364656667686970717273747576777879"
     "8081828384858687888990919293949596979899";
 
-/**
- * @brief Helper to write repeated padding characters to a sink.
- *
- * @param sink The target output buffer.
- * @param count Number of characters to write.
- * @param c The character to emit.
- */
+/// @brief Writes `count` copies of `c`, nothing if `count` is not positive.
 template <typename Sink>
-constexpr void write_pad(Sink& sink, const int count, char c) noexcept {
-  if (count > 0) sink.append_fill(count, c);
+constexpr void write_pad(Sink& sink, const int count, const char c) noexcept {
+  if (count <= 0) {
+    return;
+  }
+
+  if constexpr (requires { sink.append_fill(std::size_t{}, c); }) {
+    sink.append_fill(static_cast<std::size_t>(count), c);
+  } else {
+    for (int i = 0; i < count; ++i) {
+      sink.push(c);
+    }
+  }
+}
+
+/// @brief Left and right padding that bring `len` characters up to `spec.width`.
+struct Padding {
+  int left = 0;
+  int right = 0;
+};
+
+[[nodiscard]] constexpr Padding split_padding(const int len, const int width,
+                                              const char align) noexcept {
+  const int pad = width > len ? width - len : 0;
+  switch (align) {
+    case '<':
+      return {0, pad};
+    case '^':
+      return {pad / 2, pad - pad / 2};
+    default:
+      return {pad, 0};
+  }
 }
 }  // namespace detail
 
-/**
- * @brief Concept matching standard integers and compiler extensions.
- */
+/// @brief Integer types, including `__int128` and `_BitInt(N)`, which std::is_integral
+///        does not always know about.
 template <typename T>
 concept AnyIntegral = std::is_integral_v<T> || requires(T a, T b) {
   { a + b } -> std::same_as<T>;
@@ -75,60 +95,41 @@ concept AnyIntegral = std::is_integral_v<T> || requires(T a, T b) {
   requires !std::is_floating_point_v<T>;
 };
 
-/**
- * @brief Base Template for type formatting.
- *
- * @tparam T The type to format.
- *
- * @note Types without an explicit specialization or concept match will fall
- * back to this template and output a `[?unsupported?]` tag.
- */
+/// @brief Formats values of type `T`. Specialize it for your own types.
+///
+/// Types without a specialization print `[?unsupported?]`.
 template <typename T>
 struct formatter {
   template <typename Sink>
-  static constexpr void format(Sink& buf, const T&,
-                               const FormatSpec&) noexcept {
+  static constexpr void format(Sink& buf, const T&, const FormatSpec&) noexcept {
     buf.append("[?unsupported?]");
   }
 };
 
 template <>
 struct formatter<std::string_view> {
+  /// A precision truncates the string.
   template <typename Sink>
-  static constexpr void format(Sink& buf, std::string_view val,
-                               const FormatSpec& spec) noexcept {
-    if (spec.precision >= 0 &&
-        static_cast<std::size_t>(spec.precision) < val.length()) {
-      val = val.substr(0, spec.precision);
+  static constexpr void format(Sink& buf, std::string_view val, const FormatSpec& spec) noexcept {
+    if (spec.precision >= 0 && static_cast<std::size_t>(spec.precision) < val.length()) {
+      val = val.substr(0, static_cast<std::size_t>(spec.precision));
     }
 
-    const int len = static_cast<int>(val.length());
-    const int pad = (spec.width > len) ? spec.width - len : 0;
-    const char align = (spec.align != '\0') ? spec.align : '<';
+    const auto [left, right] = detail::split_padding(static_cast<int>(val.length()), spec.width,
+                                                     spec.align != '\0' ? spec.align : '<');
 
-    int p_l = 0, p_r = 0;
-    if (align == '>') {
-      p_l = pad;
-    } else if (align == '<') {
-      p_r = pad;
-    } else if (align == '^') {
-      p_l = pad / 2;
-      p_r = pad - p_l;
-    }
-
-    detail::write_pad(buf, p_l, spec.fill);
+    detail::write_pad(buf, left, spec.fill);
     buf.append(val);
-    detail::write_pad(buf, p_r, spec.fill);
+    detail::write_pad(buf, right, spec.fill);
   }
 };
 
 template <>
 struct formatter<const char*> {
+  /// A null pointer prints `(null)`.
   template <typename Sink>
-  static constexpr void format(Sink& buf, const char* val,
-                               const FormatSpec& spec) noexcept {
-    formatter<std::string_view>::format(
-        buf, val ? std::string_view(val) : "(null)", spec);
+  static constexpr void format(Sink& buf, const char* val, const FormatSpec& spec) noexcept {
+    formatter<std::string_view>::format(buf, val ? std::string_view(val) : "(null)", spec);
   }
 };
 
@@ -138,8 +139,7 @@ struct formatter<char*> : formatter<const char*> {};
 template <>
 struct formatter<char> {
   template <typename Sink>
-  static constexpr void format(Sink& buf, const char val,
-                               const FormatSpec& spec) noexcept {
+  static constexpr void format(Sink& buf, const char val, const FormatSpec& spec) noexcept {
     formatter<std::string_view>::format(buf, std::string_view(&val, 1), spec);
   }
 };
@@ -147,8 +147,7 @@ struct formatter<char> {
 template <>
 struct formatter<bool> {
   template <typename Sink>
-  static constexpr void format(Sink& buf, const bool val,
-                               const FormatSpec& spec) noexcept {
+  static constexpr void format(Sink& buf, const bool val, const FormatSpec& spec) noexcept {
     formatter<std::string_view>::format(buf, val ? "true" : "false", spec);
   }
 };
@@ -156,177 +155,172 @@ struct formatter<bool> {
 template <AnyIntegral T>
 struct formatter<T> {
   template <typename Sink>
-  static constexpr void format(Sink& buf, const T val,
-                               const FormatSpec& spec) noexcept {
-    static constexpr bool is_signed_type = (T(-1) < 0);
+  static constexpr void format(Sink& buf, const T val, const FormatSpec& spec) noexcept {
+    constexpr bool is_signed_type = T(-1) < T(0);
 
-    bool is_neg = false;
+    const bool is_neg = is_signed_type && val < T(0);
     char sign_char = '\0';
-
-    if constexpr (is_signed_type) {
-      if (val < 0) {
-        is_neg = true;
-        sign_char = '-';
-      }
+    if (is_neg) {
+      sign_char = '-';
+    } else if (spec.sign == '+' || spec.sign == ' ') {
+      sign_char = spec.sign;
     }
 
-    if (!is_neg && spec.base == 10) {
-      if (spec.sign == '+')
-        sign_char = '+';
-      else if (spec.sign == ' ')
-        sign_char = ' ';
-    }
+    // Binary is the longest form: one digit per bit.
+    char digits[sizeof(T) * CHAR_BIT];
+    char* const digits_end = digits + sizeof(digits);
+    char* ptr = digits_end;
+    const char* const hex_digits = spec.uppercase ? "0123456789ABCDEF" : "0123456789abcdef";
 
-    // 512 bytes supports decimal formatting for _BitInt(1024)
-    char temp[512];
-    char* ptr = temp + 512;
-    const char* hex_digits =
-        spec.uppercase ? "0123456789ABCDEF" : "0123456789abcdef";
-
-    // Fits in a standard 64-bit hardware register.
     if constexpr (sizeof(T) <= sizeof(std::uint64_t)) {
-      std::uint64_t uval = is_neg ? -static_cast<std::uint64_t>(val)
+      // Negating in the unsigned type is defined for the most negative value too.
+      std::uint64_t uval = is_neg ? std::uint64_t{0} - static_cast<std::uint64_t>(val)
                                   : static_cast<std::uint64_t>(val);
 
-      if (uval == 0) {
-        *--ptr = '0';
-      } else if (spec.base == 10) {
+      if (spec.base == 10) {
         while (uval >= 100) {
-          const auto m = uval % 100;
+          const auto pair = (uval % 100) * 2;
           uval /= 100;
-          *--ptr = detail::kDigitPairs[(m * 2) + 1];
-          *--ptr = detail::kDigitPairs[m * 2];
+          *--ptr = detail::DIGIT_PAIRS[pair + 1];
+          *--ptr = detail::DIGIT_PAIRS[pair];
         }
 
         if (uval >= 10) {
-          *--ptr = detail::kDigitPairs[(uval * 2) + 1];
-          *--ptr = detail::kDigitPairs[uval * 2];
+          *--ptr = detail::DIGIT_PAIRS[uval * 2 + 1];
+          *--ptr = detail::DIGIT_PAIRS[uval * 2];
         } else {
           *--ptr = static_cast<char>('0' + uval);
         }
       } else {
+        // The other bases are powers of two: shift instead of dividing.
+        const int shift = spec.base == 16 ? 4 : spec.base == 8 ? 3 : 1;
+        const std::uint64_t mask = (std::uint64_t{1} << shift) - 1;
         do {
-          *--ptr = hex_digits[uval % spec.base];
-          uval /= spec.base;
-        } while (uval > 0);
+          *--ptr = hex_digits[uval & mask];
+          uval >>= shift;
+        } while (uval != 0);
       }
-    } else {  // _BitInt(N) where N > 64.
-      if (val == 0) {
-        *--ptr = '0';
-      } else {
-        T copy = val;
-        do {
-          int rem = static_cast<int>(copy % spec.base);
-          if (rem < 0) rem = -rem;
-
-          *--ptr = hex_digits[rem];
-          copy /= spec.base;
-        } while (copy != 0);
-      }
+    } else {
+      // Wider than a register: plain division, one digit at a time.
+      T rest = val;
+      do {
+        const auto digit = static_cast<int>(rest % spec.base);
+        *--ptr = hex_digits[digit < 0 ? -digit : digit];
+        rest /= spec.base;
+      } while (rest != 0);
     }
 
-    const int num_len = static_cast<int>((temp + 512) - ptr);
-    int precision_pad = spec.precision > num_len ? spec.precision - num_len : 0;
+    const int num_len = static_cast<int>(digits_end - ptr);
+    int zeros = spec.precision > num_len ? spec.precision - num_len : 0;
 
-    std::string_view prefix = "";
-    if (spec.alt_form && val != 0) {
-      if (spec.base == 16)
+    std::string_view prefix;
+    if (spec.alt_form && val != T(0)) {
+      if (spec.base == 16) {
         prefix = spec.uppercase ? "0X" : "0x";
-      else if (spec.base == 2)
+      } else if (spec.base == 2) {
         prefix = spec.uppercase ? "0B" : "0b";
-      else if (spec.base == 8)
+      } else if (spec.base == 8) {
         prefix = "0";
+      }
     }
 
     const int payload_len =
-        num_len + precision_pad + (sign_char != '\0' ? 1 : 0) + prefix.length();
-    const int width_pad =
-        spec.width > payload_len ? spec.width - payload_len : 0;
+        (sign_char != '\0' ? 1 : 0) + static_cast<int>(prefix.length()) + zeros + num_len;
+    const char align = spec.align != '\0' ? spec.align : '>';
 
-    char align = (spec.align != '\0') ? spec.align : '>';
-    char fill = spec.fill;
-
-    if (fill == '0' && align == '>') {
-      precision_pad += width_pad;
-      align = '\0';
+    detail::Padding pad{};
+    if (spec.fill == '0' && align == '>') {
+      // Zero padding goes between the sign or prefix and the digits.
+      zeros += spec.width > payload_len ? spec.width - payload_len : 0;
+    } else {
+      pad = detail::split_padding(payload_len, spec.width, align);
     }
 
-    int p_l = 0, p_r = 0;
-    if (align == '>')
-      p_l = width_pad;
-    else if (align == '<')
-      p_r = width_pad;
-    else if (align == '^') {
-      p_l = width_pad / 2;
-      p_r = width_pad - p_l;
+    detail::write_pad(buf, pad.left, spec.fill);
+    if (sign_char != '\0') {
+      buf.push(sign_char);
     }
 
-    detail::write_pad(buf, p_l, fill);
-    if (sign_char != '\0') buf.push(sign_char);
     buf.append(prefix);
-    detail::write_pad(buf, precision_pad, '0');
-    buf.append(std::string_view(ptr, num_len));
-    detail::write_pad(buf, p_r, fill);
+    detail::write_pad(buf, zeros, '0');
+    buf.append(std::string_view(ptr, static_cast<std::size_t>(num_len)));
+    detail::write_pad(buf, pad.right, spec.fill);
   }
 };
 
 template <typename T>
   requires std::is_enum_v<T>
 struct formatter<T> {
+  /// Prints the underlying value.
   template <typename Sink>
-  static constexpr void format(Sink& buf, T val,
-                               const FormatSpec& spec) noexcept {
-    formatter<std::underlying_type_t<T>>::format(
-        buf, static_cast<std::underlying_type_t<T>>(val), spec);
+  static constexpr void format(Sink& buf, const T val, const FormatSpec& spec) noexcept {
+    formatter<std::underlying_type_t<T>>::format(buf, static_cast<std::underlying_type_t<T>>(val),
+                                                 spec);
   }
 };
 
 template <>
 struct formatter<const void*> {
+  /// Hexadecimal with a `0x` prefix; a null pointer prints `(nil)`.
   template <typename Sink>
-  static constexpr void format(Sink& buf, const void* ptr,
-                               FormatSpec spec) noexcept {
-    if (!ptr) {
+  static constexpr void format(Sink& buf, const void* ptr, FormatSpec spec) noexcept {
+    if (ptr == nullptr) {
       formatter<std::string_view>::format(buf, "(nil)", spec);
       return;
     }
 
     spec.base = 16;
     spec.alt_form = true;
-    formatter<std::uintptr_t>::format(
-        buf, reinterpret_cast<std::uintptr_t>(ptr), spec);
+    formatter<std::uintptr_t>::format(buf, reinterpret_cast<std::uintptr_t>(ptr), spec);
   }
 };
 
 template <>
 struct formatter<void*> : formatter<const void*> {};
 
-template <>
-struct formatter<std::span<const std::byte>> {
+namespace detail {
+template <typename T>
+inline constexpr bool is_byte_span = false;
+
+template <typename B, std::size_t Extent>
+  requires std::same_as<std::remove_const_t<B>, std::byte>
+inline constexpr bool is_byte_span<std::span<B, Extent>> = true;
+}  // namespace detail
+
+template <typename T>
+  requires detail::is_byte_span<T>
+struct formatter<T> {
+  /// A hex dump: `[de ad be ef]`, upper case with `X`. Any span of std::byte, whatever its
+  /// extent, so std::as_bytes() of an array works too.
   template <typename Sink>
-  static constexpr void format(Sink& buf, std::span<const std::byte> dump,
+  static constexpr void format(Sink& buf, const std::span<const std::byte> dump,
                                const FormatSpec& spec) noexcept {
-    const char* hex = spec.uppercase ? "0123456789ABCDEF" : "0123456789abcdef";
+    const char* const hex = spec.uppercase ? "0123456789ABCDEF" : "0123456789abcdef";
     buf.push('[');
     for (std::size_t i = 0; i < dump.size(); ++i) {
+      if (i != 0) {
+        buf.push(' ');
+      }
+
       const auto val = static_cast<std::uint8_t>(dump[i]);
       buf.push(hex[val >> 4]);
       buf.push(hex[val & 0x0F]);
-      if (i < dump.size() - 1) buf.push(' ');
     }
 
     buf.push(']');
   }
 };
 
+/// @brief A value whose field width is only known at run time. See dyn().
 template <typename T>
 struct dynamic_width_wrapper {
   const T& value;
   int width;
 };
 
+/// @brief Formats `val` with field width `width`, overriding any width in the specifier.
 template <typename T>
-constexpr dynamic_width_wrapper<T> dyn(const T& val, int width) noexcept {
+constexpr dynamic_width_wrapper<T> dyn(const T& val, const int width) noexcept {
   return {val, width};
 }
 
@@ -341,6 +335,7 @@ struct formatter<dynamic_width_wrapper<T>> {
 };
 
 namespace color {
+/// @brief ANSI foreground colours (SGR 30-39).
 enum class fg : std::uint8_t {
   none = 0,
   black = 30,
@@ -353,6 +348,8 @@ enum class fg : std::uint8_t {
   white = 37,
   reset = 39
 };
+
+/// @brief ANSI background colours (SGR 40-49).
 enum class bg : std::uint8_t {
   none = 0,
   black = 40,
@@ -365,6 +362,8 @@ enum class bg : std::uint8_t {
   white = 47,
   reset = 49
 };
+
+/// @brief ANSI text styles (SGR 1-5).
 enum class style : std::uint8_t {
   none = 0,
   bold = 1,
@@ -375,6 +374,7 @@ enum class style : std::uint8_t {
 };
 }  // namespace color
 
+/// @brief A value printed between ANSI escape sequences. See styled().
 template <typename T>
 struct ansi_wrapper {
   const T& value;
@@ -383,10 +383,12 @@ struct ansi_wrapper {
   color::style s;
 };
 
+/// @brief Formats `val` in the given colours and style, then resets all attributes. With
+///        everything at `none` no escape sequence is written at all.
 template <typename T>
-constexpr ansi_wrapper<T> styled(const T& val, color::fg f,
-                                 color::bg b = color::bg::none,
-                                 color::style s = color::style::none) noexcept {
+constexpr ansi_wrapper<T> styled(const T& val, const color::fg f,
+                                 const color::bg b = color::bg::none,
+                                 const color::style s = color::style::none) noexcept {
   return {val, f, b, s};
 }
 
@@ -395,62 +397,56 @@ struct formatter<ansi_wrapper<T>> {
   template <typename Sink>
   static constexpr void format(Sink& sink, const ansi_wrapper<T>& wrap,
                                const FormatSpec& spec) noexcept {
-    if (wrap.f == color::fg::none && wrap.b == color::bg::none &&
-        wrap.s == color::style::none) {
+    if (wrap.f == color::fg::none && wrap.b == color::bg::none && wrap.s == color::style::none) {
       formatter<std::decay_t<T>>::format(sink, wrap.value, spec);
       return;
     }
 
     sink.append("\x1b[");
-    bool semi = false;
-    FormatSpec num_spec;
+    bool first = true;
+    const auto code = [&sink, &first](const std::uint8_t value) {
+      if (value == 0) {
+        return;
+      }
 
-    if (wrap.s != color::style::none) {
-      formatter<std::uint8_t>::format(sink, static_cast<std::uint8_t>(wrap.s),
-                                      num_spec);
-      semi = true;
-    }
+      if (!first) {
+        sink.push(';');
+      }
 
-    if (wrap.f != color::fg::none) {
-      if (semi) sink.push(';');
-      formatter<std::uint8_t>::format(sink, static_cast<std::uint8_t>(wrap.f),
-                                      num_spec);
-      semi = true;
-    }
+      formatter<std::uint8_t>::format(sink, value, FormatSpec{});
+      first = false;
+    };
 
-    if (wrap.b != color::bg::none) {
-      if (semi) sink.push(';');
-      formatter<std::uint8_t>::format(sink, static_cast<std::uint8_t>(wrap.b),
-                                      num_spec);
-    }
-
+    code(static_cast<std::uint8_t>(wrap.s));
+    code(static_cast<std::uint8_t>(wrap.f));
+    code(static_cast<std::uint8_t>(wrap.b));
     sink.push('m');
+
     formatter<std::decay_t<T>>::format(sink, wrap.value, spec);
     sink.append("\x1b[0m");
   }
 };
 
+/// @brief Anything iterable that is not a string or a byte span.
 template <typename T>
-concept IterableRange =
-    requires(T t) {
-      std::begin(t);
-      std::end(t);
-    } && !std::is_convertible_v<T, std::string_view> &&
-    !std::is_same_v<T, std::span<const std::byte>>;
+concept IterableRange = requires(T t) {
+  std::begin(t);
+  std::end(t);
+} && !std::is_convertible_v<T, std::string_view> && !detail::is_byte_span<T>;
 
 template <IterableRange R>
 struct formatter<R> {
+  /// `[a, b, c]`, with the specifier applied to each element.
   template <typename Sink>
-  static constexpr void format(Sink& buf, const R& range,
-                               const FormatSpec& spec) noexcept {
+  static constexpr void format(Sink& buf, const R& range, const FormatSpec& spec) noexcept {
     buf.push('[');
     bool first = true;
     for (const auto& item : range) {
-      if (!first) buf.append(", ");
+      if (!first) {
+        buf.append(", ");
+      }
 
-      // Format each element recursively
-      using ItemType = std::decay_t<decltype(item)>;
-      formatter<ItemType>::format(buf, item, spec);
+      formatter<std::decay_t<decltype(item)>>::format(buf, item, spec);
       first = false;
     }
 
@@ -458,6 +454,8 @@ struct formatter<R> {
   }
 };
 
+/// @brief Types with a `format_as(const T&)` found by argument-dependent lookup, which turns
+///        them into something that already has a formatter.
 template <typename T>
 concept HasFormatAs = requires(const T& t) {
   { format_as(t) };
@@ -466,12 +464,9 @@ concept HasFormatAs = requires(const T& t) {
 template <HasFormatAs T>
 struct formatter<T> {
   template <typename Sink>
-  static constexpr void format(Sink& buf, const T& val,
-                               const FormatSpec& spec) noexcept {
-    // Evaluate the hook and forward the result to the existing formatters
-    const auto forwarded_val = format_as(val);
-    using ForwardedType = std::decay_t<decltype(forwarded_val)>;
-    formatter<ForwardedType>::format(buf, forwarded_val, spec);
+  static constexpr void format(Sink& buf, const T& val, const FormatSpec& spec) noexcept {
+    const auto forwarded = format_as(val);
+    formatter<std::decay_t<decltype(forwarded)>>::format(buf, forwarded, spec);
   }
 };
 }  // namespace klib

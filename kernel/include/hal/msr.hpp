@@ -114,7 +114,7 @@ struct MsrZen5PStateP0 {
 
   std::uint64_t raw() const noexcept { return m_data; }
 
-  BF_RW(std::uint8_t, cpu_fid, 0, 12);
+  BF_RW(std::uint16_t, cpu_fid, 0, 12);
   BF_RW(std::uint8_t, cpu_vid, 14, 8);
   BF_RW(std::uint8_t, idd_value, 22, 6);
   BF_RW(std::uint8_t, idd_div, 28, 2);

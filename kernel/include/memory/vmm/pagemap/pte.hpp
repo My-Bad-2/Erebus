@@ -1,12 +1,22 @@
+/// @file pte.hpp
+/// @brief A page table slot with atomic accessors, and builders for its contents.
+
 #pragma once
 
 #include <atomic>
 #include <cstdint>
 
+#include "features.hpp"
 #include "flags.hpp"
 #include "memory/address.hpp"
+#include "memory/memory.hpp"
 
 namespace kernel::memory::vmm {
+/// @brief One 64-bit slot of a paging structure.
+///
+/// Page tables are walked by the MMU and modified concurrently by several CPUs, so every access
+/// goes through std::atomic_ref. Updates that depend on the old value use cas(); the PageMap
+/// code is written so that a failed CAS simply means "someone else got there first, look again".
 struct PageTableEntry {
  private:
   std::uint64_t m_raw{0};
@@ -30,6 +40,7 @@ struct PageTableEntry {
     atomic().store(schema, order);
   }
 
+  /// @brief Compare-and-swap. On failure @p expected receives the current value.
   [[nodiscard]] bool cas(PTEntry& expected, const PTEntry& desired,
                          const std::memory_order success = std::memory_order_acq_rel,
                          const std::memory_order failure = std::memory_order_acquire) noexcept {
@@ -55,6 +66,8 @@ struct PageTableEntry {
   }
   [[nodiscard]] bool is_huge() const noexcept { return load(std::memory_order_relaxed).get_huge(); }
 
+  /// @brief Frame address of the entry, interpreted as a leaf of @p context_size.
+  /// @return std::nullopt for swapped-out entries, whose frame field is a swap slot.
   [[nodiscard]] std::optional<PhysicalAddress> extract_address(
       const PageSize context_size) const noexcept {
     const PTEntry schema = load(std::memory_order_relaxed);
@@ -65,26 +78,35 @@ struct PageTableEntry {
 
     switch (context_size) {
       case PageSize::Size4K:
-        return PhysicalAddress{schema.get_pfn_4k() << 12};
+        return PhysicalAddress{schema.get_pfn_4k() << PAGE_SHIFT_4KB};
       case PageSize::Size2M:
-        return PhysicalAddress{schema.get_pfn_2m() << 21};
+        return PhysicalAddress{schema.get_pfn_2m() << PAGE_SHIFT_2MB};
       case PageSize::Size1G:
-        return PhysicalAddress{schema.get_pfn_1g() << 30};
+        return PhysicalAddress{schema.get_pfn_1g() << PAGE_SHIFT_1GB};
     }
 
     std::unreachable();
   }
 
-  [[nodiscard]] static constexpr PTEntry build_directory(
-      const PhysicalAddress table_phys) noexcept {
-    return PTEntry{}.with_present().with_rw().with_user().with_pfn_4k(table_phys.value() >>
-                                                                      PAGE_SHIFT_4KB);
+  /// @brief Entry pointing at a next-level table.
+  ///
+  /// Directories are always present and writable; permissions are decided at the leaf. The user
+  /// bit is only set in the lower half, so a kernel leaf that somehow ended up with U=1 is still
+  /// not reachable from ring 3.
+  [[nodiscard]] static constexpr PTEntry build_directory(const PhysicalAddress table_phys,
+                                                         const bool user) noexcept {
+    return PTEntry{}.with_present().with_rw().with_user(user).with_pfn_4k(table_phys.value() >>
+                                                                          PAGE_SHIFT_4KB);
   }
 
-  [[nodiscard]] static constexpr PTEntry build_schema(const PhysicalAddress phys,
-                                                      const AccessFlags flags,
-                                                      const CacheMode cache, const PageSize size,
-                                                      const std::uint8_t pkey = 0) noexcept {
+  /// @brief Leaf entry mapping @p phys with the given attributes.
+  ///
+  /// Copy-on-write mappings are always read-only in hardware; the write fault is what triggers
+  /// the copy. A Swapped entry is built non-present.
+  [[nodiscard]] static PTEntry build_schema(const PhysicalAddress phys, const AccessFlags flags,
+                                            const CacheMode cache, const PageSize size,
+                                            const std::uint8_t pkey = 0) noexcept {
+    // Matches the PAT layout programmed by initialize_hw(): index = PAT*4 + PCD*2 + PWT.
     bool pwt = false, pcd = false, pat = false;
     switch (cache) {
       case CacheMode::WriteBack:
@@ -114,7 +136,8 @@ struct PageTableEntry {
     entry.set_rw(has_flag(flags, AccessFlags::Write) && !cow);
     entry.set_user(has_flag(flags, AccessFlags::User));
     entry.set_global(has_flag(flags, AccessFlags::Global));
-    entry.set_nx(!has_flag(flags, AccessFlags::Execute));
+    // Without EFER.NXE bit 63 is reserved and setting it faults.
+    entry.set_nx(g_paging_features.nx && !has_flag(flags, AccessFlags::Execute));
     entry.set_cow(cow);
     entry.set_shared(has_flag(flags, AccessFlags::Shared));
     entry.set_swapped(has_flag(flags, AccessFlags::Swapped));

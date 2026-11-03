@@ -228,7 +228,6 @@ class alignas(std::hardware_destructive_interference_size) CpuInfo {
   Hypervisor m_hypervisor = Hypervisor::None;
   UArch m_uarch = UArch::Unknown;
 
-  std::uint32_t m_apic_id{0};
   std::uint32_t m_clflush_size{0};
 
   std::uint32_t m_max_leaf{0};
@@ -269,7 +268,7 @@ class alignas(std::hardware_destructive_interference_size) CpuInfo {
   void parse_topology() noexcept;
   void parse_hypervisor() noexcept;
 
-  UArch decode_uarch();
+  [[nodiscard]] UArch decode_uarch() const noexcept;
 
  public:
   struct Registers {
@@ -291,7 +290,6 @@ class alignas(std::hardware_destructive_interference_size) CpuInfo {
 
   [[nodiscard]] bool is_virtualized() const noexcept { return m_is_virtualized; }
 
-  [[nodiscard]] std::uint32_t apic_id() const noexcept { return m_apic_id; }
   [[nodiscard]] std::uint32_t clflush_size() const noexcept { return m_clflush_size; }
 
   [[nodiscard]] std::uint32_t phys_addr_bits() const noexcept { return m_phys_addr_bits; }
@@ -342,20 +340,25 @@ class alignas(std::hardware_destructive_interference_size) CpuInfo {
       return (m_leaves[cache_idx][reg] & (1u << bit)) != 0;
     } else {
       if (is_ext) {
-        if (leaf > m_max_ext_leaf) return false;
+        if (leaf > m_max_ext_leaf) {
+          return false;
+        }
       } else {
-        if (leaf > m_max_leaf) return false;
+        if (leaf > m_max_leaf) {
+          return false;
+        }
       }
 
       const auto [eax, ebx, ecx, edx] = query(leaf, subleaf);
-      if constexpr (reg == static_cast<std::uint32_t>(Reg::EAX))
+      if constexpr (reg == static_cast<std::uint32_t>(Reg::EAX)) {
         return (eax & (1u << bit)) != 0;
-      else if constexpr (reg == static_cast<std::uint32_t>(Reg::EBX))
+      } else if constexpr (reg == static_cast<std::uint32_t>(Reg::EBX)) {
         return (ebx & (1u << bit)) != 0;
-      else if constexpr (reg == static_cast<std::uint32_t>(Reg::ECX))
+      } else if constexpr (reg == static_cast<std::uint32_t>(Reg::ECX)) {
         return (ecx & (1u << bit)) != 0;
-      else
+      } else {
         return (edx & (1u << bit)) != 0;
+      }
     }
   }
 
@@ -404,6 +407,12 @@ class alignas(std::hardware_destructive_interference_size) CpuInfo {
   void initialize() noexcept;
 };
 
+/// @brief CPUID data, shared between CPUs of the same kind.
+///
+/// Reading CPUID is slow (it always traps to the hypervisor in a VM), and every core of a model
+/// answers the same, so the full decode is done once per kind of core: one profile on ordinary
+/// machines, two on hybrid ones. Profiles hold nothing that differs between cores of the same
+/// kind, which is why they have no APIC ID; the SMP registry has those.
 class CpuProfileManager {
   struct ProfileEntry {
     std::atomic<std::uint64_t> fingerprint{0};
@@ -417,9 +426,15 @@ class CpuProfileManager {
   std::atomic<std::size_t> m_active_profiles{0};
 
   static std::uint64_t generate_fingerprint() noexcept;
+  [[nodiscard]] const CpuInfo* find(std::uint64_t fingerprint, std::size_t active) const noexcept;
 
  public:
+  /// @brief Returns the calling CPU's profile, decoding CPUID first if it is the first of its kind.
   const CpuInfo* register_cpu() noexcept;
+
+  /// @brief The calling CPU's profile, or null if it has not been registered.
+  ///
+  /// Costs a few CPUID instructions; code that runs often should use PerCpu::info instead.
   [[nodiscard]] const CpuInfo* get_current() const noexcept;
 };
 

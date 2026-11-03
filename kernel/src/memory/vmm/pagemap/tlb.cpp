@@ -1,121 +1,124 @@
 #include "memory/vmm/pagemap/tlb.hpp"
 
-#include "hal/patch.h"
+#include "hal/smp/ipi.hpp"
 #include "hal/smp/percpu.hpp"
 #include "memory/vmm/pagemap/active_pcid.hpp"
-#include "utils/logger.hpp"
+#include "patch/static_call.hpp"
 
 namespace kernel::memory::vmm::tlb {
+// The static call trampolines are global symbols, so the declarations need external linkage.
+// Every default below is correct on any CPU; the alternatives are only faster. That matters
+// because the kernel runs on the defaults until StaticCallPatcher::apply_patches().
+namespace detail {
+DECLARE_STATIC_CALL(void, tlb_flush_everything);
+DECLARE_STATIC_CALL(bool, tlb_flush_pcid, std::uint16_t);
+DECLARE_STATIC_CALL(bool, tlb_flush_pcid_page, std::uint16_t, VirtualAddress);
+DECLARE_STATIC_CALL(void, tlb_remote_shootdown, PageMap*, VirtualAddress, std::size_t, PageSize,
+                    std::uint32_t);
+}  // namespace detail
+
 namespace {
-namespace flush {
-namespace pcid {
-void context(const std::uint16_t pcid) noexcept {
-  hw::InvpcidDescriptor desc;
-  if (pcid == 0) {
-    hw::invpcid(hw::InvpcidType::AllContextsRetainGlobals, desc);
+// Past this many pages one full flush is cheaper than individual invalidations.
+constexpr std::size_t SINGLE_PAGE_FLUSH_CEILING = 32;
+
+[[nodiscard]] constexpr std::size_t stride_bytes(const PageSize stride) noexcept {
+  return PAGE_SIZE << ((std::to_underlying(stride) - 1) * 9);
+}
+
+// Drops every TLB entry of every PCID, global ones included.
+void flush_everything_pge() noexcept {
+  const hw::CR4 cr4 = hw::read::cr4();
+  if (cr4.get_pge()) {
+    hw::write::cr4(cr4.with_pge(false));
+    hw::write::cr4(cr4);
   } else {
-    desc.set_pcid(pcid);
-    hw::invpcid(hw::InvpcidType::SingleContext, desc);
+    // No global pages to worry about. (PCID without PGE does not exist in practice.)
+    hw::write::cr3(hw::read::cr3());
   }
 }
 
-void single(const std::uint16_t pcid, const VirtualAddress addr) noexcept {
-  utils::logger::info("address = 0x{:x}\n", addr);
+void flush_everything_invpcid() noexcept {
+  hw::invpcid(hw::InvpcidType::AllContexts, hw::InvpcidDescriptor{});
+}
+
+// Flushing a PCID that is not loaded needs INVPCID. Without it the caller retires the PCID.
+bool flush_pcid_unsupported(std::uint16_t) noexcept { return false; }
+
+bool flush_pcid_invpcid(const std::uint16_t pcid) noexcept {
+  hw::InvpcidDescriptor desc;
+  desc.set_pcid(pcid);
+  hw::invpcid(hw::InvpcidType::SingleContext, desc);
+  return true;
+}
+
+bool flush_pcid_page_unsupported(std::uint16_t, VirtualAddress) noexcept { return false; }
+
+bool flush_pcid_page_invpcid(const std::uint16_t pcid, const VirtualAddress addr) noexcept {
   hw::InvpcidDescriptor desc;
   desc.set_pcid(pcid);
   desc.set_address(addr);
   hw::invpcid(hw::InvpcidType::IndividualAddress, desc);
+  return true;
 }
 
-void context_legacy(const std::uint16_t target_pcid) noexcept {
-  const hw::CR3 cr3 = hw::read::cr3();
-
-  if (target_pcid == cr3.get_pcid()) {
-    const PhysicalAddress pfn{cr3.extract_address()};
-    hw::write::cr3(hw::CR3::build_pcid(pfn, target_pcid, false));
-  } else {
-    const hw::CR4 cr4 = hw::read::cr4();
-    hw::write::cr4(cr4.with_pcide(false));
-    hw::write::cr4(cr4.with_pcide(true));
-  }
+// Kernel translations can be cached anywhere; user ones only where the map was loaded.
+bool is_shootdown_target(const std::uint32_t cpu, const void* ctx) noexcept {
+  const auto* req = static_cast<const ShootdownRequest*>(ctx);
+  return req->pmap->is_kernel() || req->base_virt.is_upper_half() ||
+         req->pmap->cpu_tracker().test(cpu);
 }
 
-void single_legacy(const std::uint16_t target_pcid, const VirtualAddress addr) noexcept {
-  const hw::CR3 cr3 = hw::read::cr3();
-
-  if (target_pcid == cr3.get_pcid())
-    hw::invlpg(addr.value());
-  else
-    context_legacy(0);
+void run_shootdown(void* arg) noexcept {
+  const auto* req = static_cast<const ShootdownRequest*>(arg);
+  ShootdownCoordinator::local_invalidate(req->pmap, req->base_virt, req->size_bytes, req->stride);
 }
-}  // namespace pcid
-
-namespace legacy {
-void context(std::uint16_t) noexcept { hw::write::cr3(hw::read::cr3()); }
-void single(std::uint16_t, const VirtualAddress addr) noexcept { hw::invlpg(addr.value()); }
-}  // namespace legacy
-
-DECLARE_STATIC_CALL(void, context, std::uint16_t);
-DEFINE_STATIC_CALL(context, legacy::context);
-REGISTER_STATIC_CALL_ALT_PRIO(context, pcid::context, 200, hw::Feature::INVPCID);
-REGISTER_STATIC_CALL_ALT_PRIO(context, pcid::context_legacy, 100, hw::Feature::PCID);
-
-DECLARE_STATIC_CALL(void, single, std::uint16_t, memory::VirtualAddress);
-DEFINE_STATIC_CALL(single, legacy::single);
-REGISTER_STATIC_CALL_ALT_PRIO(single, pcid::single_legacy, 100, hw::Feature::PCID);
-REGISTER_STATIC_CALL_ALT_PRIO(single, pcid::single, 200, hw::Feature::INVPCID, hw::Feature::PCID);
 
 void remote_shootdown_ipi(PageMap* pmap, const VirtualAddress virt, const std::size_t size_bytes,
-                          [[maybe_unused]] const bool is_huge,
-                          const std::uint32_t my_cpu) noexcept {
-  std::uint32_t target_count = 0;
-
-  pmap->cpu_tracker().for_each_active_cpu([&](const std::uint32_t cpu_id, std::uint16_t) noexcept {
-    if (cpu_id != my_cpu) target_count++;
-  });
-
-  if (target_count == 0) [[likely]]
-    return;
-
-  const ShootdownRequest req{
+                          const PageSize stride, std::uint32_t) noexcept {
+  // The request lives on our stack: call_many() does not return before every target is done.
+  ShootdownRequest req{
       .pmap = pmap,
       .base_virt = virt,
       .size_bytes = size_bytes,
-      .pending_count = target_count,
+      .stride = stride,
   };
 
-  pmap->cpu_tracker().for_each_active_cpu([&](const std::uint32_t cpu_id, std::uint16_t) noexcept {
-    if (cpu_id != my_cpu) {
-      // hw::smp::ipi_send(cpu_id, hw::smp::IpiVector::TlbShootdown, &req);
-    }
-  });
-
-  while (req.pending_count.load(std::memory_order_acquire) > 0) hw::pause();
+  (void)hw::ipi::call_many(&is_shootdown_target, &req, &run_shootdown, &req, hw::ipi::Wait::Yes);
 }
 
 void remote_shootdown_invlpgb(PageMap* pmap, const VirtualAddress virt,
-                              const std::size_t size_bytes, const bool is_huge,
+                              const std::size_t size_bytes, const PageSize stride,
                               const std::uint32_t my_cpu) noexcept {
-  // Fall back to software IPI shootdown for full context invalidations
-  if (size_bytes == std::numeric_limits<std::uint64_t>::max()) [[unlikely]] {
-    remote_shootdown_ipi(pmap, virt, size_bytes, is_huge, my_cpu);
+  if (size_bytes == FLUSH_ALL) [[unlikely]] {
+    remote_shootdown_ipi(pmap, virt, size_bytes, stride, my_cpu);
     return;
   }
 
+  // Kernel translations are global: one broadcast without a PCID filter reaches every CPU.
+  if (pmap->is_kernel() || virt.is_upper_half()) {
+    ShootdownCoordinator::queue_invlpgb(virt, size_bytes, 0, stride);
+    hw::tlbsync();
+    return;
+  }
+
+  // PCIDs are per CPU, so the same map can have a different one everywhere. Broadcast once per
+  // distinct PCID; other CPUs using that number for something else just lose a few entries.
   bool sent_broadcast = false;
   std::uint64_t broadcasted_pcids[64] = {0};
 
   pmap->cpu_tracker().for_each_active_cpu(
       [&](const std::uint32_t cpu, const std::uint16_t remote_pcid) noexcept {
-        if (cpu != my_cpu) {
-          const std::size_t word = remote_pcid / 64;
-          const std::uint64_t bit = 1ULL << (remote_pcid % 64);
+        if (cpu == my_cpu) {
+          return;
+        }
 
-          if ((broadcasted_pcids[word] & bit) == 0) {
-            ShootdownCoordinator::queue_invlpgb(virt, size_bytes, remote_pcid, is_huge);
-            broadcasted_pcids[word] |= bit;
-            sent_broadcast = true;
-          }
+        const std::size_t word = remote_pcid / 64;
+        const std::uint64_t bit = 1ull << (remote_pcid % 64);
+
+        if ((broadcasted_pcids[word] & bit) == 0) {
+          ShootdownCoordinator::queue_invlpgb(virt, size_bytes, remote_pcid, stride);
+          broadcasted_pcids[word] |= bit;
+          sent_broadcast = true;
         }
       });
 
@@ -123,74 +126,65 @@ void remote_shootdown_invlpgb(PageMap* pmap, const VirtualAddress virt,
     hw::tlbsync();
   }
 }
-
-DECLARE_STATIC_CALL(void, remote_shootdown, PageMap*, VirtualAddress, std::size_t, bool,
-                    std::uint32_t);
-DEFINE_STATIC_CALL(remote_shootdown, remote_shootdown_ipi);
-REGISTER_STATIC_CALL_ALT_PRIO(remote_shootdown, remote_shootdown_invlpgb, 100, hw::Feature::INVLPGB,
-                              !hw::Feature::HYPERVISOR);
-}  // namespace flush
-
-void load_map_pcid(const PhysicalAddress addr, std::uint16_t pcid, bool no_flush) noexcept {
-  hw::write::cr3(hw::CR3::build_pcid(addr, pcid, no_flush));
-}
-
-void load_map_legacy(const PhysicalAddress addr, std::uint16_t, bool) noexcept {
-  hw::write::cr3(hw::CR3::build_legacy(addr));
-}
-
-DECLARE_STATIC_CALL(void, load_cr3, PhysicalAddress, std::uint16_t, bool = false);
-DEFINE_STATIC_CALL(load_cr3, load_map_legacy);
-REGISTER_STATIC_CALL_ALT(load_cr3, load_map_pcid, hw::Feature::PCID);
 }  // namespace
 
+namespace detail {
+DEFINE_STATIC_CALL(tlb_flush_everything, flush_everything_pge);
+REGISTER_STATIC_CALL_ALT(tlb_flush_everything, flush_everything_invpcid, hw::Feature::INVPCID);
+
+DEFINE_STATIC_CALL(tlb_flush_pcid, flush_pcid_unsupported);
+REGISTER_STATIC_CALL_ALT(tlb_flush_pcid, flush_pcid_invpcid, hw::Feature::INVPCID,
+                         hw::Feature::PCID);
+
+DEFINE_STATIC_CALL(tlb_flush_pcid_page, flush_pcid_page_unsupported);
+REGISTER_STATIC_CALL_ALT(tlb_flush_pcid_page, flush_pcid_page_invpcid, hw::Feature::INVPCID,
+                         hw::Feature::PCID);
+
+DEFINE_STATIC_CALL(tlb_remote_shootdown, remote_shootdown_ipi);
+REGISTER_STATIC_CALL_ALT(tlb_remote_shootdown, remote_shootdown_invlpgb, hw::Feature::INVLPGB,
+                         !hw::Feature::HYPERVISOR);
+}  // namespace detail
+
 void PcidManager::rollover_epoch() noexcept {
-  const std::uint32_t my_cpu = hw::percpu::id();
-
-  for (auto& [pmap, pcid, epoch] : m_table) {
-    if (epoch == m_curr_epoch && pmap != nullptr) {
-      pmap->cpu_tracker().unmark(my_cpu);
-    }
-  }
-
+  // Bumping the epoch turns every slot stale at once, and the flush guarantees no PCID number
+  // carries translations into the new epoch, so they can all be handed out again.
   m_curr_epoch++;
   m_next_pcid = 1;
-  flush::context(0);
+  detail::tlb_flush_everything();
 }
 
 void PcidManager::load(PageMap* pagemap) noexcept {
-  std::size_t idx = hash(pagemap);
   const std::uint32_t my_cpu = hw::percpu::id();
 
-  while (true) {
-    auto& [pmap, pcid, epoch] = m_table[idx];
+  if (!g_paging_features.pcid) {
+    pagemap->cpu_tracker().mark(my_cpu, 0);
+    hw::write::cr3(hw::CR3::build_legacy(pagemap->root_phys()));
+    return;
+  }
 
-    // Fast-path: Already loaded in this epoch
-    if (epoch == m_curr_epoch && pmap == pagemap) [[likely]] {
-      load_cr3(pmap->root_phys(), pcid, true);
+  const std::uint64_t key = pagemap->generation();
+  std::size_t idx = hash(key);
+
+  while (true) {
+    Slot& slot = m_table[idx];
+
+    if (slot.epoch == m_curr_epoch && slot.key == key) [[likely]] {
+      // Everything that changed since this PCID was last loaded has been invalidated, either by
+      // local_invalidate() or by a remote shootdown, so its TLB entries can be kept.
+      hw::write::cr3(hw::CR3::build_pcid(pagemap->root_phys(), slot.pcid, true));
       return;
     }
 
-    // Slot is free or stale
-    if (epoch != m_curr_epoch) [[unlikely]] {
+    if (slot.epoch != m_curr_epoch) {
       if (m_next_pcid > MAX_PCID) [[unlikely]] {
         rollover_epoch();
-        idx = hash(pagemap);
+        idx = hash(key);
         continue;
       }
 
-      if (pmap != nullptr) {
-        pmap->cpu_tracker().unmark(my_cpu);
-      }
-
-      const std::uint16_t assigned_pcid = m_next_pcid++;
-      pmap = pagemap;
-      pcid = assigned_pcid;
-      epoch = m_curr_epoch;
-
-      hw::ActivePcidTracker& tracker = pagemap->cpu_tracker();
-      tracker.mark(my_cpu, assigned_pcid);
-      load_cr3(pagemap->root_phys(), assigned_pcid, false);
+      slot = {.key = key, .epoch = m_curr_epoch, .pcid = m_next_pcid++};
+      pagemap->cpu_tracker().mark(my_cpu, slot.pcid);
+      hw::write::cr3(hw::CR3::build_pcid(pagemap->root_phys(), slot.pcid, false));
       return;
     }
 
@@ -199,16 +193,17 @@ void PcidManager::load(PageMap* pagemap) noexcept {
 }
 
 std::uint16_t PcidManager::get_active_pcid(const PageMap* pagemap) const noexcept {
-  std::size_t idx = hash(pagemap);
+  const std::uint64_t key = pagemap->generation();
+  std::size_t idx = hash(key);
 
   while (true) {
-    const auto& [pmap, pcid, epoch] = m_table[idx];
-    if (epoch != m_curr_epoch) {
+    const Slot& slot = m_table[idx];
+    if (slot.epoch != m_curr_epoch) {
       return 0;
     }
 
-    if (pmap == pagemap) {
-      return pcid;
+    if (slot.key == key) {
+      return slot.pcid;
     }
 
     idx = (idx + 1) & TABLE_MASK;
@@ -216,18 +211,18 @@ std::uint16_t PcidManager::get_active_pcid(const PageMap* pagemap) const noexcep
 }
 
 void PcidManager::invalidate_active_pcid(const PageMap* pagemap) noexcept {
-  std::size_t idx = hash(pagemap);
-  const std::uint32_t my_cpu = hw::percpu::id();
+  const std::uint64_t key = pagemap->generation();
+  std::size_t idx = hash(key);
 
   while (true) {
-    auto& [pmap, _, epoch] = m_table[idx];
-    if (epoch != m_curr_epoch) {
+    Slot& slot = m_table[idx];
+    if (slot.epoch != m_curr_epoch) {
       return;
     }
 
-    if (pmap == pagemap) {
-      pmap->cpu_tracker().unmark(my_cpu);
-      pmap = nullptr;
+    if (slot.key == key) {
+      // Keep the slot live so probe chains running through it stay intact.
+      slot.key = DEAD_KEY;
       return;
     }
 
@@ -236,64 +231,107 @@ void PcidManager::invalidate_active_pcid(const PageMap* pagemap) noexcept {
 }
 
 void ShootdownCoordinator::local_invalidate(const PageMap* pmap, const VirtualAddress virt,
-                                            const std::size_t size, const bool is_huge) noexcept {
-  const PcidManager& local_tlb = hw::percpu::pcid_manager();
-  const std::uint16_t pcid = local_tlb.get_active_pcid(pmap);
+                                            const std::size_t size,
+                                            const PageSize stride) noexcept {
+  PcidManager& pcids = hw::percpu::pcid_manager();
 
-  if (size == std::numeric_limits<std::uint64_t>::max()) {
-    flush::context(pcid);
-  } else {
-    const std::size_t step = is_huge ? PAGE_SIZE_2MB : PAGE_SIZE;
+  // The kernel half is present in every map and its leaves are global, so INVLPG reaches it
+  // whatever this CPU has loaded. For user maps it matters whether the map is the live one.
+  const bool kernel = pmap->is_kernel() || virt.is_upper_half();
+  const bool current = kernel || hw::read::cr3().extract_address() == pmap->root_phys();
+  const std::uint16_t pcid = current ? 0 : pcids.get_active_pcid(pmap);
 
-    for (std::size_t offset = 0; offset < size; offset += step) {
-      flush::single(pcid, virt + offset);
+  if (!current && pcid == 0) {
+    return;  // this CPU holds no translations for the map
+  }
+
+  const std::size_t step = stride_bytes(stride);
+  const std::size_t pages =
+      (size == FLUSH_ALL) ? FLUSH_ALL : utils::maths::div_round_up(size, step);
+
+  if (pages > SINGLE_PAGE_FLUSH_CEILING) {
+    if (kernel) {
+      detail::tlb_flush_everything();
+    } else if (current) {
+      // Reloading CR3 without NOFLUSH drops the current PCID's non-global entries.
+      hw::write::cr3(hw::read::cr3());
+    } else if (!detail::tlb_flush_pcid(pcid)) {
+      pcids.invalidate_active_pcid(pmap);
+    }
+
+    return;
+  }
+
+  for (std::size_t i = 0; i < pages; ++i) {
+    const VirtualAddress addr = virt + static_cast<VirtualAddress::OffsetType>(i * step);
+
+    if (current) {
+      hw::invlpg(addr.value());
+    } else if (!detail::tlb_flush_pcid_page(pcid, addr)) {
+      pcids.invalidate_active_pcid(pmap);
+      return;
     }
   }
 }
 
 void ShootdownCoordinator::queue_invlpgb(const VirtualAddress virt, const std::size_t size_bytes,
                                          const std::uint16_t target_pcid,
-                                         const bool is_huge) noexcept {
-  hw::InvlpgbCount ecx{0};
+                                         const PageSize stride) noexcept {
+  const bool global = virt.is_upper_half();
 
-  const std::uintptr_t virt_addr = virt.value();
-  auto rax = hw::InvlpgbAddress{}
-                 .with_va_valid()     // Flush only the specific virtual address
-                 .with_pcid_valid();  // Flush specific pcid value
-  rax.set_include_global(virt_addr >= DirectMap::s_hhdm_base);
+  auto rax = hw::InvlpgbAddress{}.with_va_valid();
+  if (global) {
+    rax.set_include_global(true);
+  } else {
+    rax.set_pcid_valid(true);
+  }
 
   hw::InvlpgbContext edx{0};
-  edx.set_pcid(target_pcid);
+  edx.set_pcid(global ? 0 : target_pcid);
 
-  ecx.set_large_page_stride(true);
+  // INVLPGB only knows 4 KiB and 2 MiB strides. 1 GiB pages get a 2 MiB stride, which simply
+  // invalidates each of them several times.
+  const bool large = stride != PageSize::Size4K;
+  hw::InvlpgbCount ecx{0};
+  ecx.set_large_page_stride(large);
 
-  const std::size_t page_size = is_huge ? PAGE_SIZE_2MB : PAGE_SIZE;
-  std::size_t pages = utils::maths::div_round_up(size_bytes, page_size);
-  std::uintptr_t curr_virt = virt_addr;
+  const std::size_t step = large ? PAGE_SIZE_2MB : PAGE_SIZE;
+  const std::size_t max_chunk =
+      static_cast<std::size_t>(g_paging_features.invlpgb_max_count) + 1;  // count is "extra"
+
+  std::size_t pages = utils::maths::div_round_up(size_bytes, step);
+  std::uintptr_t curr_virt = virt.value();
 
   while (pages > 0) {
-    const std::uint32_t chunk = std::min<std::size_t>(pages, 4096);
+    const std::size_t chunk = std::min(pages, max_chunk);
 
-    rax.set_virt_addr(curr_virt >> 12);
-    ecx.set_extra_count(chunk - 1);
+    rax.set_virt_addr(curr_virt >> PAGE_SHIFT_4KB);
+    ecx.set_extra_count(static_cast<std::uint16_t>(chunk - 1));
     hw::invlpgb(rax, ecx, edx);
 
     pages -= chunk;
-    curr_virt += static_cast<std::uintptr_t>(chunk) * page_size;
+    curr_virt += chunk * step;
   }
 }
 
 void ShootdownCoordinator::broadcast(PageMap* pmap, const VirtualAddress virt,
-                                     const std::size_t size_bytes, const bool is_huge) noexcept {
+                                     const std::size_t size_bytes, const PageSize stride) noexcept {
+  if (size_bytes == 0) [[unlikely]] {
+    return;
+  }
+
+  // The local flush and the "everyone but me" decision must be made on the same CPU.
+  hw::percpu::preempt_disable();
   const std::uint32_t my_cpu = hw::percpu::id();
 
-  local_invalidate(pmap, virt, size_bytes, is_huge);
-  flush::remote_shootdown(pmap, virt, size_bytes, is_huge, my_cpu);
+  local_invalidate(pmap, virt, size_bytes, stride);
+  detail::tlb_remote_shootdown(pmap, virt, size_bytes, stride, my_cpu);
+
+  hw::percpu::preempt_enable();
 }
 
-void ShootdownCoordinator::handle_ipi(ShootdownRequest* req) noexcept {
-  const bool is_huge = req->size_bytes == PAGE_SIZE_2MB || req->size_bytes == PAGE_SIZE_1GB;
-  local_invalidate(req->pmap, req->base_virt, req->size_bytes, is_huge);
-  req->pending_count.fetch_sub(1, std::memory_order_release);
+void ShootdownCoordinator::cpu_online() noexcept {
+  // Nobody could shoot at us until now, so anything already in the TLB may be stale.
+  detail::tlb_flush_everything();
 }
 }  // namespace kernel::memory::vmm::tlb

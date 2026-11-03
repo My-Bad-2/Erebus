@@ -1,0 +1,221 @@
+# Publishes a release of the commit it runs on: a Release build of the kernel for every
+# EREBUS_ARCH_LEVEL that cmake/CompilerFlags.cmake offers, as bootable ISOs and ELFs. The version
+# is the one in CMakeLists.txt, which is also what the kernel reports, and the tag is v<version>.
+#
+# Nothing is published unless the kernel tests pass, and each level's own test kernel passes on
+# the runner too, where the runner's CPU can run that level.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: Mark the release as a pre-release
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One release at a time; a second run waits for the first instead of racing it to the tag.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan the release
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      levels: ${{ steps.plan.outputs.levels }}
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Read the version and the arch levels
+        id: plan
+        shell: python
+        run: |
+          import json
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          def find(path: str, pattern: str) -> str:
+              match = re.search(pattern, Path(path).read_text())
+              if not match:
+                  print(f"::error file={path}::Cannot find {pattern!r} in {path}")
+                  sys.exit(1)
+              return match.group(1)
+
+          version = find("CMakeLists.txt", r"project\(\s*\w+\s+VERSION\s+([0-9][0-9.]*)")
+          levels = find("cmake/CompilerFlags.cmake",
+                        r"set_property\(CACHE EREBUS_ARCH_LEVEL PROPERTY STRINGS\s+([^)]+)\)").split()
+
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              print(f"version={version}", file=out)
+              print(f"tag=v{version}", file=out)
+              print(f"levels={json.dumps(levels)}", file=out)
+
+      - name: Check that ${{ steps.plan.outputs.tag }} is new
+        env:
+          TAG: ${{ steps.plan.outputs.tag }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            echo "::error::$TAG is already released. Raise the version in CMakeLists.txt to release again."
+            exit 1
+          fi
+
+  tests:
+    name: Kernel tests
+    needs: plan
+    uses: ./.github/workflows/tests.yml
+
+  build:
+    name: Build ${{ matrix.arch }}
+    needs: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    strategy:
+      matrix:
+        arch: ${{ fromJSON(needs.plan.outputs.levels) }}
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Set up the build
+        id: setup
+        uses: ./.github/actions/setup-erebus
+
+      - name: Configure
+        run: >-
+          cmake --preset release
+          -DEREBUS_ARCH_LEVEL=${{ matrix.arch }}
+          -DEREBUS_QEMU_ACCEL=${{ steps.setup.outputs.accel }}
+          -DEREBUS_QEMU_STRESS_TIMEOUT=${{ steps.setup.outputs.boot-timeout }}
+
+      - name: Build
+        run: cmake --build --preset release
+
+      - name: Check whether the runner can boot ${{ matrix.arch }}
+        id: host
+        env:
+          ACCEL: ${{ steps.setup.outputs.accel }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          # Under KVM the guest gets the runner's CPU, so a level that CPU lacks features of would
+          # only fault. The kernel never uses vector registers: what counts is what the level
+          # enables with -mgeneral-regs-only, compared with this CPU as clang sees them both.
+          features() {
+            clang --target=x86_64-elf -march="$1" -mgeneral-regs-only -E -dM -x c /dev/null |
+              sed -n 's/^#define __\([A-Z0-9_]*\)__ 1$/\1/p' | sort
+          }
+
+          cpu=$(awk -F ': ' '/^model name/ { print $2; exit }' /proc/cpuinfo)
+          missing=$(comm -23 <(features "$ARCH") <(features native) | paste -sd ' ')
+
+          reason=""
+          if [[ $ACCEL != kvm ]]; then
+            reason="booting it needs KVM, which the runner did not have"
+          elif [[ -n $missing ]]; then
+            reason="the runner's $cpu lacks $missing"
+          fi
+
+          if [[ -z $reason ]]; then
+            echo "boot=true" >> "$GITHUB_OUTPUT"
+            echo "status=All passed on $cpu" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning title=${ARCH} not booted::Built, but not booted: $reason."
+            echo "boot=false" >> "$GITHUB_OUTPUT"
+            echo "status=Not run: $reason" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run the kernel tests
+        if: steps.host.outputs.boot == 'true'
+        run: cmake --build --preset release --target check
+
+      - name: Package
+        env:
+          ARCH: ${{ matrix.arch }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          STATUS: ${{ steps.host.outputs.status }}
+        run: |
+          mkdir -p release/assets release/notes
+          cp build/erebus.iso "release/assets/erebus-$VERSION-$ARCH.iso"
+          cp build/kernel/kernel "release/assets/erebus-$VERSION-$ARCH.elf"
+
+          # This level's row in the release notes.
+          echo "| \`$ARCH\` | $STATUS |" > "release/notes/$ARCH.md"
+          echo "- \`$ARCH\`: $STATUS" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.arch }}
+          path: release/
+          if-no-files-found: error
+
+      - name: Keep the serial console
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: serial-console-${{ matrix.arch }}
+          path: build/check/*.log
+          if-no-files-found: ignore
+
+  publish:
+    name: Publish ${{ needs.plan.outputs.tag }}
+    needs: [plan, tests, build]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download the builds
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          path: release
+          merge-multiple: true
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          VERSION: ${{ needs.plan.outputs.version }}
+          LEVELS: ${{ needs.plan.outputs.levels }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          cd release
+          {
+            echo "Bootable UEFI images of Erebus $VERSION, built from ${GITHUB_SHA::12}, one for each"
+            echo "x86-64 target the build supports. Take the most specific one your CPU can run;"
+            echo "\`x86-64-v2\` runs on anything since Intel Nehalem and AMD Bulldozer. Next to each"
+            echo "image is its kernel as an ELF with symbols, for debuggers, and SHA256SUMS has the"
+            echo "checksums of everything."
+            echo
+            echo "| Target | Kernel tests |"
+            echo "| --- | --- |"
+            for level in $(jq -r '.[]' <<< "$LEVELS"); do
+              cat "notes/$level.md"
+            done
+          } > notes.md
+
+          cd assets
+          sha256sum -- * > SHA256SUMS
+
+          flags=()
+          if [[ $PRERELEASE == true ]]; then
+            flags+=(--prerelease)
+          fi
+
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Erebus $VERSION" --notes-file ../notes.md --generate-notes "${flags[@]}" -- *

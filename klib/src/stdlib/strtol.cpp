@@ -8,6 +8,16 @@
 
 namespace klib {
 namespace {
+// The value of digit `c` in bases up to 36, or 255 if it is not one.
+[[gnu::always_inline]] constexpr unsigned digit_value(const unsigned char c) noexcept {
+  if (c - '0' + 0u < 10u) {
+    return c - '0';
+  }
+
+  const unsigned letter = (c | 0x20u) - 'a';
+  return letter < 26u ? letter + 10 : 255;
+}
+
 template <typename T>
 constexpr T strtoX(const char* __restrict nptr, char** __restrict endptr, int base) noexcept {
   using U = std::make_unsigned_t<T>;
@@ -27,18 +37,10 @@ constexpr T strtoX(const char* __restrict nptr, char** __restrict endptr, int ba
     ++s;
   }
 
-  if ((base == 0 || base == 16) && *s == '0' && (*(s + 1) == 'x' || *(s + 1) == 'X')) {
-    std::uint8_t c = *(s + 2);
-    std::uint32_t val = c - '0';
-
-    if (val > 9) {
-      val = (c | 0x20) - 'a' + 10;
-      if (val < 10 || val > 35) {
-        val = 255;
-      }
-    }
-
-    if (val < 16) {
+  // "0x" counts as a prefix only when a hex digit follows; otherwise the '0' alone is the
+  // number and parsing stops at the 'x'.
+  if ((base == 0 || base == 16) && s[0] == '0' && (s[1] | 0x20) == 'x') {
+    if (digit_value(static_cast<unsigned char>(s[2])) < 16) {
       base = 16;
       s += 2;
     } else if (base == 0) {
@@ -76,17 +78,7 @@ constexpr T strtoX(const char* __restrict nptr, char** __restrict endptr, int ba
   bool overflow = false;
 
   while (true) {
-    uint8_t c = *s;
-    unsigned val = c - '0';
-
-    if (val > 9) {
-      val = (c | 0x20) - 'a' + 10;
-
-      if (val < 10 || val > 35) {
-        val = 255;
-      }
-    }
-
+    const unsigned val = digit_value(static_cast<unsigned char>(*s));
     if (std::cmp_greater_equal(val, base)) {
       break;
     }
@@ -127,11 +119,9 @@ constexpr T strtoX(const char* __restrict nptr, char** __restrict endptr, int ba
     }
   }
 
-  if constexpr (is_signed) {
-    return neg ? -static_cast<T>(acc) : static_cast<T>(acc);
-  } else {
-    return neg ? -acc : acc;
-  }
+  // Negate in the unsigned type: -LONG_MIN does not exist as a long. The conversion back is
+  // modular, which turns the magnitude of LONG_MIN into LONG_MIN itself.
+  return static_cast<T>(neg ? U{0} - acc : acc);
 }
 }  // namespace
 

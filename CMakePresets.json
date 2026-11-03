@@ -1,0 +1,81 @@
+{
+  "version": 8,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "toolchainFile": "${sourceDir}/cmake/ToolchainClang.cmake"
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug"
+      }
+    },
+    {
+      "name": "release",
+      "displayName": "Release",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release"
+      }
+    },
+    {
+      "name": "lint",
+      "displayName": "clang-tidy",
+      "description": "Debug build that runs clang-tidy on Erebus's own sources",
+      "inherits": "base",
+      "binaryDir": "${sourceDir}/build-lint",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "EREBUS_CLANG_TIDY": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "debug", "configurePreset": "debug" },
+    { "name": "release", "configurePreset": "release" },
+    { "name": "lint", "configurePreset": "lint" },
+    { "name": "docs", "configurePreset": "release", "targets": ["docs"] },
+    { "name": "check", "configurePreset": "debug", "targets": ["check"] },
+    { "name": "test-image", "configurePreset": "debug", "targets": ["test_iso"] },
+    { "name": "stress", "configurePreset": "release", "targets": ["qemu_stress"] }
+  ],
+  "testPresets": [
+    {
+      "name": "kernel",
+      "displayName": "Boot the test kernel once",
+      "configurePreset": "debug",
+      "output": { "outputOnFailure": true }
+    }
+  ],
+  "workflowPresets": [
+    {
+      "name": "check",
+      "displayName": "Build the test kernel and run its tests",
+      "steps": [
+        { "type": "configure", "name": "debug" },
+        { "type": "build", "name": "test-image" },
+        { "type": "test", "name": "kernel" }
+      ]
+    },
+    {
+      "name": "stress",
+      "displayName": "Run the kernel tests on many machine configurations",
+      "steps": [
+        { "type": "configure", "name": "release" },
+        { "type": "build", "name": "stress" }
+      ]
+    }
+  ]
+}

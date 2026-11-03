@@ -48,8 +48,12 @@ void CpuInfo::parse_brand() noexcept {
 void CpuInfo::parse_caches() noexcept {
   const std::uint32_t cache_leaf = (m_vendor == Vendor::Amd) ? 0x8000001D : 0x04;
 
-  if ((m_vendor == Vendor::Amd && m_max_ext_leaf >= cache_leaf) ||
-      (m_vendor == Vendor::Intel && m_max_leaf >= cache_leaf)) {
+  // AMD only fills in 0x8000001D when TOPOEXT is set.
+  constexpr std::uint32_t TOPOEXT = 1u << 22;
+  const bool amd_ok = m_vendor == Vendor::Amd && m_max_ext_leaf >= cache_leaf &&
+                      (m_leaves[3][std::to_underlying(Reg::ECX)] & TOPOEXT) != 0;
+
+  if (amd_ok || (m_vendor == Vendor::Intel && m_max_leaf >= cache_leaf)) {
     for (std::uint32_t i = 0; i < m_caches.size(); ++i) {
       const auto [eax, ebx, ecx, edx] = query(cache_leaf, i);
       const std::uint32_t type = eax & 0x1F;
@@ -112,7 +116,7 @@ void CpuInfo::parse_tlb() noexcept {
               .type = CacheType::Data,
               .page_size = size,
               .entries = d_entries,
-              .ways = is_l2 ? decode_amd_l2_assoc((reg >> 28) * 0xF) : ((reg >> 24) & 0xFF),
+              .ways = is_l2 ? decode_amd_l2_assoc((reg >> 28) & 0xF) : ((reg >> 24) & 0xFF),
           };
         }
       }
@@ -144,10 +148,11 @@ void CpuInfo::parse_tlb() noexcept {
       push(r.eax, PageSize::Size2M, true);
     }
 
-    // Leaf 0x80000019: 1GB Page TLBs (L1 and L2)
+    // Leaf 0x80000019: 1GB Page TLBs (L1 and L2). Both registers use the 4-bit associativity,
+    // 12-bit entry count layout of the L2 leaf.
     if (m_max_ext_leaf >= 0x80000019) {
       const auto r = query(0x80000019);
-      push(r.eax, PageSize::Size1G, false);
+      push(r.eax, PageSize::Size1G, true);
       push(r.ebx, PageSize::Size1G, true);
     }
   }
@@ -192,7 +197,7 @@ void CpuInfo::parse_hypervisor() noexcept {
     __builtin_memcpy(hv.data() + 8, &r.edx, 4);
 
     std::string_view hv_sv{hv.data()};
-    if (hv_sv == "KVMKVMKVM\0\0\0") {
+    if (hv_sv == "KVMKVMKVM") {
       m_hypervisor = Hypervisor::Kvm;
     } else if (hv_sv == "VMwareVMware") {
       m_hypervisor = Hypervisor::Vmware;
@@ -202,6 +207,12 @@ void CpuInfo::parse_hypervisor() noexcept {
       m_hypervisor = Hypervisor::Xen;
     } else if (hv_sv == "TCGTCGTCGTCG") {
       m_hypervisor = Hypervisor::Qemu;
+    } else if (hv_sv == "VBoxVBoxVBox") {
+      m_hypervisor = Hypervisor::VirtualBox;
+    } else if (hv_sv == " lrpepyh  vr") {
+      m_hypervisor = Hypervisor::Parallels;
+    } else if (hv_sv == "bhyve bhyve ") {
+      m_hypervisor = Hypervisor::Bhyve;
     } else {
       m_hypervisor = Hypervisor::Unknown;
     }
@@ -216,7 +227,8 @@ void CpuInfo::parse_fms(const std::uint32_t eax) noexcept {
   const std::uint32_t ext_model = (eax >> 16) & 0xF;
   const std::uint32_t ext_family = (eax >> 20) & 0xF;
 
-  if (base_model == 0xF) {
+  // The extended fields only count for families 6 and 15 (Intel SDM Vol. 2A, CPUID leaf 1).
+  if (base_family == 0xF) {
     m_family = base_family + ext_family;
     m_model = base_model | (ext_model << 4);
   } else if (base_family == 0x6) {
@@ -259,7 +271,6 @@ void CpuInfo::initialize() noexcept {
     const auto r = query(1);
     m_leaves[0] = {r.eax, r.ebx, r.ecx, r.edx};
     m_is_virtualized = (r.ecx & (1u << 31)) != 0;
-    m_apic_id = (r.ebx >> 24) & 0xFF;
     m_clflush_size = ((r.ebx >> 8) & 0xFF) * 8;
     parse_fms(r.eax);
   }
@@ -287,22 +298,16 @@ void CpuInfo::initialize() noexcept {
     }
   }
 
-  if (m_vendor == Vendor::Intel && m_max_leaf >= 0xB) {
-    std::uint32_t topo_leaf = (m_max_leaf >= 0x1F) ? 0x1F : 0xB;
-    auto [_, _, _, edx] = query(topo_leaf, 0);
-    m_apic_id = edx;
-  }
-
   parse_brand();
   parse_frequencies();
   parse_caches();
   parse_tlb();
   parse_topology();
   parse_hypervisor();
-  decode_uarch();
+  m_uarch = decode_uarch();
 }
 
-UArch CpuInfo::decode_uarch() {
+UArch CpuInfo::decode_uarch() const noexcept {
   if (m_vendor == Vendor::Intel) {
     if (m_family == 6) {
       switch (m_model) {
@@ -413,52 +418,21 @@ utils::TicketSpinlock cpu_profile_lock;
 }
 
 std::uint64_t CpuProfileManager::generate_fingerprint() noexcept {
-  auto r = CpuInfo::query(1);
-  const std::uint64_t fms = r.eax;
-
-  r = CpuInfo::query(0);
+  const auto leaf0 = CpuInfo::query(0);
+  const auto leaf1 = CpuInfo::query(1);
   std::uint64_t core_type = 0;
 
-  if (r.eax >= 0x1A) {
-    r = CpuInfo::query(0x1A);
-    core_type = r.eax >> 24;
+  // Leaf 0x1A only means something on hybrid parts, where it tells P- and E-cores apart.
+  constexpr std::uint32_t HYBRID = 1u << 15;
+  if (leaf0.eax >= 0x1A && (CpuInfo::query(7, 0).edx & HYBRID) != 0) {
+    core_type = CpuInfo::query(0x1A).eax >> 24;
   }
 
-  return (core_type << 32) | fms;
+  return (core_type << 32) | leaf1.eax;
 }
 
-const CpuInfo* CpuProfileManager::register_cpu() noexcept {
-  const std::uint64_t fingerprint = generate_fingerprint();
-
-  const std::size_t active = m_active_profiles.load(std::memory_order_acquire);
-  for (std::size_t i = 0; i < active; ++i) {
-    if (m_profiles[i].fingerprint.load(std::memory_order_relaxed) == fingerprint) {
-      return &m_profiles[i].info;
-    }
-  }
-
-  {
-    utils::IrqSaveGuard guard(cpu_profile_lock);
-
-    const std::size_t curr_active = m_active_profiles.load(std::memory_order_relaxed);
-
-    const std::size_t new_idx = curr_active;
-    if (new_idx < MAX_ARCH_PROFILES) {
-      m_profiles[new_idx].info.initialize();
-      m_profiles[new_idx].fingerprint.store(fingerprint, std::memory_order_relaxed);
-      m_active_profiles.store(new_idx + 1, std::memory_order_release);
-
-      return &m_profiles[new_idx].info;
-    }
-  }
-
-  return &m_profiles[0].info;
-}
-
-const CpuInfo* CpuProfileManager::get_current() const noexcept {
-  const std::uint64_t fingerprint = generate_fingerprint();
-  const std::size_t active = m_active_profiles.load(std::memory_order_relaxed);
-
+const CpuInfo* CpuProfileManager::find(const std::uint64_t fingerprint,
+                                       const std::size_t active) const noexcept {
   for (std::size_t i = 0; i < active; ++i) {
     if (m_profiles[i].fingerprint.load(std::memory_order_relaxed) == fingerprint) {
       return &m_profiles[i].info;
@@ -466,5 +440,34 @@ const CpuInfo* CpuProfileManager::get_current() const noexcept {
   }
 
   return nullptr;
+}
+
+const CpuInfo* CpuProfileManager::register_cpu() noexcept {
+  const std::uint64_t fingerprint = generate_fingerprint();
+
+  if (const CpuInfo* info = find(fingerprint, m_active_profiles.load(std::memory_order_acquire))) {
+    return info;
+  }
+
+  utils::IrqSaveGuard guard(cpu_profile_lock);
+
+  // Another CPU of the same kind may have created the profile while we waited for the lock.
+  const std::size_t active = m_active_profiles.load(std::memory_order_relaxed);
+  if (const CpuInfo* info = find(fingerprint, active)) {
+    return info;
+  }
+
+  if (active == MAX_ARCH_PROFILES) [[unlikely]] {
+    return &m_profiles[0].info;
+  }
+
+  m_profiles[active].info.initialize();
+  m_profiles[active].fingerprint.store(fingerprint, std::memory_order_relaxed);
+  m_active_profiles.store(active + 1, std::memory_order_release);
+  return &m_profiles[active].info;
+}
+
+const CpuInfo* CpuProfileManager::get_current() const noexcept {
+  return find(generate_fingerprint(), m_active_profiles.load(std::memory_order_acquire));
 }
 }  // namespace kernel::hw

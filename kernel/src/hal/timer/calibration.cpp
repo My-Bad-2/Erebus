@@ -28,8 +28,7 @@ Result probe_hypervisor(const CpuInfo& cpu) noexcept {
 
 std::uint64_t lookup_intel_crystal_hz(const CpuInfo& cpu) noexcept {
   switch (cpu.microarchitecture()) {
-    case UArch::Skylake:
-    case UArch::KabyLake_CoffeeLake:
+    case UArch::Skylake... UArch::KabyLake_CoffeeLake:
       return 24'000'000ul;  // 24 MHz (6th-9th Gen Core Client)
     case UArch::CascadeLake:
       return 25'000'000ul;  // 25 MHz (SkyLake-X / Cascade Lake Xeon)
@@ -103,7 +102,6 @@ Result probe_intel(const CpuInfo& cpu) noexcept {
   return res;
 }
 
-namespace {
 std::uint32_t read_amd_num_boost_states(const CpuInfo& cpu) noexcept {
   if (!cpu.has<Feature::AMD_CPB>()) return 0;
 
@@ -116,7 +114,7 @@ std::uint32_t read_amd_num_boost_states(const CpuInfo& cpu) noexcept {
   // Bits [10:8] = Func (4), Bits [7:2] = Reg[7:2] (0x5C)
   constexpr std::uint32_t PCI_CF8 = (1 << 31) | (1 << 24) | (0x18 << 11) | (4 << 8) | 0x5C;
 
-  const IoResource pci_cfg{IoType::PMIO, 0xCF8};
+  constexpr IoResource pci_cfg{IoType::PMIO, 0xCF8};
   pci_cfg.write<std::uint32_t>(0, PCI_CF8);
 
   // Read 0xCFC
@@ -129,10 +127,10 @@ std::uint32_t read_amd_num_boost_states(const CpuInfo& cpu) noexcept {
   const std::uint32_t raw_boost = cpb_ctrl.get_num_boost_states();
   return cpu.microarchitecture() == UArch::K10 ? raw_boost & 0x1 : raw_boost & 0x7;
 }
-}  // namespace
 
 Result probe_amd(const CpuInfo& cpu) noexcept {
-  if (cpu.vendor() == Vendor::Amd || cpu.is_virtualized()) return {};
+  // The P-state MSRs describe the real silicon; a hypervisor's TSC need not run at P0.
+  if (cpu.vendor() != Vendor::Amd || cpu.is_virtualized()) return {};
 
   Result res{};
 
@@ -151,7 +149,7 @@ Result probe_amd(const CpuInfo& cpu) noexcept {
       return res;
     }
     case UArch::Zen5: {
-      // P0 COF (Hz) = CpuFid[11:0] - 5 MHz (where 5 MHz = 100 MHz REFCLK / 20)
+      // P0 COF (Hz) = CpuFid[11:0] * 5 MHz (where 5 MHz = 100 MHz REFCLK / 20)
       const MsrZen5PStateP0 p0{read::msr(MSR_AMD_PSTATE_DEF_BASE)};
       const std::uint64_t fid = p0.get_cpu_fid();
 

@@ -1,5 +1,6 @@
 #include "memory/pmm.hpp"
 #include "memory/vmm/pagemap/pagemap.hpp"
+#include "memory/vmm/pagemap/tlb.hpp"
 
 namespace kernel::memory::vmm {
 std::expected<PhysicalAddress, Error> PageMap::unmap_1gb_as_2mb(
@@ -25,28 +26,27 @@ std::expected<PhysicalAddress, Error> PageMap::unmap_1gb_as_2mb(
       return std::unexpected(Error::InvalidFlags);
     }
 
-    const PTEntry desired;
-
-    if (pdpte->cas(expected, desired, std::memory_order_release, std::memory_order_acquire))
+    if (pdpte->cas(expected, PTEntry{}, std::memory_order_release, std::memory_order_acquire))
         [[likely]] {
-      tlb::ShootdownCoordinator::broadcast(this, virt, PAGE_SIZE_1GB, true);
-
-      const PhysicalAddress pml2_phys{expected.get_pfn_4k() << PAGE_SHIFT_4KB};
-      auto* pml2_table = DirectMap::phys_to_virt(pml2_phys).as<PageTableEntry>();
-
-      PhysicalAddress user_base_phys{};
-      const PTEntry first_pde = pml2_table[0].load(std::memory_order_acquire);
-      if (first_pde.get_present()) [[likely]] {
-        const PageTableEntry first_pte{first_pde.raw()};
-        if (auto phys_res = first_pte.extract_address(PageSize::Size2M)) [[likely]] {
-          user_base_phys = *phys_res;
-        }
-      }
-
-      pmm::free_pages(pml2_phys, 0);
-      return user_base_phys;
+      break;
     }
   }
+
+  // Flush before the directory is freed, or a CPU could keep walking it from its
+  // paging-structure caches.
+  tlb::ShootdownCoordinator::broadcast(this, virt, PAGE_SIZE_1GB, PageSize::Size2M);
+
+  const PhysicalAddress pd_phys{expected.get_pfn_4k() << PAGE_SHIFT_4KB};
+  const auto* pd_table = DirectMap::phys_to_virt(pd_phys).as<PageTableEntry>();
+
+  PhysicalAddress base_phys{};
+  if (const auto first = pd_table[0].extract_address(PageSize::Size2M);
+      first && pd_table[0].is_present()) [[likely]] {
+    base_phys = *first;
+  }
+
+  pmm::free_pages(pd_phys, 0);
+  return base_phys;
 }
 
 std::expected<PhysicalAddress, Error> PageMap::unmap(const VirtualAddress virt,
@@ -56,7 +56,7 @@ std::expected<PhysicalAddress, Error> PageMap::unmap(const VirtualAddress virt,
     return std::unexpected(Error::InvalidAlignment);
   }
 
-  if (size == PageSize::Size1G && !supports_1gb_pages) [[unlikely]] {
+  if (size == PageSize::Size1G && !g_paging_features.huge_1g) [[unlikely]] {
     return unmap_1gb_as_2mb(virt);
   }
 
@@ -69,26 +69,24 @@ std::expected<PhysicalAddress, Error> PageMap::unmap(const VirtualAddress virt,
   PTEntry expected = pte->load(std::memory_order_acquire);
 
   while (true) {
-    if (expected.get_present() == 0) [[unlikely]] {
+    if (!expected.get_present()) [[unlikely]] {
       return std::unexpected(Error::NotMapped);
     }
 
-    const PTEntry desired{0};
-    if (pte->cas(expected, desired, std::memory_order_release, std::memory_order_acquire))
+    if (pte->cas(expected, PTEntry{}, std::memory_order_release, std::memory_order_acquire))
         [[likely]] {
-      const PageTableEntry old_pte{expected.raw()};
-
-      auto addr_res = old_pte.extract_address(size);
-      if (!addr_res) [[unlikely]] {
-        return std::unexpected(Error::NotMapped);
-      }
-
-      const bool is_huge = (size != PageSize::Size4K);
-      tlb::ShootdownCoordinator::broadcast(this, virt, page_size_bytes, is_huge);
-
-      return *addr_res;
+      break;
     }
   }
+
+  tlb::ShootdownCoordinator::broadcast(this, virt, page_size_bytes, size);
+
+  const auto addr_res = PageTableEntry{expected.raw()}.extract_address(size);
+  if (!addr_res) [[unlikely]] {
+    return std::unexpected(Error::NotMapped);
+  }
+
+  return *addr_res;
 }
 
 std::expected<void, Error> PageMap::unmap_range(const VirtualAddress start_virt,
@@ -98,59 +96,64 @@ std::expected<void, Error> PageMap::unmap_range(const VirtualAddress start_virt,
     return std::unexpected(Error::InvalidAlignment);
   }
 
-  VirtualAddress curr_virt = start_virt;
-  std::size_t remaining = size_bytes;
+  const VirtualAddress end_virt = start_virt + static_cast<VirtualAddress::OffsetType>(size_bytes);
+  VirtualAddress curr = start_virt;
+  bool cleared_any = false;
 
-  while (remaining > 0) {
-    const auto trans = translate(curr_virt);
+  while (curr < end_virt) {
+    const auto remaining = static_cast<std::size_t>(end_virt - curr);
+    const auto [entry, lvl, value] = probe(curr);
+    const std::size_t coverage = level_coverage(lvl);
 
-    // If not mapped, fast-forward by one page.
-    if (!trans) {
-      curr_virt += PAGE_SIZE;
-      remaining -= PAGE_SIZE;
+    // Nothing is mapped anywhere under a missing entry: skip all of it.
+    if (!value.get_present()) {
+      curr += static_cast<VirtualAddress::OffsetType>(
+          std::min(remaining, coverage - curr.page_offset(coverage)));
       continue;
     }
 
-    if (trans->mapped_size == PageSize::Size1G && remaining >= PAGE_SIZE_1GB &&
-        curr_virt.is_aligned(PAGE_SIZE_1GB)) {
-      [[maybe_unused]] auto _ = unmap(curr_virt, PageSize::Size1G);
-      curr_virt += PAGE_SIZE_1GB;
-      remaining -= PAGE_SIZE_1GB;
+    if (lvl > 1) {
+      // A huge page. Drop it whole if the range covers it, otherwise split it and look again.
+      if (curr.is_aligned(coverage) && remaining >= coverage) {
+        PTEntry expected = value;
+        if (entry->cas(expected, PTEntry{}, std::memory_order_release, std::memory_order_acquire)) {
+          cleared_any = true;
+          curr += static_cast<VirtualAddress::OffsetType>(coverage);
+        }
+
+        continue;
+      }
+
+      if (const auto res = walk(curr, false, static_cast<PageSize>(lvl - 1)); !res) [[unlikely]] {
+        return std::unexpected(res.error());
+      }
+
       continue;
     }
 
-    if (trans->mapped_size == PageSize::Size2M && remaining >= PAGE_SIZE_2MB &&
-        curr_virt.is_aligned(PAGE_SIZE_2MB)) {
-      [[maybe_unused]] auto _ = unmap(curr_virt, PageSize::Size2M);
-      curr_virt += PAGE_SIZE_2MB;
-      remaining -= PAGE_SIZE_2MB;
-      continue;
-    }
+    // A page table: clear every slot of it that lies inside the range.
+    const std::size_t batch_bytes =
+        std::min(remaining, PAGE_SIZE_2MB - curr.page_offset(PAGE_SIZE_2MB));
 
-    const std::size_t bytes_to_pml1_boundary = PAGE_SIZE_2MB - curr_virt.page_offset(PAGE_SIZE_2MB);
-    const std::size_t batch_bytes = std::min(remaining, bytes_to_pml1_boundary);
-    const std::size_t pages_in_batch = batch_bytes / PAGE_SIZE;
-
-    const auto pt_res = walk(curr_virt, false, PageSize::Size4K);
-    if (pt_res) [[likely]] {
-      PageTableEntry* pte = *pt_res;
-
-      for (std::size_t i = 0; i < pages_in_batch; ++i) {
-        PTEntry expected = pte[i].load(std::memory_order_acquire);
-        while (expected.get_present()) {
-          if (pte[i].cas(expected, PTEntry{}, std::memory_order_release,
+    for (std::size_t i = 0; i < batch_bytes / PAGE_SIZE; ++i) {
+      PTEntry expected = entry[i].load(std::memory_order_acquire);
+      while (expected.get_present()) {
+        if (entry[i].cas(expected, PTEntry{}, std::memory_order_release,
                          std::memory_order_acquire)) {
-            break;
-          }
+          cleared_any = true;
+          break;
         }
       }
     }
 
-    curr_virt += batch_bytes;
-    remaining -= batch_bytes;
+    curr += static_cast<VirtualAddress::OffsetType>(batch_bytes);
   }
 
-  tlb::ShootdownCoordinator::broadcast(this, start_virt, size_bytes, size_bytes >= PAGE_SIZE_2MB);
+  // Huge pages are covered too: a 4 KiB stride over them is just more (or one full) flush.
+  if (cleared_any) {
+    tlb::ShootdownCoordinator::broadcast(this, start_virt, size_bytes);
+  }
+
   return {};
 }
 }  // namespace kernel::memory::vmm

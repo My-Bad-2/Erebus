@@ -25,7 +25,13 @@ inline constexpr uint32_t RELAX_TSC_DELAY = 250;
 
 [[gnu::always_inline]] inline std::uint64_t read_tsc() noexcept { return read_tsc(nullptr); }
 
-void pause(std::uint32_t = 1, std::uint64_t = RELAX_TSC_DELAY) noexcept;
+/// @brief One spin-wait hint. The arguments only exist to match cpu_relax_impl.
+[[gnu::always_inline]] inline void pause(std::uint32_t = 1,
+                                         std::uint64_t = RELAX_TSC_DELAY) noexcept {
+  asm volatile("pause" ::: "memory");
+}
+
+/// @brief Waits in a light C0 sleep state for @p delay TSC ticks or until an interrupt.
 void tpause(std::uint32_t state = 1, std::uint64_t delay = RELAX_TSC_DELAY) noexcept;
 
 DECLARE_STATIC_CALL(void, cpu_relax_impl, std::uint32_t, std::uint64_t);
@@ -60,20 +66,40 @@ namespace irq {
       : "cc", "memory");
 }
 
-[[gnu::always_inline]] inline bool is_enabled() noexcept {
-  return (read_flags() & (1UL << 9)) != 0;
+inline constexpr std::uint64_t RFLAGS_IF = 1ull << 9;
+
+[[gnu::always_inline]] inline bool is_enabled() noexcept { return (read_flags() & RFLAGS_IF) != 0; }
+
+/// @brief Disables interrupts and returns the state to hand to restore().
+[[nodiscard, gnu::always_inline]] inline std::uint64_t save() noexcept {
+  const std::uint64_t flags = read_flags();
+  disable();
+  return flags;
+}
+
+/// @brief Re-enables interrupts if they were on when @p flags was saved.
+///
+/// Cheaper than writing RFLAGS back, since POPF is microcoded, and it leaves the other flags
+/// alone (AC in particular, which SMAP code toggles on purpose).
+[[gnu::always_inline]] inline void restore(const std::uint64_t flags) noexcept {
+  if (flags & RFLAGS_IF) {
+    enable();
+  }
 }
 }  // namespace irq
 
+/// @brief Enables interrupts and halts until one arrives.
+///
+/// STI only takes effect after the following instruction, so an interrupt that is already pending
+/// cannot slip in between the two and leave the CPU halted with nothing left to wake it. Call
+/// with interrupts disabled, after checking whatever condition the caller waits for.
 [[gnu::always_inline]] inline void wait_for_interrupt() noexcept {
-  while (true) {
-    asm volatile(
-        "sti\n\t"
-        "hlt\n\t"
-        : /* No output */
-        : /* No Input*/
-        : "memory");
-  }
+  asm volatile(
+      "sti\n\t"
+      "hlt\n\t"
+      : /* No output */
+      : /* No Input*/
+      : "memory");
 }
 
 [[gnu::always_inline, noreturn]] inline void dead_loop() noexcept {
@@ -87,7 +113,17 @@ namespace irq {
   }
 }
 
-DECLARE_STATIC_CALL([[noreturn]] void, cpu_idle_loop, volatile std::uint32_t*);
+/// @brief Idles until `*runqueue_count` is non-zero or an interrupt has been handled.
+///
+/// Uses MONITOR/MWAIT on bare metal, so a store to the counter wakes the CPU without an IPI, and
+/// HLT everywhere else. Returns with interrupts enabled.
+DECLARE_STATIC_CALL(void, cpu_idle, const volatile std::uint32_t*);
+
+/// @brief The idle loop of a CPU with nothing to run.
+[[noreturn]] void cpu_idle_loop(const volatile std::uint32_t* runqueue_count) noexcept;
+
+/// @brief Stops every other CPU and halts this one, for good. Where panics end up.
+[[noreturn]] void panic_halt() noexcept;
 
 [[gnu::always_inline]] inline void umonitor(const volatile void* addr) noexcept {
   asm volatile("umonitor %0" : /* No Output */ : "r"(addr) : "memory");
@@ -351,13 +387,13 @@ class InvlpgbAddress {
   constexpr explicit InvlpgbAddress(const std::uint64_t val = 0) : m_data(val) {}
   [[nodiscard]] std::uint64_t raw() const noexcept { return m_data; }
 
+  // Layout per the AMD APM (INVLPGB): there is no separate "global only" bit.
   BF_BIT_RW(va_valid, 0)        // Flush specific VA
   BF_BIT_RW(pcid_valid, 1)      // Match the PCID
   BF_BIT_RW(asid_valid, 2)      // Match the ASID
-  BF_BIT_RW(global, 3)          // Flush Global pages
-  BF_BIT_RW(include_global, 4)  // Flush pcid/asid and global
-  BF_BIT_RW(final_only, 5)      // Flush only the leaf PTE
-  BF_BIT_RW(include_nested, 6)  // Flush guest hypervisor translations
+  BF_BIT_RW(include_global, 3)  // Also flush global translations
+  BF_BIT_RW(final_only, 4)      // Flush only the leaf PTE, keep paging-structure caches
+  BF_BIT_RW(include_nested, 5)  // Flush guest hypervisor translations
 
   BF_RW(std::uint64_t, virt_addr, 12, 52)  // Target Virtual Address
 };
@@ -398,17 +434,24 @@ class InvlpgbCount {
   asm volatile("tlbsync" : /* No Output */ : /* No Input */ : "memory");
 }
 
-[[noreturn, gnu::naked, gnu::noinline]] constexpr void execute_on_new_stack(
+/// @brief Switches to the stack at @p new_stack_top and calls `target_function(payload)` there.
+///
+/// The old stack is abandoned and the target must not return. The return address slot is left
+/// empty (a zero frame pointer ends backtraces), and the stack is set up the way a `call` would
+/// leave it, so the target sees the alignment the ABI promises.
+[[noreturn, gnu::naked, gnu::noinline]] inline void execute_on_new_stack(
     std::uint64_t new_stack_top, void* payload, void (*target_function)(void*)) noexcept {
-  asm volatile(
-      "movq %%rdi, %%rsp\n\t"
-      "movq %%rsi, %%rdi\n\t"
-      "xorq %%rbp, %%rbp\n\t"
-      "jmp *%%rdx\n\t"
-      : /* No Output */
-      : /* No Input */
-      : "memory");
+  asm("andq $-16, %rdi\n\t"
+      "movq %rdi, %rsp\n\t"
+      "movq %rsi, %rdi\n\t"
+      "xorl %ebp, %ebp\n\t"
+      "pushq $0\n\t"
+      "jmp *%rdx\n\t");
 }
 
+/// @brief Turns on the BSP's CPU features that do not belong to a particular subsystem.
 void initialize() noexcept;
+
+/// @brief Turns on the same features on an AP. Runs before the AP has a GS base.
+void initialize_secondary() noexcept;
 }  // namespace kernel::hw

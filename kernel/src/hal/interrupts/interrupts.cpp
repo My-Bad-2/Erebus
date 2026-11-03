@@ -1,9 +1,12 @@
 #include "hal/interrupts/interrupts.hpp"
 
-#include "../../../include/hal/smp/gdt.hpp"
+#include <atomic>
+#include <utility>
+
 #include "hal/hal.hpp"
+#include "hal/smp/cpu_info.hpp"
+#include "hal/smp/gdt.hpp"
 #include "memory/memory.hpp"
-#include "utility"
 #include "utils/logger.hpp"
 
 namespace kernel::hw::interrupts {
@@ -158,28 +161,41 @@ struct [[gnu::packed]] IDTR {
 };
 
 alignas(16) std::array<IDTEntry, IDT_SIZE> g_idt_table{};
+std::atomic<bool> g_idt_built{false};
 
-void initialize() noexcept {
-  static auto once = [] {
-    for (std::size_t vec = 0; vec < IDT_SIZE; ++vec) {
-      const auto handler = reinterpret_cast<void*>(legacy_idt_stubs[vec]);
-      constexpr auto dpl = EventCpl::Ring0;
+// The table is shared by every CPU. The BSP fills it in before any AP starts, which is why the
+// flag needs no more than acquire/release.
+void build_idt() noexcept {
+  for (std::size_t vec = 0; vec < IDT_SIZE; ++vec) {
+    const auto handler = reinterpret_cast<void*>(legacy_idt_stubs[vec]);
 
-      std::uint8_t ist_idx = 0;
-      if (vec == std::to_underlying(InterruptVector::NonMaskableInterrupt) ||
-          vec == std::to_underlying(InterruptVector::DoubleFault) ||
-          vec == std::to_underlying(InterruptVector::MachineCheck)) {
-        ist_idx = 1;
-      }
-
-      g_idt_table[vec].set_handler(handler, gdt::Selector::KernelCode, GateType::Interrupt, dpl,
-                                   ist_idx);
+    gdt::IstIndex ist = gdt::IstIndex::None;
+    switch (static_cast<InterruptVector>(vec)) {
+      case InterruptVector::DoubleFault:
+        ist = gdt::DOUBLE_FAULT_IST;
+        break;
+      case InterruptVector::NonMaskableInterrupt:
+        ist = gdt::NMI_IST;
+        break;
+      case InterruptVector::MachineCheck:
+        ist = gdt::MACHINE_CHECK_IST;
+        break;
+      default:
+        break;
     }
 
-    return true;
-  }();
+    g_idt_table[vec].set_handler(handler, gdt::Selector::KernelCode, GateType::Interrupt,
+                                 EventCpl::Ring0, std::to_underlying(ist));
+  }
+}
 
-  IDTR idtr{
+void initialize() noexcept {
+  if (!g_idt_built.load(std::memory_order_acquire)) {
+    build_idt();
+    g_idt_built.store(true, std::memory_order_release);
+  }
+
+  const IDTR idtr{
       .limit = static_cast<std::uint16_t>(sizeof(g_idt_table) - 1),
       .base = reinterpret_cast<std::uint64_t>(g_idt_table.data()),
   };
@@ -191,9 +207,10 @@ void initialize() noexcept {
 
 void initialize(memory::VirtualAddress ring0_stack,
                 memory::VirtualAddress critical_stack) noexcept {
-  if (profile_manager.get_current()->has<Feature::FRED>())
+  if (profile_manager.get_current()->has<Feature::FRED>()) {
     fred_config::initialize(ring0_stack, critical_stack);
-  else
+  } else {
     legacy::initialize();
+  }
 }
 }  // namespace kernel::hw::interrupts

@@ -1,16 +1,18 @@
+/// @file ring_buffer.hpp
+/// @brief Fixed-capacity queues: a lock-free MPSC/MPMC ring and a single-threaded deque.
+
 #pragma once
 
 #include <atomic>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <expected>
 #include <memory>
 #include <new>
 #include <span>
 #include <type_traits>
 #include <utility>
-
-#include "hal/hal.hpp"
 
 namespace kernel::utils {
 enum class DequeError : uint8_t { Empty, Full };
@@ -18,6 +20,15 @@ enum class DequeError : uint8_t { Empty, Full };
 template <typename T>
 concept RingQueable = std::is_nothrow_move_constructible_v<T> && std::is_nothrow_destructible_v<T>;
 
+/// @brief Bounded lock-free queue (Dmitry Vyukov's design) for any number of producers.
+///
+/// Each slot carries a sequence number that says whose turn it is: producers may fill slot `i`
+/// when it equals their ticket, consumers may empty it when it equals ticket + 1. Producers and
+/// consumers only contend on their own index, never on each other's. With `MultiConsumer` false
+/// the consumer side needs no atomic read-modify-write at all.
+///
+/// @tparam PadSlots Give every slot its own cache line, so producers filling neighbouring slots
+///                  do not false-share. Costs a cache line per slot.
 template <RingQueable T, size_t Capacity, bool MultiConsumer, bool PadSlots>
 class RingBuffer {
   static_assert(Capacity >= 2 && std::has_single_bit(Capacity),
@@ -35,12 +46,13 @@ class RingBuffer {
  private:
   struct alignas(PadSlots ? std::hardware_destructive_interference_size : alignof(T)) Slot {
     std::atomic<size_t> sequence;
+    // Only holds an object between a push and the pop that takes it out.
     union {
       T data;
     };
 
-    Slot() noexcept : sequence(0), data() {}
-    ~Slot() noexcept {}
+    constexpr Slot() noexcept : sequence(0) {}
+    constexpr ~Slot() noexcept {}
   };
 
   alignas(std::hardware_destructive_interference_size) std::atomic<size_t> m_head{0};
@@ -54,9 +66,17 @@ class RingBuffer {
     }
   }
 
+  // Whatever is still queued gets destroyed. Nobody may be using the queue any more, so there
+  // are no half-written slots to worry about.
   ~RingBuffer() noexcept {
-    T item;
-    while (try_dequeue(item)) {
+    if constexpr (!std::is_trivially_destructible_v<T>) {
+      const std::size_t head = m_head.load(std::memory_order_relaxed);
+      for (std::size_t pos = m_tail.load(std::memory_order_relaxed); pos != head; ++pos) {
+        Slot& slot = m_slots[pos & Mask];
+        if (slot.sequence.load(std::memory_order_relaxed) == pos + 1) {
+          std::destroy_at(&slot.data);
+        }
+      }
     }
   }
 
@@ -75,6 +95,8 @@ class RingBuffer {
       const std::size_t seq = slot->sequence.load(std::memory_order_acquire);
       const auto diff = static_cast<std::intptr_t>(seq - head);
 
+      // A failed CAS or a slot taken under our feet means another producer moved on: retry at
+      // once, there is nothing to wait for.
       if (diff == 0) {
         if (m_head.compare_exchange_weak(head, head + 1, std::memory_order_relaxed)) {
           break;
@@ -84,8 +106,6 @@ class RingBuffer {
       } else {
         head = m_head.load(std::memory_order_relaxed);
       }
-
-      hw::cpu_relax();
     }
 
     std::construct_at(&slot->data, std::forward<Args>(args)...);
@@ -116,18 +136,18 @@ class RingBuffer {
 
       if (diff == 0) {
         if (m_head.compare_exchange_weak(head, head + 1, std::memory_order_relaxed)) {
-          return {.ptr = reinterpret_cast<T*>(&slot->data), .head = head};
+          return {.ptr = &slot->data, .head = head};
         }
       } else if (diff < 0) {
         return {.ptr = nullptr, .head = 0};  // Buffer full
       } else {
         head = m_head.load(std::memory_order_relaxed);
       }
-
-      hw::cpu_relax();
     }
   }
 
+  /// @brief Publishes a slot taken with try_reserve(). The caller must have constructed a T at
+  ///        `ticket.ptr` (with std::construct_at) before this.
   void commit(const WriteTicket& ticket) noexcept {
     Slot* slot = &m_slots[ticket.head & Mask];
     slot->sequence.store(ticket.head + 1, std::memory_order_release);
@@ -145,7 +165,6 @@ class RingBuffer {
       if (diff == 0) {
         if constexpr (MultiConsumer) {
           if (!m_tail.compare_exchange_weak(tail, tail + 1, std::memory_order_relaxed)) {
-            hw::cpu_relax();
             continue;
           }
         }
@@ -166,11 +185,8 @@ class RingBuffer {
         return false;  // Buffer empty
       }
 
+      // Another consumer took this slot first.
       tail = m_tail.load(std::memory_order_relaxed);
-
-      if constexpr (MultiConsumer) {
-        hw::cpu_relax();
-      }
     }
   }
 
@@ -214,18 +230,28 @@ class RingBuffer {
   [[nodiscard]] bool full_approx() const noexcept { return size_approx() >= Capacity; }
 };
 
+/// @brief Fixed-capacity double-ended queue with inline storage. Not thread-safe.
+///
+/// The indices run freely and are only masked on access, so `size()` is a subtraction and the
+/// queue can use every slot.
 template <RingQueable T, std::size_t Capacity>
   requires(std::has_single_bit(Capacity) && Capacity >= 2)
 class RingDeque {
  protected:
   static constexpr std::size_t Mask = Capacity - 1;
 
-  alignas(std::hardware_destructive_interference_size) std::size_t m_head{0};
-  alignas(std::hardware_destructive_interference_size) std::size_t m_tail{0};
-  alignas(std::hardware_destructive_interference_size) std::byte m_storage[Capacity * sizeof(T)];
+  // A single thread owns the deque, so there is no point in giving the indices cache lines of
+  // their own.
+  std::size_t m_head{0};
+  std::size_t m_tail{0};
+  alignas(T) std::byte m_storage[Capacity * sizeof(T)];
 
-  [[nodiscard]] constexpr T* ptr(const std::size_t index) noexcept {
-    return reinterpret_cast<T*>(&m_storage[(index & Mask) * sizeof(T)]);
+  [[nodiscard]] T* ptr(const std::size_t index) noexcept {
+    return std::launder(reinterpret_cast<T*>(&m_storage[(index & Mask) * sizeof(T)]));
+  }
+
+  [[nodiscard]] const T* ptr(const std::size_t index) const noexcept {
+    return std::launder(reinterpret_cast<const T*>(&m_storage[(index & Mask) * sizeof(T)]));
   }
 
  public:
@@ -285,6 +311,11 @@ class RingDeque {
     return val;
   }
 
+  [[nodiscard]] T& front() noexcept { return *ptr(m_head); }
+  [[nodiscard]] const T& front() const noexcept { return *ptr(m_head); }
+  [[nodiscard]] T& back() noexcept { return *ptr(m_tail - 1); }
+  [[nodiscard]] const T& back() const noexcept { return *ptr(m_tail - 1); }
+
   constexpr std::size_t push_back_bulk(std::span<const T> items) noexcept
     requires std::is_nothrow_copy_constructible_v<T>
   {
@@ -313,8 +344,12 @@ class RingDeque {
   }
 
   constexpr void clear() noexcept {
-    while (!empty()) {
-      std::destroy_at(ptr(m_head++));
+    if constexpr (std::is_trivially_destructible_v<T>) {
+      m_head = m_tail;
+    } else {
+      while (!empty()) {
+        std::destroy_at(ptr(m_head++));
+      }
     }
   }
 };

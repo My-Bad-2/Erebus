@@ -1,70 +1,89 @@
 ---
-Checks: '
-*,
-abseil-*,
-altera-*,
-android-*,
-boost-*,
-bugprone-*,
--bugprone-easily-swappable-parameters,
-cert-*,
--cert-dcl21-cpp,
--cert-err58-cpp,
-clang-analyzer-*,
-concurrency-*,
-cppcoreguidelines-*,
--cppcoreguidelines-avoid-magic-numbers,
--cppcoreguidelines-non-private-member-variables-in-classes,
-darwin-*,
-fuchsia-*,
--fuchsia-default-arguments-calls,
--fuchsia-default-arguments-declarations,
--fuchsia-multiple-inheritance,
--fuchsia-overloaded-operator,
--fuchsia-trailing-return,
--fuchsia-virtual-inheritance,
-google-*,
--google-objc-avoid-throwing-exception,
--google-objc-function-naming,
--google-objc-global-variable-declaration,
--google-readability-todo,
-hicpp-*,
--hicpp-no-assembler,
-linuxkernel-*,
-llvm-*
--llvm-header-guard,
--llvm-header-guard,
--llvm-include-order,
--llvm-prefer-static-over-anonymous-namespace,
-llvmlibc-*,
--llvmlibc-callee-namespace,
--llvmlibc-implementation-in-namespace,
--llvmlibc-inline-function-decl,
--llvmlibc-restrict-system-libc-headers,
-misc-*,
--misc-non-private-member-variables-in-classes,
-modernize-*,
--modernize-use-trailing-return-type,
-mpi-*,
-objc-*,
-openmp-*,
-performance-*,
--performance-avoid-endl,
-portability-*,
--portability-restrict-system-includes,
-readability-*,
--readability-function-cognitive-complexity,
--readability-identifier-length,
--readability-magic-numbers,
-zircon-*,
--zircon-temporary-objects,
-'
-WarningsAsErrors: ''
-HeaderFilterRegex: ''
+# Checks that find bugs, not matters of taste. Everything stylistic (naming, braces, magic
+# numbers, trailing return types, ...) is clang-format's job or nobody's.
+#
+# The disabled bugprone checks fire on things a kernel does on purpose: reserved names like
+# __start_foo and __assert_fail, a definition of std::terminate, integer/pointer casts, signed
+# operands and narrowing in bit manipulation, and assembler-string macros. Dynamic
+# initialization of globals is left to the linker script, which refuses to link any.
+Checks: >
+  -*,
+  bugprone-*,
+  -bugprone-assignment-in-if-condition,
+  -bugprone-branch-clone,
+  -bugprone-casting-through-void,
+  -bugprone-crtp-constructor-accessibility,
+  -bugprone-dynamic-static-initializers,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-exception-escape,
+  -bugprone-implicit-widening-of-multiplication-result,
+  -bugprone-macro-parentheses,
+  -bugprone-multi-level-implicit-pointer-conversion,
+  -bugprone-narrowing-conversions,
+  -bugprone-reserved-identifier,
+  -bugprone-signed-bitwise,
+  -bugprone-std-namespace-modification,
+  -bugprone-switch-missing-default-case,
+  clang-analyzer-*,
+  -clang-analyzer-security.insecureAPI.*,
+  -clang-analyzer-optin.*,
+  concurrency-*,
+  -concurrency-mt-unsafe,
+  cppcoreguidelines-slicing,
+  cppcoreguidelines-virtual-class-destructor,
+  misc-confusable-identifiers,
+  misc-definitions-in-headers,
+  misc-misleading-bidirectional,
+  misc-misleading-identifier,
+  misc-misplaced-const,
+  misc-new-delete-overloads,
+  misc-non-copyable-objects,
+  misc-redundant-expression,
+  misc-unconventional-assign-operator,
+  performance-*,
+  -performance-avoid-endl,
+  -performance-enum-size,
+  -performance-no-int-to-ptr,
+  readability-misleading-indentation,
+  readability-suspicious-call-argument,
+
+# Reported as errors: when one of these fires it is all but certainly a real bug.
+WarningsAsErrors: >
+  bugprone-assert-side-effect,
+  bugprone-bool-pointer-implicit-conversion,
+  bugprone-copy-constructor-init,
+  bugprone-dangling-handle,
+  bugprone-forwarding-reference-overload,
+  bugprone-incorrect-enable-if,
+  bugprone-infinite-loop,
+  bugprone-misplaced-operator-in-strlen-in-alloc,
+  bugprone-move-forwarding-reference,
+  bugprone-parent-virtual-call,
+  bugprone-sizeof-expression,
+  bugprone-string-literal-with-embedded-nul,
+  bugprone-suspicious-memset-usage,
+  bugprone-suspicious-semicolon,
+  bugprone-swapped-arguments,
+  bugprone-terminating-continue,
+  bugprone-undefined-memory-manipulation,
+  bugprone-unhandled-self-assignment,
+  bugprone-use-after-move,
+  bugprone-virtual-near-miss,
+  cppcoreguidelines-slicing,
+  misc-definitions-in-headers,
+  misc-misleading-bidirectional,
+  readability-misleading-indentation,
+
+# Erebus's own headers only; limine.h is vendored.
+HeaderFilterRegex: '/(kernel|klib|tests)/'
+ExcludeHeaderFilterRegex: '/kernel/include/boot/limine\.h$'
+SystemHeaders: false
 FormatStyle: none
-User: ''
+
 CheckOptions:
-  - key: hicpp-signed-bitwise.IgnorePositiveIntegerLiterals
-    value: 'true'
-  - key: readability-redundant-member-init.IgnoreBaseInCopyConstructors
+  - key: bugprone-assert-side-effect.AssertMacros
+    value: 'assert,KASSERT'
+  - key: bugprone-assert-side-effect.CheckFunctionCalls
+    value: 'false'
+  - key: bugprone-unused-return-value.AllowCastToVoid
     value: 'true'

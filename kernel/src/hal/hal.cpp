@@ -4,30 +4,35 @@
 
 namespace kernel::hw {
 namespace {
-void idle_generic(volatile std::uint32_t* runqueue_count) noexcept {
-  while (*runqueue_count == 0) wait_for_interrupt();
+// Whether initialize() turned on CR4.FSGSBASE. The GS base static calls are patched for the BSP,
+// so every AP has to match it before its first GS base write.
+bool g_fsgsbase = false;
+
+// The GS base in use right now. Its SWAPGS partner, IA32_KERNEL_GS_BASE, is 0xC0000102.
+constexpr std::uint32_t IA32_GS_BASE = 0xC0000101;
+
+void idle_generic(const volatile std::uint32_t* runqueue_count) noexcept {
+  irq::disable();
+  if (*runqueue_count == 0) wait_for_interrupt();
+  irq::enable();
 }
 
-void idle_mwait(volatile std::uint32_t* runqueue_count) noexcept {
-  while (*runqueue_count == 0) {
-    asm volatile("monitor"
-                 : /* No output */
-                 : "a"(runqueue_count) /* Address */, "c"(0) /* Extensions */, "d"(0) /* Hints */
-                 : "memory");
+void idle_mwait(const volatile std::uint32_t* runqueue_count) noexcept {
+  irq::disable();
 
-    if (*runqueue_count != 0) break;
+  // Address in RAX; no extensions (ECX) or hints (EDX).
+  asm volatile("monitor" : : "a"(runqueue_count), "c"(0), "d"(0) : "memory");
 
-    asm volatile("mwait"
-                 :                                    /* No Output */
-                 : "a"(0) /* C1 state hint */, "c"(1) /* Break on interrupts */
-                 : "memory");
+  // Re-check once the monitor is armed: a store that landed before it would not wake us.
+  if (*runqueue_count == 0) {
+    // C1 (EAX = 0). ECX bit 0 lets a masked interrupt end the wait; it is taken right after the
+    // STI below.
+    asm volatile("mwait" : : "a"(0), "c"(1) : "memory");
   }
+
+  irq::enable();
 }
 }  // namespace
-
-void pause(std::uint32_t, std::uint64_t) noexcept {
-  asm volatile("pause" : /* No Output */ : /* No Input */ : "memory");
-}
 
 void tpause(const std::uint32_t state, const std::uint64_t delay) noexcept {
   std::uint64_t target_tsc = read_tsc() + delay;
@@ -40,15 +45,19 @@ void tpause(const std::uint32_t state, const std::uint64_t delay) noexcept {
 DEFINE_STATIC_CALL(cpu_relax_impl, pause);
 REGISTER_STATIC_CALL_ALT(cpu_relax_impl, tpause, Feature::WAITPKG);
 
-DEFINE_STATIC_CALL(cpu_idle_loop, idle_generic);
-REGISTER_STATIC_CALL_ALT(cpu_idle_loop, idle_mwait, Feature::MONITOR, !Feature::HYPERVISOR);
+DEFINE_STATIC_CALL(cpu_idle, idle_generic);
+REGISTER_STATIC_CALL_ALT(cpu_idle, idle_mwait, Feature::MONITOR, !Feature::HYPERVISOR);
+
+void cpu_idle_loop(const volatile std::uint32_t* runqueue_count) noexcept {
+  while (true) {
+    cpu_idle(runqueue_count);
+    // Nothing to switch to until there is a scheduler.
+  }
+}
 
 namespace read {
 namespace {
-std::uint64_t legacy() noexcept {
-  constexpr std::uint32_t KERNEL_GS_BASE = 0xC0000101;
-  return msr(KERNEL_GS_BASE);
-}
+std::uint64_t legacy() noexcept { return msr(IA32_GS_BASE); }
 
 std::uint64_t rdgsbase() noexcept {
   std::uint64_t base;
@@ -66,16 +75,13 @@ REGISTER_STATIC_CALL_ALT(gs_base, rdgsbase, Feature::FSGSBASE);
 
 namespace write {
 namespace {
-void legacy(const std::uint64_t base) noexcept {
-  constexpr std::uint32_t KERNEL_GS_BASE = 0xC0000101;
-  msr(KERNEL_GS_BASE, base);
-}
+void legacy(const std::uint64_t base) noexcept { msr(IA32_GS_BASE, base); }
 
 void _wrgsbase(const std::uint64_t base) noexcept {
   asm volatile("wrgsbase %0"
                : /* No Output */
                : "r"(base)
-               : /* No Clobber */);
+               : "memory");
 }
 }  // namespace
 
@@ -84,7 +90,13 @@ REGISTER_STATIC_CALL_ALT(wrgsbase, _wrgsbase, Feature::FSGSBASE);
 }  // namespace write
 
 void initialize() noexcept {
-  const CpuInfo* cpu = profile_manager.get_current();
-  if (cpu->has(Feature::FSGSBASE)) write::cr4(read::cr4().with_fsgsbase());
+  g_fsgsbase = profile_manager.get_current()->has<Feature::FSGSBASE>();
+  initialize_secondary();
+}
+
+void initialize_secondary() noexcept {
+  if (g_fsgsbase) {
+    write::cr4(read::cr4().with_fsgsbase());
+  }
 }
 }  // namespace kernel::hw

@@ -12,6 +12,35 @@ enum class IoType : std::uint8_t {
   MMIO   // Memory-Mapped I/O
 };
 
+namespace mmio {
+/// @brief Reads a device register. A single access of exactly `sizeof(T)` bytes.
+///
+/// Device memory is mapped uncacheable, and x86 neither reorders nor speculates UC accesses, so
+/// no fence is needed against other MMIO or against ordinary memory accesses. The asm still
+/// keeps the *compiler* from moving ordinary loads and stores across the access.
+template <std::unsigned_integral T>
+[[nodiscard, gnu::always_inline]] inline T read(const std::uintptr_t addr) noexcept {
+  T val;
+  asm volatile("mov %1, %0"
+               : "=r"(val)
+               : "m"(*reinterpret_cast<const volatile T*>(addr))
+               : "memory");
+  return val;
+}
+
+/// @brief Writes a device register. A single access of exactly `sizeof(T)` bytes.
+template <std::unsigned_integral T>
+[[gnu::always_inline]] inline void write(const std::uintptr_t addr, const T val) noexcept {
+  asm volatile("mov %1, %0" : "=m"(*reinterpret_cast<volatile T*>(addr)) : "r"(val) : "memory");
+}
+
+/// @brief Orders write-combining and non-temporal stores before later stores.
+///
+/// Only needed when a device reads memory that was written through a WC mapping or with
+/// streaming stores (a framebuffer, say) before being told about it with an MMIO write.
+[[gnu::always_inline]] inline void write_barrier() noexcept { asm volatile("sfence" ::: "memory"); }
+}  // namespace mmio
+
 class MmioResource {
   memory::VirtualAddress m_base{};
 
@@ -22,21 +51,13 @@ class MmioResource {
   constexpr void set_base(memory::VirtualAddress addr) noexcept { m_base = addr; }
 
   template <std::unsigned_integral T>
-  [[gnu::always_inline]] void write(std::size_t offset, std::size_t val) const noexcept {
-    // Flush write-combining memory buffers
-    const memory::VirtualAddress addr = m_base + offset;
-    // sfence guarantees writes aren't held in write-combining buffers
-    // indefinitely
-    asm volatile("sfence" : /* No Output */ : /* No Input */ : "memory");
-    *reinterpret_cast<volatile T*>(addr.value()) = val;
+  [[gnu::always_inline]] void write(const std::size_t offset, const T val) const noexcept {
+    mmio::write<T>((m_base + offset).value(), val);
   }
 
   template <std::unsigned_integral T>
-  [[nodiscard, gnu::always_inline]] T read(std::size_t offset) const noexcept {
-    const memory::VirtualAddress addr = m_base + offset;
-    // lfence guarantees no speculative out-of-order execution precedes the read
-    asm volatile("lfence" : /* No Output */ : /* No Input */ : "memory");
-    return *reinterpret_cast<volatile T*>(addr.value());
+  [[nodiscard, gnu::always_inline]] T read(const std::size_t offset) const noexcept {
+    return mmio::read<T>((m_base + offset).value());
   }
 };
 
@@ -64,12 +85,10 @@ class IoResource {
       } else if constexpr (sizeof(T) == 4) {
         asm volatile("outl %0, %w1" ::"a"(val), "Nd"(port) : "memory");
       } else {
-        static_assert(sizeof(T) != sizeof(T), "x86-64 doesn't support 64-bit Port I/O");
+        static_assert(false, "x86-64 doesn't support 64-bit Port I/O");
       }
     } else {
-      // Flush write-combining memory buffers
-      asm volatile("sfence" : /* No Output */ : /* No Input */ : "memory");
-      *reinterpret_cast<volatile T*>(m_base + (offset * m_stride)) = val;
+      mmio::write<T>(m_base + (offset * m_stride), val);
     }
   }
 
@@ -86,14 +105,12 @@ class IoResource {
       } else if constexpr (sizeof(T) == 4) {
         asm volatile("inl %w1, %0" : "=a"(ret) : "Nd"(port) : "memory");
       } else {
-        static_assert(sizeof(T) != sizeof(T), "x86-64 doesn't support 64-bit Port I/O");
+        static_assert(false, "x86-64 doesn't support 64-bit Port I/O");
       }
 
       return ret;
     } else {
-      // Prevent speculative out-of-order reading
-      asm volatile("lfence" : /* No Output */ : /* No Input */ : "memory");
-      return *reinterpret_cast<volatile T*>(m_base + (offset * m_stride));
+      return mmio::read<T>(m_base + (offset * m_stride));
     }
   }
 };

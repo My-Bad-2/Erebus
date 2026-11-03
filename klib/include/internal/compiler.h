@@ -1,11 +1,24 @@
+/// @file compiler.h
+/// @brief Macros that let the klib C headers compile as C and as C++.
 #pragma once
 
-#ifndef __cplusplus
-#define noexcept
-#endif
+#ifdef __cplusplus
 
-#ifndef __cplusplus
-#define constexpr_func static inline
+#define KLIB_BEGIN_DECLS \
+  namespace klib {       \
+  extern "C" {
+#define KLIB_END_DECLS \
+  }                    \
+  }
+
+/// @brief Marks a header-defined function constexpr in C++, static inline in C.
+#define KLIB_INLINE constexpr
+
 #else
-#define constexpr_func constexpr
+
+#define KLIB_BEGIN_DECLS
+#define KLIB_END_DECLS
+#define KLIB_INLINE static inline
+#define noexcept
+
 #endif

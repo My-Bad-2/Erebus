@@ -1,9 +1,15 @@
 #include "memory/memory.hpp"
 #include "memory/pmm.hpp"
 #include "memory/vmm/pagemap/pagemap.hpp"
-#include "utils/logger.hpp"
 
 namespace kernel::memory::vmm {
+namespace {
+[[nodiscard]] bool user_in_kernel_half(const VirtualAddress virt,
+                                       const AccessFlags flags) noexcept {
+  return virt.is_upper_half() && has_flag(flags, AccessFlags::User);
+}
+}  // namespace
+
 std::expected<void, Error> PageMap::map_1gb_as_2mb(const VirtualAddress virt,
                                                    const PhysicalAddress phys,
                                                    const AccessFlags flags, const CacheMode cache,
@@ -17,71 +23,69 @@ std::expected<void, Error> PageMap::map_1gb_as_2mb(const VirtualAddress virt,
     return std::unexpected(pdpte_res.error());
   }
 
+  const AccessFlags lflags = leaf_flags(virt, flags);
+  const auto entry_for = [&](const std::uint32_t i) {
+    const PhysicalAddress offset_phys =
+        phys + static_cast<PhysicalAddress::OffsetType>(i * PAGE_SIZE_2MB);
+    return PageTableEntry::build_schema(offset_phys, lflags, cache, PageSize::Size2M, pkey);
+  };
+
   PageTableEntry* pdpte = *pdpte_res;
   while (true) {
     PTEntry pdpte_entry = pdpte->load(std::memory_order_acquire);
 
-    // Case 1: The entire 1GB region's directory is unmapped. We create the Page
-    // Directory.
+    // Nothing there yet: build a complete page directory and install it in one go.
     if (!pdpte_entry.get_present()) [[likely]] {
       const auto new_page_res = pmm::alloc_pages_zeroed(pmm::PageMobility::Unmovable, 0);
       if (!new_page_res) [[unlikely]] {
         return std::unexpected(Error::OutOfMemory);
       }
 
-      const PhysicalAddress new_phys{*new_page_res};
-      auto* pd_table = DirectMap::phys_to_virt(new_phys).as<PageTableEntry>();
-
+      auto* pd_table = DirectMap::phys_to_virt(*new_page_res).as<PageTableEntry>();
       for (std::uint32_t i = 0; i < MAX_PAGE_ENTRIES; ++i) {
-        const PhysicalAddress offset_phys = phys + (i * PAGE_SIZE_2MB);
-        const PTEntry child_schema =
-            PageTableEntry::build_schema(offset_phys, flags, cache, PageSize::Size2M, pkey);
-        pd_table[i].store(child_schema, std::memory_order_relaxed);
+        pd_table[i].store(entry_for(i), std::memory_order_relaxed);
       }
 
-      const PTEntry dir_schema = PageTableEntry::build_directory(new_phys);
+      const PTEntry dir_schema =
+          PageTableEntry::build_directory(*new_page_res, !virt.is_upper_half());
       if (pdpte->cas(pdpte_entry, dir_schema, std::memory_order_release, std::memory_order_acquire))
           [[likely]] {
         return {};
       }
 
-      // CAS failed: Another thread mapped this directory concurrently. Clean up
-      // and try again.
-      pmm::free_pages(new_phys, 0);
+      // Another CPU installed something first; look again.
+      pmm::free_pages(*new_page_res, 0);
       continue;
     }
 
-    // Case 2: The region is already mapped as a single 1GB Huge Page
     if (pdpte_entry.get_huge()) [[unlikely]] {
       return std::unexpected(Error::AlreadyMapped);
     }
 
-    // Case 3: The directory already exists. We must populate its 512 entries.
-    const PhysicalAddress pd_phys{pdpte_entry.get_pfn_4k() << PAGE_SHIFT_4KB};
-    auto* pd_table = DirectMap::phys_to_virt(pd_phys).as<PageTableEntry>();
+    // A directory already exists: fill all 512 slots, or none.
+    PageTableEntry* pd_table =
+        DirectMap::phys_to_virt(PhysicalAddress{pdpte_entry.get_pfn_4k() << PAGE_SHIFT_4KB})
+            .as<PageTableEntry>();
 
     for (std::uint32_t i = 0; i < MAX_PAGE_ENTRIES; ++i) {
-      while (true) {
-        PTEntry expected = pd_table[i].load(std::memory_order_acquire);
+      PTEntry expected = pd_table[i].load(std::memory_order_acquire);
+      bool installed = false;
 
-        if (expected.get_present()) [[unlikely]] {
-          // Rollback previously mapped entries in this batch
-          for (std::uint32_t j = 0; j < i; ++j) {
-            const VirtualAddress rollback_virt = virt + (j * PAGE_SIZE_2MB);
-            [[maybe_unused]] auto _ = unmap(rollback_virt, PageSize::Size2M);
-          }
-
-          return std::unexpected(Error::AlreadyMapped);
-        }
-
-        const PhysicalAddress offset_phys = phys + (i * PAGE_SIZE_2MB);
-        const PTEntry desired =
-            PageTableEntry::build_schema(offset_phys, flags, cache, PageSize::Size2M, pkey);
-
-        if (pd_table[i].cas(expected, desired, std::memory_order_release,
+      while (!expected.get_present()) {
+        if (pd_table[i].cas(expected, entry_for(i), std::memory_order_release,
                             std::memory_order_acquire)) [[likely]] {
-          break;  // Successfully mapped this 2MB chunk, move to next
+          installed = true;
+          break;
         }
+      }
+
+      if (!installed) [[unlikely]] {
+        for (std::uint32_t j = 0; j < i; ++j) {
+          [[maybe_unused]] auto _ = unmap(
+              virt + static_cast<VirtualAddress::OffsetType>(j * PAGE_SIZE_2MB), PageSize::Size2M);
+        }
+
+        return std::unexpected(Error::AlreadyMapped);
       }
     }
 
@@ -92,8 +96,7 @@ std::expected<void, Error> PageMap::map_1gb_as_2mb(const VirtualAddress virt,
 std::expected<void, Error> PageMap::map(const VirtualAddress virt, const PhysicalAddress phys,
                                         const AccessFlags flags, const CacheMode cache,
                                         const std::uint8_t pkey, const PageSize size) noexcept {
-  const bool is_kernel_addr = (virt.value() >= DirectMap::s_hhdm_base);
-  if (is_kernel_addr && has_flag(flags, AccessFlags::User)) [[unlikely]] {
+  if (user_in_kernel_half(virt, flags)) [[unlikely]] {
     return std::unexpected(Error::SecurityViolation);
   }
 
@@ -102,7 +105,7 @@ std::expected<void, Error> PageMap::map(const VirtualAddress virt, const Physica
     return std::unexpected(Error::InvalidAlignment);
   }
 
-  if (size == PageSize::Size1G && !supports_1gb_pages) [[unlikely]] {
+  if (size == PageSize::Size1G && !g_paging_features.huge_1g) [[unlikely]] {
     return map_1gb_as_2mb(virt, phys, flags, cache, pkey);
   }
 
@@ -112,95 +115,106 @@ std::expected<void, Error> PageMap::map(const VirtualAddress virt, const Physica
   }
 
   PageTableEntry* pte = *pte_res;
+  const PTEntry desired =
+      PageTableEntry::build_schema(phys, leaf_flags(virt, flags), cache, size, pkey);
 
-  while (true) {
-    PTEntry expected = pte->load(std::memory_order_acquire);
-    if (expected.get_present()) [[unlikely]] {
-      return std::unexpected(Error::AlreadyMapped);
-    }
-
-    const PTEntry desired = PageTableEntry::build_schema(phys, flags, cache, size, pkey);
+  PTEntry expected = pte->load(std::memory_order_acquire);
+  while (!expected.get_present()) {
     if (pte->cas(expected, desired, std::memory_order_release, std::memory_order_acquire))
         [[likely]] {
-      return {};  // Successfully mapped
+      return {};
     }
   }
+
+  return std::unexpected(Error::AlreadyMapped);
 }
 
-[[nodiscard]] std::expected<void, Error> PageMap::map_range(
-    const VirtualAddress start_virt, const PhysicalAddress start_phys, const std::size_t size_bytes,
-    const AccessFlags flags, const CacheMode cache, const std::uint8_t pkey) noexcept {
+std::expected<void, Error> PageMap::map_range(const VirtualAddress start_virt,
+                                              const PhysicalAddress start_phys,
+                                              const std::size_t size_bytes, const AccessFlags flags,
+                                              const CacheMode cache,
+                                              const std::uint8_t pkey) noexcept {
+  if (user_in_kernel_half(start_virt, flags)) [[unlikely]] {
+    return std::unexpected(Error::SecurityViolation);
+  }
+
   if (!start_virt.is_aligned(PAGE_SIZE) || !start_phys.is_aligned(PAGE_SIZE) ||
       !utils::maths::is_aligned(size_bytes, PAGE_SIZE)) [[unlikely]] {
     return std::unexpected(Error::InvalidAlignment);
   }
 
+  const AccessFlags lflags = leaf_flags(start_virt, flags);
+
   VirtualAddress curr_virt = start_virt;
   PhysicalAddress curr_phys = start_phys;
   std::size_t remaining = size_bytes;
 
+  const auto fail = [&](const Error err) -> std::expected<void, Error> {
+    [[maybe_unused]] auto _ = unmap_range(start_virt, size_bytes - remaining);
+    return std::unexpected(err);
+  };
+
+  const auto advance = [&](const std::size_t bytes) {
+    curr_virt += static_cast<VirtualAddress::OffsetType>(bytes);
+    curr_phys += static_cast<PhysicalAddress::OffsetType>(bytes);
+    remaining -= bytes;
+  };
+
+  // The biggest page that both addresses are aligned for and that still fits.
+  const auto best_size = [&]() {
+    for (const PageSize size : {PageSize::Size1G, PageSize::Size2M}) {
+      const std::size_t bytes = size_to_bytes(size);
+      if (remaining >= bytes && curr_virt.is_aligned(bytes) && curr_phys.is_aligned(bytes)) {
+        return size;
+      }
+    }
+
+    return PageSize::Size4K;
+  };
+
   while (remaining > 0) {
-    if (remaining >= PAGE_SIZE_1GB && curr_virt.is_aligned(PAGE_SIZE_1GB) &&
-        curr_phys.is_aligned(PAGE_SIZE_1GB)) {
-      const auto res = map(curr_virt, curr_phys, flags, cache, pkey, PageSize::Size1G);
-      if (!res) [[unlikely]] {
-        [[maybe_unused]] auto _ = unmap_range(start_virt, size_bytes - remaining);
-        return std::unexpected(res.error());
+    if (const PageSize huge = best_size(); huge != PageSize::Size4K) {
+      if (const auto res = map(curr_virt, curr_phys, flags, cache, pkey, huge); !res) [[unlikely]] {
+        return fail(res.error());
       }
 
-      curr_virt += PAGE_SIZE_1GB;
-      curr_phys += PAGE_SIZE_1GB;
-      remaining -= PAGE_SIZE_1GB;
+      advance(size_to_bytes(huge));
       continue;
     }
 
-    if (remaining >= PAGE_SIZE_2MB && curr_virt.is_aligned(PAGE_SIZE_2MB) &&
-        curr_phys.is_aligned(PAGE_SIZE_2MB)) {
-      const auto res = map(curr_virt, curr_phys, flags, cache, pkey, PageSize::Size2M);
-      if (!res) [[unlikely]] {
-        [[maybe_unused]] auto _ = unmap_range(start_virt, size_bytes - remaining);
-        return std::unexpected(res.error());
-      }
-
-      curr_virt += PAGE_SIZE_2MB;
-      curr_phys += PAGE_SIZE_2MB;
-      remaining -= PAGE_SIZE_2MB;
-      continue;
-    }
-
-    const std::size_t bytes_to_pml1_boundary = PAGE_SIZE_2MB - curr_virt.page_offset(PAGE_SIZE_2MB);
-    const std::size_t batch_bytes = std::min(remaining, bytes_to_pml1_boundary);
-    const std::size_t pages_in_batch = batch_bytes / PAGE_SIZE;
+    // 4 KiB pages up to the end of the current page table: one walk for the whole batch.
+    const std::size_t bytes_to_table_end = PAGE_SIZE_2MB - curr_virt.page_offset(PAGE_SIZE_2MB);
+    const std::size_t batch_bytes = std::min(remaining, bytes_to_table_end);
 
     const auto pt_res = walk(curr_virt, true, PageSize::Size4K);
     if (!pt_res) [[unlikely]] {
-      [[maybe_unused]] auto _ = unmap_range(start_virt, size_bytes - remaining);
-      return std::unexpected(pt_res.error());
+      return fail(pt_res.error());
     }
 
     PageTableEntry* pte = *pt_res;
-    for (std::size_t i = 0; i < pages_in_batch; ++i) {
-      while (true) {
-        PTEntry expected = pte[i].load(std::memory_order_acquire);
-        if (expected.get_present()) [[unlikely]] {
-          const std::size_t mapped_so_far = (size_bytes - remaining) + (i * PAGE_SIZE);
-          [[maybe_unused]] auto _ = unmap_range(start_virt, mapped_so_far);
-          return std::unexpected(Error::AlreadyMapped);
-        }
+    for (std::size_t i = 0; i < batch_bytes / PAGE_SIZE; ++i) {
+      const PhysicalAddress offset_phys =
+          curr_phys + static_cast<PhysicalAddress::OffsetType>(i * PAGE_SIZE);
+      const PTEntry desired =
+          PageTableEntry::build_schema(offset_phys, lflags, cache, PageSize::Size4K, pkey);
 
-        const PhysicalAddress offset_phys = curr_phys + (i * PAGE_SIZE);
-        const PTEntry desired =
-            PageTableEntry::build_schema(offset_phys, flags, cache, PageSize::Size4K, pkey);
+      PTEntry expected = pte[i].load(std::memory_order_acquire);
+      bool installed = false;
+      while (!expected.get_present()) {
         if (pte[i].cas(expected, desired, std::memory_order_release, std::memory_order_acquire))
             [[likely]] {
+          installed = true;
           break;
         }
       }
+
+      if (!installed) [[unlikely]] {
+        remaining -= i * PAGE_SIZE;  // so fail() also undoes this batch's pages
+        return fail(Error::AlreadyMapped);
+      }
     }
 
-    curr_virt += batch_bytes;
-    curr_phys += batch_bytes;
-    remaining -= batch_bytes;
+    advance(batch_bytes);
   }
 
   return {};

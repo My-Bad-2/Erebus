@@ -1,3 +1,11 @@
+/// @file address.hpp
+/// @brief Strongly typed physical/virtual addresses and the higher-half direct map.
+///
+/// Physical and virtual addresses are both just integers to the CPU, which makes them very easy
+/// to mix up. The two wrappers here are deliberately not convertible into each other: the only
+/// sanctioned bridge is DirectMap, which translates between a physical address and its alias in
+/// the HHDM (the linear mapping of all RAM that Limine sets up and the VMM later rebuilds).
+
 #pragma once
 
 #include <compare>
@@ -8,6 +16,11 @@
 #include "utils/maths.hpp"
 
 namespace kernel::memory {
+/// @brief A physical (bus) address.
+///
+/// Arithmetic is limited to adding or subtracting byte offsets and taking the distance between
+/// two addresses. Constructing one from a pointer is explicitly deleted: a pointer is always a
+/// virtual address, and silently treating it as physical is a classic source of bugs.
 class PhysicalAddress {
  public:
   using ValueType = std::uintptr_t;
@@ -45,19 +58,10 @@ class PhysicalAddress {
     return PhysicalAddress{addr.m_address - offset};
   }
 
+  /// @brief Distance in bytes between two physical addresses.
   [[nodiscard]] friend constexpr OffsetType operator-(const PhysicalAddress lhs,
                                                       const PhysicalAddress rhs) noexcept {
     return lhs.m_address - rhs.m_address;
-  }
-
-  constexpr PhysicalAddress& operator+=(const PhysicalAddress other) noexcept {
-    m_address += other.m_address;
-    return *this;
-  }
-
-  constexpr PhysicalAddress& operator-=(const PhysicalAddress other) noexcept {
-    m_address -= other.m_address;
-    return *this;
   }
 
   constexpr PhysicalAddress& operator+=(const OffsetType offset) noexcept {
@@ -75,19 +79,27 @@ class PhysicalAddress {
     return PhysicalAddress{addr.m_address & mask};
   }
 
+  /// @pre @p alignment is a power of two.
   [[nodiscard]] constexpr PhysicalAddress align_up(const ValueType alignment) const noexcept {
     return PhysicalAddress{utils::maths::align_up(m_address, alignment)};
   }
 
+  /// @pre @p alignment is a power of two.
   [[nodiscard]] constexpr PhysicalAddress align_down(const ValueType alignment) const noexcept {
     return PhysicalAddress{utils::maths::align_down(m_address, alignment)};
   }
 
+  /// @pre @p alignment is a power of two.
   [[nodiscard]] constexpr bool is_aligned(const ValueType alignment) const noexcept {
     return utils::maths::is_aligned(m_address, alignment);
   }
 };
 
+/// @brief A linear (virtual) address.
+///
+/// Besides the usual arithmetic this knows how to split itself into page-table indices. The
+/// index helpers follow the Intel naming where PML1 is the page table and PML4/PML5 is the root,
+/// so `pml<N>_index()` is the slot used at paging level N.
 class VirtualAddress {
  public:
   using ValueType = std::uintptr_t;
@@ -111,12 +123,21 @@ class VirtualAddress {
   [[nodiscard]] constexpr ValueType value() const noexcept { return m_address; }
 
   [[nodiscard]] constexpr explicit operator bool() const noexcept { return m_address != 0; }
+  [[nodiscard]] constexpr bool is_null() const noexcept { return m_address == 0; }
 
+  /// @brief True for addresses in the kernel (upper) half of the canonical address space.
+  ///
+  /// Bit 63 is set for every canonical higher-half address with both 4- and 5-level paging, so
+  /// this works without knowing which one is active.
+  [[nodiscard]] constexpr bool is_upper_half() const noexcept { return (m_address >> 63) != 0; }
+
+  /// @brief Sign-extends bit 47 into the upper bits (4-level canonical form).
   [[nodiscard]] constexpr VirtualAddress canonicalize() const noexcept {
     const auto signed_addr = static_cast<std::int64_t>(m_address << 16) >> 16;
     return VirtualAddress{static_cast<ValueType>(signed_addr)};
   }
 
+  /// @brief Offset of this address inside a naturally aligned block of @p align bytes.
   [[nodiscard]] constexpr ValueType page_offset(const std::size_t align = 0x1000) const noexcept {
     return m_address & (align - 1);
   }
@@ -137,8 +158,6 @@ class VirtualAddress {
     return (m_address >> 48) & 0x1FF;
   }
 
-  bool is_null() const noexcept { return m_address == 0; }
-
   [[nodiscard]] friend constexpr auto operator<=>(VirtualAddress,
                                                   VirtualAddress) noexcept = default;
 
@@ -147,51 +166,66 @@ class VirtualAddress {
     return VirtualAddress{addr.m_address + offset};
   }
 
-  // FIXED: Added missing subtraction operator for offsets
   [[nodiscard]] friend constexpr VirtualAddress operator-(const VirtualAddress addr,
                                                           const OffsetType offset) noexcept {
     return VirtualAddress{addr.m_address - offset};
   }
 
+  /// @brief Distance in bytes between two virtual addresses.
   [[nodiscard]] friend constexpr OffsetType operator-(const VirtualAddress lhs,
                                                       const VirtualAddress rhs) noexcept {
     return lhs.m_address - rhs.m_address;
   }
 
+  /// @pre @p alignment is a power of two.
   [[nodiscard]] constexpr VirtualAddress align_down(const ValueType alignment) const noexcept {
     return VirtualAddress{utils::maths::align_down(m_address, alignment)};
   }
 
+  /// @pre @p alignment is a power of two.
   [[nodiscard]] constexpr VirtualAddress align_up(const ValueType alignment) const noexcept {
     return VirtualAddress{utils::maths::align_up(m_address, alignment)};
   }
 
+  /// @pre @p alignment is a power of two.
   [[nodiscard]] constexpr bool is_aligned(const ValueType alignment) const noexcept {
     return utils::maths::is_aligned(m_address, alignment);
   }
 
   constexpr VirtualAddress& operator+=(const OffsetType size) noexcept {
-    this->m_address += size;
+    m_address += size;
     return *this;
   }
 
   constexpr VirtualAddress& operator-=(const OffsetType size) noexcept {
-    this->m_address -= size;
+    m_address -= size;
     return *this;
   }
 };
 
+/// @brief Translation between physical memory and its higher-half direct map (HHDM).
+///
+/// Every byte of physical memory the kernel manages is reachable at `phys + base()`. The base is
+/// handed to us by Limine and recorded once during memory::initialize(); after that both
+/// directions are a single add/subtract.
 class DirectMap {
- public:
   inline static std::uintptr_t s_hhdm_base{0};
 
+ public:
   static void initialize(const std::uintptr_t base) noexcept { s_hhdm_base = base; }
 
-  static VirtualAddress phys_to_virt(const PhysicalAddress addr) noexcept {
+  [[nodiscard]] static std::uintptr_t base() noexcept { return s_hhdm_base; }
+
+  [[nodiscard]] static VirtualAddress phys_to_virt(const PhysicalAddress addr) noexcept {
     return VirtualAddress{addr.value() + s_hhdm_base};
   }
 
-  static std::optional<PhysicalAddress> virt_to_phys(const VirtualAddress addr) noexcept {
+  /// @brief Inverse of phys_to_virt().
+  /// @return std::nullopt if @p addr lies below the direct map. Addresses above the end of
+  ///         physical memory are not rejected here; callers that feed the result to the PMM get
+  ///         a bounds check from pfn_to_page().
+  [[nodiscard]] static std::optional<PhysicalAddress> virt_to_phys(
+      const VirtualAddress addr) noexcept {
     if (addr.value() < s_hhdm_base) {
       return std::nullopt;
     }

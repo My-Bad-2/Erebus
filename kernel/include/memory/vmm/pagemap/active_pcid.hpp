@@ -1,13 +1,23 @@
+/// @file active_pcid.hpp
+/// @brief Tracks which CPUs may hold TLB entries for a page map.
+
 #pragma once
 
 #include <atomic>
+#include <bit>
 #include <cstdint>
 #include <memory>
 
-#include "boot/boot.hpp"
+#include "hal/smp/smp.hpp"
 #include "utils/maths.hpp"
 
 namespace kernel::hw {
+/// @brief Bitmap of CPUs that loaded a page map, plus the PCID each of them used.
+///
+/// A CPU is marked when it loads the map and is never unmarked eagerly: with PCIDs a CPU keeps
+/// translations around after switching away, so "may still have entries" is the only safe
+/// question to ask. Shootdowns go to every marked CPU, and one that turns out to hold nothing
+/// simply has nothing to flush.
 class ActivePcidTracker {
   std::uint32_t m_blocks{};
   std::unique_ptr<std::atomic<std::uint64_t>[]> m_mask;
@@ -15,7 +25,7 @@ class ActivePcidTracker {
 
  public:
   ActivePcidTracker() noexcept {
-    const std::size_t total_cpus = boot::mp_request.response->cpu_count;
+    const std::size_t total_cpus = smp::possible_cpus();
     m_blocks = utils::maths::div_round_up(total_cpus, 64u);
 
     m_mask.reset(new std::atomic<std::uint64_t>[m_blocks] {});
@@ -40,6 +50,7 @@ class ActivePcidTracker {
     return (m_mask[cpu_id / 64].load(std::memory_order_relaxed) & (1ul << (cpu_id % 64))) != 0;
   }
 
+  /// @brief Calls `callback(cpu_id, pcid)` for every marked CPU.
   template <typename Func>
   void for_each_active_cpu(Func&& callback) const noexcept {
     for (std::uint32_t i = 0; i < m_blocks; ++i) {

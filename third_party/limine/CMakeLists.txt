@@ -1,41 +1,22 @@
-cmake_minimum_required(VERSION 3.18)
+# ==============================================================================
+# Limine: prebuilt bootloader binaries, downloaded and checked at configure time.
+# ==============================================================================
 
-set(LIMINE_BINARY_URL "https://github.com/Limine-Bootloader/Limine/releases/download/v12.9.1/limine-binary.tar.xz"
-		CACHE STRING "URL to the pre-built Limine binary archive")
+include(FetchContent)
 
-set(LIMINE_BINARY_SHA256 "ce972a05e9d1973dc9b725f9130bd15af01add0eb3a7f90c118ac5cfe21c17b8"
-		CACHE STRING "Expected SHA256 hash of the archive")
+set(EREBUS_LIMINE_URL
+    "https://github.com/Limine-Bootloader/Limine/releases/download/v12.9.6/limine-binary.tar.gz"
+    CACHE STRING "Archive of prebuilt Limine binaries")
+set(EREBUS_LIMINE_SHA256 "b38aabb042b0c0f9f562b7741be3c1204838d7bbacfa78bb411c674bd5b984ee"
+    CACHE STRING "SHA-256 of that archive")
 
-set(LIMINE_ARCHIVE_FILE "${CMAKE_CURRENT_BINARY_DIR}/limine-binaries.tar.xz")
-set(LIMINE_EXTRACT_ROOT "${CMAKE_CURRENT_BINARY_DIR}/limine-extracted")
+FetchContent_Declare(limine
+    URL "${EREBUS_LIMINE_URL}"
+    URL_HASH "SHA256=${EREBUS_LIMINE_SHA256}"
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    DOWNLOAD_NO_PROGRESS TRUE
+)
+FetchContent_MakeAvailable(limine)
 
-if (NOT EXISTS "${LIMINE_EXTRACT_ROOT}")
-	message(STATUS "Limine: Downloading pre-built binaries...")
-
-	file(DOWNLOAD "${LIMINE_BINARY_URL}" "${LIMINE_ARCHIVE_FILE}"
-			EXPECTED_HASH SHA256=${LIMINE_BINARY_SHA256}
-			STATUS DOWNLOAD_STATUS
-	)
-
-	list(GET DOWNLOAD_STATUS 0 STATUS_CODE)
-	list(GET DOWNLOAD_STATUS 1 STATUS_MSG)
-
-	if (NOT STATUS_CODE EQUAL 0)
-		message(FATAL_ERROR "Limine: Download failed with error: ${STATUS_MSG}")
-	endif ()
-
-	message(STATUS "Limine: Extracting archive...")
-
-	file(ARCHIVE_EXTRACT
-			INPUT "${LIMINE_ARCHIVE_FILE}"
-			DESTINATION "${LIMINE_EXTRACT_ROOT}"
-	)
-
-	message("Limine: Extraction complete.")
-endif ()
-
-file(GLOB LIMINE_INNER_DIR "${LIMINE_EXTRACT_ROOT}/*")
-set(LIMINE_DIR "${LIMINE_INNER_DIR}" PARENT_SCOPE)
-set(LIMINE_DIR "${LIMINE_INNER_DIR}")
-message(STATUS "Limine: Binaries available at -> ${LIMINE_DIR}")
-
+set(LIMINE_DIR "${limine_SOURCE_DIR}" PARENT_SCOPE)
+message(STATUS "Limine: ${limine_SOURCE_DIR}")

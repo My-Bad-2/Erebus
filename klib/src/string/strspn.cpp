@@ -1,71 +1,49 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "../include/string.hpp"
 #include "string.h"
 
 namespace klib {
 namespace {
-template <bool AcceptSet>
-[[gnu::always_inline]] std::size_t span_impl(const char* dest, const char* src) noexcept {
-  using namespace string;
-  std::uint64_t map[4] = {0, 0, 0, 0};
+// A 256-bit set of byte values, built once per call so the scan costs one bit test per byte.
+class ByteSet {
+  std::uint64_t m_bits[4]{};
 
-  // For strcspn, we must stop at the null terminator. By forcing the \0 bit
-  // to be part of the "reject" set, we eliminate the `if (c == '\0`)`
-  // branch.
-  if constexpr (!AcceptSet) {
-    map[0] = 1UL;
+ public:
+  constexpr void add(const unsigned char c) noexcept {
+    m_bits[c >> 6] |= std::uint64_t{1} << (c & 63);
   }
 
-  for (const unsigned char* s = reinterpret_cast<const unsigned char*>(src); *s; ++s) {
-    map[*s >> 6] |= (1UL << (*s & 63));
+  [[nodiscard]] constexpr bool contains(const unsigned char c) const noexcept {
+    return (m_bits[c >> 6] >> (c & 63)) & 1;
+  }
+};
+
+// Length of the leading run of `str` whose bytes are all in `chars` (Accept) or all outside it.
+template <bool Accept>
+std::size_t span(const char* str, const char* chars) noexcept {
+  ByteSet set;
+  for (auto* c = reinterpret_cast<const unsigned char*>(chars); *c != 0; ++c) {
+    set.add(*c);
   }
 
-  const auto base = reinterpret_cast<std::uintptr_t>(dest);
+  // The terminator is never in the set, so it ends an accepting run on its own; for a rejecting
+  // run, putting it in the set does the same.
+  if constexpr (!Accept) {
+    set.add(0);
+  }
+
+  const auto* s = reinterpret_cast<const unsigned char*>(str);
   std::size_t len = 0;
-
-  const std::uint32_t offset = base & 7UL;
-  std::uintptr_t current = base - offset;
-
-  std::uint64_t w = unaligned_load<std::uint64_t>(reinterpret_cast<const void*>(current));
-  w >>= (offset * 8);
-
-  for (std::uint32_t i = offset; i < 8; ++i) {
-    const unsigned char c = w & 0xFF;
-    const bool in_set = (map[c >> 6] & (1ULL << (c & 63))) != 0;
-
-    if (in_set != AcceptSet) {
-      return len;
-    }
-
+  while (set.contains(s[len]) == Accept) {
     ++len;
-    w >>= 8;
   }
 
-  current += 8;
-
-  while (true) {
-    w = string::unaligned_load<std::uint64_t>(reinterpret_cast<const void*>(current));
-
-    for (std::uint32_t i = 0; i < 8; ++i) {
-      const unsigned char c = w & 0xFF;
-      const bool in_set = (map[c >> 6] & (1ULL << (c & 63))) != 0;
-
-      if (in_set != AcceptSet) {
-        return len;
-      }
-
-      ++len;
-      w >>= 8;
-    }
-
-    current += 8;
-  }
+  return len;
 }
 }  // namespace
 
-size_t strspn(const char* dest, const char* src) noexcept { return span_impl<true>(dest, src); }
+size_t strspn(const char* str, const char* accept) noexcept { return span<true>(str, accept); }
 
-size_t strcspn(const char* dest, const char* src) noexcept { return span_impl<false>(dest, src); }
+size_t strcspn(const char* str, const char* reject) noexcept { return span<false>(str, reject); }
 }  // namespace klib

@@ -1,8 +1,12 @@
+/// @file vma.hpp
+/// @brief Virtual memory areas and the address spaces made of them.
+
 #pragma once
 
 #include <cstdint>
 
 #include "memory/vmm/pagemap/flags.hpp"
+#include "memory/vmm/pagemap/tlb.hpp"
 #include "utils/bplus_tree.hpp"
 #include "vm_object.hpp"
 
@@ -20,6 +24,7 @@ enum class NUMAPolicy : std::uint8_t {
   FirstTouch = 2,
 };
 
+/// @brief Packed attributes of a VMA.
 class VMAFlags {
   std::uint64_t m_data;
 
@@ -29,18 +34,23 @@ class VMAFlags {
 
   void clear() noexcept { m_data = 0; }
 
-  BF_RW(AccessFlags, access, 0, 16)  // AccessFlags
-  BF_RW(CacheMode, cache, 16, 3)     // CacheMode
-  BF_RW(PageSize, page_size, 19, 2)  // PageSize
-  BF_RW(VMAType, type, 21, 4)        // VMAType
-  BF_RW(NUMAPolicy, numa, 25, 3)     // NUMAPolicy
+  BF_RW(AccessFlags, access, 0, 16)
+  BF_RW(CacheMode, cache, 16, 3)
+  BF_RW(PageSize, page_size, 19, 2)
+  BF_RW(VMAType, type, 21, 4)
+  BF_RW(NUMAPolicy, numa, 25, 3)
 
   BF_BIT_RW(is_locked, 28)  // Excluded from swap
-  BF_BIT_RW(is_wired, 29)   // Pinned in memory
+  BF_BIT_RW(is_wired, 29)   // Pinned in memory and never faulted in (MMIO, aliases)
 
   BF_RW(std::uint8_t, pkey, 30, 4)  // Protection key
 };
 
+/// @brief A contiguous range `[start, end)` of an address space with uniform attributes.
+///
+/// Pages of the range come from `vm_object`, page `object_offset` onwards, in units of the VMA's
+/// page size. Wired VMAs (MMIO, aliases) have no object: their page tables are filled when they
+/// are created and they never take faults.
 struct alignas(std::hardware_destructive_interference_size) VMArea {
   VirtualAddress start;
   VirtualAddress end;
@@ -60,13 +70,36 @@ struct alignas(std::hardware_destructive_interference_size) VMArea {
   }
 
   [[nodiscard]] std::size_t size_bytes() const noexcept { return end.value() - start.value(); }
+
+  [[nodiscard]] std::size_t page_bytes() const noexcept {
+    return get_page_bytes(flags.get_page_size());
+  }
 };
 
+/// @brief A set of non-overlapping VMAs plus the page tables that cache their translations.
+///
+/// VMAs are kept twice: in a B+ tree keyed by start address, for lookups, and in a sorted doubly
+/// linked list, for walking neighbours. Both are protected by `m_as_lock`. Page faults only need
+/// it shared (the page tables and VM objects synchronise on their own); everything that changes
+/// the set of VMAs takes it exclusively.
+///
+/// Anonymous memory is demand paged unless AccessFlags::Populate is given. Demand-paged memory
+/// must not be touched with interrupts disabled: the fault may have to wait for a CPU that is
+/// itself waiting for this one to answer a TLB shootdown.
+///
+/// New ranges are placed in one of two 32 TiB regions (one for "heap", one for "mmap" style
+/// allocations). Each region has a bump pointer that moves up with a random gap after every
+/// allocation, so freed ranges are not handed out again straight away. Once the bump pointer
+/// reaches the end of its region the search starts over from the bottom and takes the first
+/// hole that fits.
 class AddressSpace {
-  static inline heap::KmemCache* s_vmo_cache = nullptr;
   static inline heap::KmemCache* s_vma_cache = nullptr;
 
-  utils::BPlusTree<std::uint64_t, VMArea*, 256> m_vma_tree;
+  /// How far a stack VMA may grow downwards.
+  static constexpr std::size_t MAX_STACK_BYTES = 4 * PAGE_SIZE_2MB;
+
+  // m_as_lock already serialises every access, so the tree goes without a lock of its own.
+  utils::BPlusTree<std::uint64_t, VMArea*, 256, utils::NullLock> m_vma_tree;
 
   VMArea* m_vma_list_head{nullptr};
   VMArea* m_vma_list_tail{nullptr};
@@ -74,16 +107,35 @@ class AddressSpace {
   PageMap m_pagemap;
   mutable utils::RWLock m_as_lock;
 
-  VirtualAddress m_heap_bump;
-  VirtualAddress m_mmap_bump;
+  // Where find_free_gap() hands out addresses: [start, limit), next try at bump.
+  struct Region {
+    VirtualAddress start;
+    VirtualAddress limit;
+    VirtualAddress bump;
+  };
 
+  Region m_heap_region;
+  Region m_mmap_region;
+
+  [[nodiscard]] static VMArea* allocate_vma() noexcept;
+  static void release_vma(VMArea* vma) noexcept;
+
+  [[nodiscard]] VMArea* find_vma(VirtualAddress addr) const noexcept;
+  [[nodiscard]] bool range_is_free(VirtualAddress start, VirtualAddress end) const noexcept;
+  [[nodiscard]] VirtualAddress first_fit(VirtualAddress from, VirtualAddress limit,
+                                         std::size_t size_bytes,
+                                         std::size_t alignment) const noexcept;
   [[nodiscard]] VirtualAddress find_free_gap(std::size_t size_bytes, std::size_t alignment,
                                              bool is_heap = false) noexcept;
   void link_vma(VMArea* new_vma) noexcept;
   void unlink_vma(VMArea* vma) noexcept;
   auto split_vma(VMArea* vma, VirtualAddress split_point) noexcept -> std::expected<VMArea*, Error>;
+  [[nodiscard]] auto isolate_range(VirtualAddress start, VirtualAddress end) noexcept
+      -> std::expected<VMArea*, Error>;
 
-  void merge_vma(VMArea* vma) noexcept;
+  [[nodiscard]] static bool can_merge(const VMArea* left, const VMArea* right) noexcept;
+  void absorb_next(VMArea* left) noexcept;
+  void coalesce_range(VMArea* last, VirtualAddress start) noexcept;
 
   [[nodiscard]] auto expand_stack_locked(VirtualAddress fault_addr) noexcept
       -> std::expected<VMArea*, Error>;
@@ -92,35 +144,70 @@ class AddressSpace {
       -> std::expected<void, Error>;
 
  public:
+  /// @param base_addr Where the heap and mmap bump pointers start (plus random offsets).
   explicit AddressSpace(VirtualAddress base_addr) noexcept;
+
+  /// @brief Unmaps and releases every VMA.
   ~AddressSpace() noexcept;
 
+  AddressSpace(const AddressSpace&) = delete;
+  AddressSpace& operator=(const AddressSpace&) = delete;
+
+  /// @brief Sets up the slab caches for VMAs and VM objects. Called once by the VMM.
   static void initialize() noexcept;
 
   [[nodiscard]] PageMap& pagemap() noexcept { return m_pagemap; }
 
+  /// @brief Reserves (and with Populate, backs) a new anonymous range.
+  /// @param size_bytes Rounded up to @p page_size.
+  /// @param hint       Exact address to use, or null to let the address space pick one.
+  /// @return The start of the range. AlreadyMapped if @p hint overlaps an existing VMA.
   [[nodiscard]] auto alloc(std::size_t size_bytes, AccessFlags access,
                            CacheMode cache = CacheMode::WriteBack,
                            PageSize page_size = PageSize::Size4K, VMAType type = VMAType::Anonymous,
                            std::uint8_t pkey = 0, VirtualAddress hint = VirtualAddress{}) noexcept
       -> std::expected<VirtualAddress, Error>;
+
+  /// @brief Removes the VMA starting exactly at @p addr.
   [[nodiscard]] auto free(VirtualAddress addr) noexcept -> std::expected<void, Error>;
+
+  /// @brief Grows the VMA starting at @p old_addr, moving it if the space after it is taken.
+  ///
+  /// Only works for VMAs backed by a VM object. A move just unmaps the old range: the pages stay
+  /// in the object and fault back in at the new address.
   [[nodiscard]] auto realloc(VirtualAddress old_addr, std::size_t new_size) noexcept
       -> std::expected<VirtualAddress, Error>;
+
+  /// @brief Changes the read/write/execute permissions of a range spanning one or more VMAs.
+  ///
+  /// The range must be fully covered by VMAs and aligned to their page size. VMAs are split at
+  /// the edges as needed and merged again with identical neighbours afterwards.
   [[nodiscard]] auto protect(VirtualAddress addr, std::size_t size_bytes,
                              AccessFlags new_flags) noexcept -> std::expected<void, Error>;
 
+  /// @brief Maps device memory. The VMA is wired: mapped right away and never faulted.
   auto map_mmio(PhysicalAddress phys_base, std::size_t size_bytes,
                 AccessFlags access = AccessFlags::Read | AccessFlags::Write | AccessFlags::Mmio,
                 CacheMode cache = CacheMode::Uncacheable, PageSize page_size = PageSize::Size4K,
                 std::uint8_t pkey = 0, VirtualAddress hint = VirtualAddress{}) noexcept
       -> std::expected<VirtualAddress, Error>;
 
+  /// @brief Faults in every page of the range and keeps it away from eviction.
   [[nodiscard]] auto lock_memory(VirtualAddress addr, std::size_t size_bytes) noexcept
       -> std::expected<void, Error>;
+
+  /// @brief Undoes lock_memory() for the range.
   [[nodiscard]] auto unlock_memory(VirtualAddress addr, std::size_t size_bytes) noexcept
       -> std::expected<void, Error>;
+
+  /// @brief Copies every VMA into the (empty) @p child, sharing private memory copy-on-write.
+  ///
+  /// All allocations happen before anything is changed, so on failure both address spaces are
+  /// exactly as they were. On success private VMAs on both sides point at new, empty shadow
+  /// objects of the original and the parent's pages are write-protected.
   [[nodiscard]] auto clone_into(AddressSpace& child) noexcept -> std::expected<void, Error>;
+
+  /// @brief Maps an existing VM object, sharing its pages with every other mapping of it.
   [[nodiscard]] auto map_object(VMObject* existing_obj, std::size_t size_bytes,
                                 std::size_t obj_offset_pages, AccessFlags access,
                                 CacheMode cache = CacheMode::WriteBack,
@@ -129,6 +216,10 @@ class AddressSpace {
                                 VirtualAddress hint = VirtualAddress{}) noexcept
       -> std::expected<VirtualAddress, Error>;
 
+  /// @brief Maps the frames behind [@p addr, @p addr + @p size_bytes) a second time.
+  ///
+  /// Pages that are not present yet are faulted in first. The alias is a wired VMA with its own
+  /// permissions, typically used to get a writable view of read-only memory.
   [[nodiscard]] auto create_alias(VirtualAddress addr, std::size_t size_bytes,
                                   AccessFlags alias_flags) noexcept
       -> std::expected<VirtualAddress, Error>;
@@ -137,7 +228,11 @@ class AddressSpace {
     return free(alias_addr);
   }
 
+  /// @brief Drops the translation of one page. It faults back in from its object when touched.
   [[nodiscard]] auto evict_page(VirtualAddress addr) noexcept -> std::expected<void, Error>;
+
+  /// @brief Resolves a page fault, growing a stack VMA if the address sits right below one.
+  /// @return An error if the access is not allowed or the address is not mapped by any VMA.
   [[nodiscard]] auto handle_page_fault(VirtualAddress fault_addr, AccessFlags fault_type) noexcept
       -> std::expected<void, Error>;
 
@@ -146,13 +241,20 @@ class AddressSpace {
   void for_each_vma(Func&& callback) const noexcept {
     utils::SharedPreemptGuard guard(m_as_lock);
 
-    const VMArea* curr = m_vma_list_head;
-    while (curr) {
+    for (const VMArea* curr = m_vma_list_head; curr; curr = curr->next_vma) {
       callback(*curr);
-      curr = curr->next_vma;
     }
   }
 };
 
+/// @brief The kernel's own address space, or null before vmm::initialize().
 AddressSpace* kernel_space() noexcept;
+
+/// @brief Maps @p size bytes of device registers at @p phys into the kernel, uncached.
+///
+/// Unlike AddressSpace::map_mmio(), @p phys need not be page aligned: the pages around it are
+/// mapped and the returned address points at @p phys itself. Firmware tables describe register
+/// blocks this way (an HPET at 0xFED00400, say).
+[[nodiscard]] std::expected<VirtualAddress, Error> map_device_registers(PhysicalAddress phys,
+                                                                        std::size_t size) noexcept;
 }  // namespace kernel::memory::vmm

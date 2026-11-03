@@ -38,9 +38,12 @@
   "popq %%rax\n\t"
 
 namespace kernel::hw::interrupts {
+// The ABI wants the direction flag clear on function entry; the interrupted code may have had it
+// set, so clear it after saving the registers. IRETQ restores the old RFLAGS.
 [[gnu::naked, gnu::used]] void legacy_isr_common() noexcept {
   asm volatile(ASM_PUSH_ALL_REGISTERS
 
+               "cld\n\t"
                "movq %%rsp, %%rdi\n\t"
                "call %P0\n\t"
 
@@ -56,6 +59,7 @@ namespace kernel::hw::interrupts {
 [[gnu::naked, gnu::used]] void legacy_nmi_common() noexcept {
   asm volatile(ASM_PUSH_ALL_REGISTERS
 
+               "cld\n\t"
                "movq %%rsp, %%rdi\n\t"
                "call %P0\n\t"
 
@@ -68,25 +72,32 @@ namespace kernel::hw::interrupts {
                : "memory");
 }
 
-void fred_entrypoint() noexcept {
+// FRED enters at the configured base for events from ring 3 and 256 bytes past it for events
+// from ring 0 (FRED spec 6.1), so the entry is page aligned and has both doors. The hardware
+// switches GS on the way in from ring 3 and back in ERETU, so both paths share the same body.
+[[gnu::section(".text.fred"), gnu::aligned(4096)]] void fred_entrypoint() noexcept {
   asm volatile(
-      ".balign 4096\n\t"
-      "pushq $0\n\t"
+      "0:\n\t"
+      "jmp 1f\n\t"
+      ".org 0b + 256, 0xcc\n\t"
+      "1:\n\t"
+      "pushq $0\n\t"  // Keeps the stack 16-byte aligned for the call
 
       ASM_PUSH_ALL_REGISTERS
 
+      "cld\n\t"
       "movq %%rsp, %%rdi\n\t"
       "call %P0\n\t"
 
       ASM_POP_ALL_REGISTERS
 
       "addq $8, %%rsp\n\t"
-      "testb $3, 16(%%rsp)\n\t"  // Inspect CsInfo
-      "jnz 1f\n\t"
-      "erets\n\t"  // CPL == 0, Return to Supervisor Mode
-      "1:\n\t"
-      "eretu\n\t"  // CPL == 3, Return to User Mode
-      :            /* No Output */
+      "testb $3, 16(%%rsp)\n\t"  // CPL of the interrupted context, from the saved CS
+      "jnz 2f\n\t"
+      "erets\n\t"
+      "2:\n\t"
+      "eretu\n\t"
+      : /* No Output */
       : "s"(&dispatch_fred)
       : "memory");
 }

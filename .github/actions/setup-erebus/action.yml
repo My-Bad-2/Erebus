@@ -1,0 +1,59 @@
+name: Set up the Erebus build
+description: >-
+  Installs LLVM, Ninja, xorriso and QEMU, puts LLVM first on PATH, and lets QEMU use KVM
+  when the runner has it.
+
+inputs:
+  llvm-version:
+    description: Major version of LLVM to build with, from apt.llvm.org
+    default: "23"
+
+outputs:
+  accel:
+    description: The QEMU accelerator to boot with, kvm or tcg
+    value: ${{ steps.kvm.outputs.accel }}
+  boot-timeout:
+    description: Seconds a test boot may take with that accelerator
+    value: ${{ steps.kvm.outputs.boot-timeout }}
+
+runs:
+  using: composite
+  steps:
+    - name: Install LLVM ${{ inputs.llvm-version }}, Ninja, xorriso and QEMU
+      shell: bash
+      env:
+        LLVM_VERSION: ${{ inputs.llvm-version }}
+      run: |
+        codename=$(lsb_release -cs)
+        curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key |
+          sudo tee /etc/apt/keyrings/apt.llvm.org.asc >/dev/null
+        echo "deb [signed-by=/etc/apt/keyrings/apt.llvm.org.asc] https://apt.llvm.org/$codename/ llvm-toolchain-$codename-$LLVM_VERSION main" |
+          sudo tee /etc/apt/sources.list.d/llvm.list >/dev/null
+
+        sudo apt-get update -q
+        sudo apt-get install -yq --no-install-recommends \
+          "clang-$LLVM_VERSION" "lld-$LLVM_VERSION" "llvm-$LLVM_VERSION" \
+          ninja-build xorriso qemu-system-x86
+
+        # The toolchain file looks for clang, ld.lld and the llvm-* tools by their plain names.
+        echo "/usr/lib/llvm-$LLVM_VERSION/bin" >> "$GITHUB_PATH"
+
+    - name: Enable KVM
+      id: kvm
+      shell: bash
+      run: |
+        # The runner has /dev/kvm, but only root may open it.
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+          sudo tee /etc/udev/rules.d/99-kvm.rules >/dev/null
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
+        sudo udevadm settle
+
+        if [[ -r /dev/kvm && -w /dev/kvm ]]; then
+          echo "accel=kvm" >> "$GITHUB_OUTPUT"
+          echo "boot-timeout=300" >> "$GITHUB_OUTPUT"
+        else
+          echo "::warning title=No KVM::This runner cannot use KVM; the kernel boots under plain emulation, which is much slower."
+          echo "accel=tcg" >> "$GITHUB_OUTPUT"
+          echo "boot-timeout=1800" >> "$GITHUB_OUTPUT"
+        fi

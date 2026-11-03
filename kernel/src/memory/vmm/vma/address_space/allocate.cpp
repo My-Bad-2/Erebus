@@ -1,78 +1,104 @@
+#include "hal/smp/percpu.hpp"
 #include "memory/vmm/vma/vma.hpp"
 
 namespace kernel::memory::vmm {
-auto AddressSpace::alloc(const std::size_t size_bytes, const AccessFlags access,
-                         const CacheMode cache, const PageSize page_size, const VMAType type,
-                         const std::uint8_t pkey, const VirtualAddress hint) noexcept
-    -> std::expected<VirtualAddress, Error> {
-  const std::size_t bytes_per_page = get_page_bytes(page_size);
-  const std::size_t aligned_size = utils::maths::align_up(size_bytes, bytes_per_page);
-  if (hint && !hint.is_aligned(bytes_per_page)) {
-    return std::unexpected(Error::InvalidAlignment);
-  }
-
-  const auto vma_res = s_vma_cache->alloc();
-  const auto obj_res = s_vmo_cache->alloc();
-  if (!vma_res || !obj_res) {
-    if (vma_res) {
-      s_vma_cache->free(*vma_res);
-    }
-
-    if (obj_res) {
-      s_vmo_cache->free(*obj_res);
-    }
-
-    return std::unexpected(Error::OutOfMemory);
-  }
-
-  auto vma = static_cast<VMArea*>(*vma_res);
-  auto obj = static_cast<VMObject*>(*obj_res);
-
-  new (vma) VMArea();
-  new (obj) VMObject(type, aligned_size / bytes_per_page);
-
-  utils::ExclusivePreemptGuard guard(m_as_lock);
-
-  VirtualAddress addr = hint ? hint : find_free_gap(aligned_size, bytes_per_page);
+namespace {
+void init_vma(VMArea* vma, const VirtualAddress addr, const std::size_t size_bytes,
+              const AccessFlags access, const CacheMode cache, const PageSize page_size,
+              const VMAType type, const NUMAPolicy numa, const std::uint8_t pkey) noexcept {
   vma->start = addr;
-  vma->end = addr + aligned_size;
+  vma->end = addr + static_cast<VirtualAddress::OffsetType>(size_bytes);
 
   vma->flags.clear();
   vma->flags.set_access(access);
   vma->flags.set_cache(cache);
   vma->flags.set_page_size(page_size);
   vma->flags.set_type(type);
-  vma->flags.set_numa(NUMAPolicy::FirstTouch);
+  vma->flags.set_numa(numa);
   vma->flags.set_pkey(pkey);
 
-  if (type == VMAType::HardwareMMIO || has_flag(access, AccessFlags::Mmio)) {
-    vma->flags.set_is_wired(1);
-  }
-
-  vma->vm_object = obj;
-  vma->vm_object->add_ref();
+  vma->vm_object = nullptr;
   vma->object_offset = 0;
   vma->fault_count = 0;
   vma->preferred_numa_node = hw::percpu::numa_node_id();
+}
+}  // namespace
 
-  m_vma_tree.insert(addr.value(), vma);
+auto AddressSpace::alloc(const std::size_t size_bytes, const AccessFlags access,
+                         const CacheMode cache, const PageSize page_size, const VMAType type,
+                         const std::uint8_t pkey, const VirtualAddress hint) noexcept
+    -> std::expected<VirtualAddress, Error> {
+  if (size_bytes == 0) [[unlikely]] {
+    return std::unexpected(Error::InvalidArgument);
+  }
+
+  const std::size_t bytes_per_page = get_page_bytes(page_size);
+  const std::size_t aligned_size = utils::maths::align_up(size_bytes, bytes_per_page);
+  if (hint && !hint.is_aligned(bytes_per_page)) {
+    return std::unexpected(Error::InvalidAlignment);
+  }
+
+  // Object pages are indexed from the start of the VMA, and a stack grows down. Leave enough
+  // indices below the initial range for it to reach its maximum size.
+  const std::size_t headroom_pages =
+      has_flag(access, AccessFlags::Stack) ? MAX_STACK_BYTES / bytes_per_page : 0;
+
+  VMArea* vma = allocate_vma();
+  VMObject* obj = VMObject::create(type, page_size, headroom_pages + aligned_size / bytes_per_page);
+  if (!vma || !obj) [[unlikely]] {
+    if (vma) {
+      release_vma(vma);
+    }
+
+    if (obj) {
+      obj->drop_ref();
+    }
+
+    return std::unexpected(Error::OutOfMemory);
+  }
+
+  utils::ExclusivePreemptGuard guard(m_as_lock);
+
+  VirtualAddress addr = hint;
+  Error failure = Error::Success;
+  if (hint && !range_is_free(hint, hint + static_cast<VirtualAddress::OffsetType>(aligned_size))) {
+    failure = Error::AlreadyMapped;
+  } else if (!hint && !(addr = find_free_gap(aligned_size, bytes_per_page))) {
+    failure = Error::OutOfMemory;
+  }
+
+  if (failure != Error::Success) [[unlikely]] {
+    release_vma(vma);
+    obj->drop_ref();
+    return std::unexpected(failure);
+  }
+
+  init_vma(vma, addr, aligned_size, access, cache, page_size, type, NUMAPolicy::FirstTouch, pkey);
+  vma->flags.set_is_wired(type == VMAType::HardwareMMIO || has_flag(access, AccessFlags::Mmio));
+  vma->vm_object = obj;  // the creation reference now belongs to the VMA
+  vma->object_offset = headroom_pages;
+
+  if (!m_vma_tree.insert(addr.value(), vma)) [[unlikely]] {
+    release_vma(vma);
+    obj->drop_ref();
+    return std::unexpected(Error::OutOfMemory);
+  }
+
   link_vma(vma);
 
   if (has_flag(access, AccessFlags::Populate)) {
+    const AccessFlags fault_type =
+        has_flag(access, AccessFlags::Write) ? AccessFlags::Write : AccessFlags::Read;
+
     for (std::size_t i = 0; i < aligned_size; i += bytes_per_page) {
-      if (auto fault_res = resolve_vma_fault_locked(vma, addr + i, access); !fault_res) {
-        // Rollback 'cause we're out of physical memory
+      const auto fault_res = resolve_vma_fault_locked(
+          vma, addr + static_cast<VirtualAddress::OffsetType>(i), fault_type);
+      if (!fault_res) [[unlikely]] {
+        [[maybe_unused]] auto _ = m_pagemap.unmap_range(addr, i);
         unlink_vma(vma);
         m_vma_tree.erase(addr.value());
-
-        if (i > 0) {
-          [[maybe_unused]] auto _ = m_pagemap.unmap_range(addr, i);
-          tlb::ShootdownCoordinator::broadcast(&m_pagemap, addr, i, page_size != PageSize::Size4K);
-        }
-
-        vma->vm_object->drop_ref();
-        s_vma_cache->free(vma);
-
+        obj->drop_ref();
+        release_vma(vma);
         return std::unexpected(fault_res.error());
       }
     }
@@ -92,18 +118,17 @@ std::expected<void, Error> AddressSpace::free(const VirtualAddress addr) noexcep
   unlink_vma(vma);
   m_vma_tree.erase(addr.value());
 
+  // unmap_range() flushes the TLBs, so the pages are unreachable before the object can free them.
+  [[maybe_unused]] auto _ = m_pagemap.unmap_range(vma->start, vma->size_bytes());
   if (vma->vm_object) {
     vma->vm_object->drop_ref();
   }
 
-  [[maybe_unused]] auto _ = m_pagemap.unmap_range(vma->start, vma->size_bytes());
-  tlb::ShootdownCoordinator::broadcast(&m_pagemap, vma->start, vma->size_bytes());
-
-  s_vma_cache->free(vma);
+  release_vma(vma);
   return {};
 }
 
-std::expected<VirtualAddress, Error> AddressSpace::realloc(VirtualAddress old_addr,
+std::expected<VirtualAddress, Error> AddressSpace::realloc(const VirtualAddress old_addr,
                                                            const std::size_t new_size) noexcept {
   utils::ExclusivePreemptGuard guard(m_as_lock);
 
@@ -112,8 +137,11 @@ std::expected<VirtualAddress, Error> AddressSpace::realloc(VirtualAddress old_ad
     return std::unexpected(Error::NotMapped);
   }
 
-  const PageSize page_size = vma->flags.get_page_size();
-  const std::size_t bytes_per_page = get_page_bytes(page_size);
+  if (!vma->vm_object || vma->flags.get_is_wired()) {
+    return std::unexpected(Error::InvalidState);
+  }
+
+  const std::size_t bytes_per_page = vma->page_bytes();
   const std::size_t new_aligned = utils::maths::align_up(new_size, bytes_per_page);
   const std::size_t old_size = vma->size_bytes();
 
@@ -121,41 +149,52 @@ std::expected<VirtualAddress, Error> AddressSpace::realloc(VirtualAddress old_ad
     return old_addr;
   }
 
-  // Expand in-place
-  if (!vma->next_vma || vma->next_vma->start >= (vma->start + new_aligned)) {
-    vma->end = vma->start + new_aligned;
-    vma->vm_object->expand_max_pages(new_aligned / bytes_per_page);
+  const std::size_t needed_pages = vma->object_offset + new_aligned / bytes_per_page;
+  const auto grow_end = vma->start + static_cast<VirtualAddress::OffsetType>(new_aligned);
+
+  if (range_is_free(vma->end, grow_end)) {
+    vma->end = grow_end;
+    vma->vm_object->expand_max_pages(needed_pages);
     return old_addr;
   }
 
-  // Move the VMA
   const VirtualAddress new_addr = find_free_gap(new_aligned, bytes_per_page);
-
-  m_vma_tree.erase(old_addr.value());
-  vma->start = new_addr;
-  vma->end = new_addr + new_aligned;
-  vma->vm_object->expand_max_pages(new_aligned / bytes_per_page);
-  m_vma_tree.insert(new_addr.value(), vma);
-
-  unlink_vma(vma);
-  link_vma(vma);
-
-  const auto res = m_pagemap.move_virtual_range(old_addr, new_addr, old_size);
-  if (!res) {
-    return std::unexpected(res.error());
+  if (!new_addr) [[unlikely]] {
+    return std::unexpected(Error::OutOfMemory);
   }
 
-  tlb::ShootdownCoordinator::broadcast(&m_pagemap, old_addr, old_size);
+  // Claim the new key first: it is the only step that can fail.
+  if (!m_vma_tree.insert(new_addr.value(), vma)) [[unlikely]] {
+    return std::unexpected(Error::OutOfMemory);
+  }
+
+  // The object keeps the pages, so dropping the old translations is all a move needs. They
+  // fault back in at the new address.
+  [[maybe_unused]] auto _ = m_pagemap.unmap_range(old_addr, old_size);
+
+  unlink_vma(vma);
+  m_vma_tree.erase(old_addr.value());
+
+  vma->start = new_addr;
+  vma->end = new_addr + static_cast<VirtualAddress::OffsetType>(new_aligned);
+  vma->vm_object->expand_max_pages(needed_pages);
+  link_vma(vma);
+
   return new_addr;
 }
 
-auto AddressSpace::map_object(VMObject* existing_obj, std::size_t size_bytes,
-                              std::size_t obj_offset_pages, AccessFlags access, CacheMode cache,
-                              PageSize page_size, VMAType type, std::uint8_t pkey,
-                              VirtualAddress hint) noexcept
+auto AddressSpace::map_object(VMObject* existing_obj, const std::size_t size_bytes,
+                              const std::size_t obj_offset_pages, const AccessFlags access,
+                              const CacheMode cache, const PageSize page_size, const VMAType type,
+                              const std::uint8_t pkey, const VirtualAddress hint) noexcept
     -> std::expected<VirtualAddress, Error> {
-  if (!existing_obj) {
-    return std::unexpected(Error::InvalidState);
+  if (!existing_obj || size_bytes == 0) {
+    return std::unexpected(Error::InvalidArgument);
+  }
+
+  // Offsets into the object are in its own page size.
+  if (existing_obj->page_size() != page_size) {
+    return std::unexpected(Error::InvalidArgument);
   }
 
   const std::size_t bytes_per_page = get_page_bytes(page_size);
@@ -165,103 +204,91 @@ auto AddressSpace::map_object(VMObject* existing_obj, std::size_t size_bytes,
     return std::unexpected(Error::InvalidAlignment);
   }
 
-  auto vma_res = s_vma_cache->alloc();
-  if (!vma_res) {
+  VMArea* vma = allocate_vma();
+  if (!vma) {
     return std::unexpected(Error::OutOfMemory);
   }
 
-  VMArea* vma = static_cast<VMArea*>(*vma_res);
-  new (vma) VMArea();
-
   utils::ExclusivePreemptGuard guard(m_as_lock);
 
-  const VirtualAddress addr = hint ? hint : find_free_gap(aligned_size, bytes_per_page);
-
-  vma->start = addr;
-  vma->end = addr + aligned_size;
+  VirtualAddress addr = hint;
+  if (hint ? !range_is_free(hint, hint + static_cast<VirtualAddress::OffsetType>(aligned_size))
+           : !(addr = find_free_gap(aligned_size, bytes_per_page))) [[unlikely]] {
+    release_vma(vma);
+    return std::unexpected(hint ? Error::AlreadyMapped : Error::OutOfMemory);
+  }
 
   const AccessFlags final_access = access | AccessFlags::Shared;
-
-  vma->flags.clear();
-  vma->flags.set_access(final_access);
-  vma->flags.set_cache(cache);
-  vma->flags.set_page_size(page_size);
-  vma->flags.set_type(type);
-  vma->flags.set_numa(NUMAPolicy::FirstTouch);
-  vma->flags.set_pkey(pkey);
+  init_vma(vma, addr, aligned_size, final_access, cache, page_size, type, NUMAPolicy::FirstTouch,
+           pkey);
   vma->flags.set_is_wired(type == VMAType::HardwareMMIO ||
                           has_flag(final_access, AccessFlags::Mmio));
 
+  if (!m_vma_tree.insert(addr.value(), vma)) [[unlikely]] {
+    release_vma(vma);
+    return std::unexpected(Error::OutOfMemory);
+  }
+
+  existing_obj->add_ref();
   vma->vm_object = existing_obj;
-  vma->vm_object->add_ref();
-
   vma->object_offset = obj_offset_pages;
-  vma->fault_count = 0;
-  vma->preferred_numa_node = hw::percpu::numa_node_id();
-
-  m_vma_tree.insert(addr.value(), vma);
   link_vma(vma);
 
   return addr;
 }
 
-auto AddressSpace::map_mmio(PhysicalAddress phys_base, std::size_t size_bytes, AccessFlags access,
-                            CacheMode cache, PageSize page_size, std::uint8_t pkey,
-                            VirtualAddress hint) noexcept -> std::expected<VirtualAddress, Error> {
+auto AddressSpace::map_mmio(const PhysicalAddress phys_base, const std::size_t size_bytes,
+                            const AccessFlags access, const CacheMode cache,
+                            const PageSize page_size, const std::uint8_t pkey,
+                            const VirtualAddress hint) noexcept
+    -> std::expected<VirtualAddress, Error> {
+  if (size_bytes == 0) {
+    return std::unexpected(Error::InvalidArgument);
+  }
+
   const std::size_t bytes_per_page = get_page_bytes(page_size);
   const std::size_t aligned_size = utils::maths::align_up(size_bytes, bytes_per_page);
 
-  if (!phys_base.is_aligned(bytes_per_page)) {
+  if (!phys_base.is_aligned(bytes_per_page) || (hint && !hint.is_aligned(bytes_per_page))) {
     return std::unexpected(Error::InvalidAlignment);
   }
 
-  if (hint.value() != 0 && !hint.is_aligned(bytes_per_page)) {
-    return std::unexpected(Error::InvalidAlignment);
+  VMArea* vma = allocate_vma();
+  if (!vma) {
+    return std::unexpected(Error::OutOfMemory);
   }
-
-  auto vma_res = s_vma_cache->alloc();
-  if (!vma_res) return std::unexpected(Error::OutOfMemory);
-
-  VMArea* vma = static_cast<VMArea*>(*vma_res);
-  new (vma) VMArea();
 
   utils::ExclusivePreemptGuard guard(m_as_lock);
 
-  const VirtualAddress addr = hint ? hint : find_free_gap(aligned_size, bytes_per_page);
-
-  vma->start = addr;
-  vma->end = addr + aligned_size;
+  VirtualAddress addr = hint;
+  if (hint ? !range_is_free(hint, hint + static_cast<VirtualAddress::OffsetType>(aligned_size))
+           : !(addr = find_free_gap(aligned_size, bytes_per_page))) [[unlikely]] {
+    release_vma(vma);
+    return std::unexpected(hint ? Error::AlreadyMapped : Error::OutOfMemory);
+  }
 
   const AccessFlags final_access = access | AccessFlags::Mmio;
-
-  vma->flags.clear();
-  vma->flags.set_access(final_access);
-  vma->flags.set_cache(cache);
-  vma->flags.set_page_size(page_size);
-  vma->flags.set_type(VMAType::HardwareMMIO);
-  vma->flags.set_numa(NUMAPolicy::StrictLocal);
-  vma->flags.set_pkey(pkey);
+  init_vma(vma, addr, aligned_size, final_access, cache, page_size, VMAType::HardwareMMIO,
+           NUMAPolicy::StrictLocal, pkey);
   vma->flags.set_is_wired(true);
 
-  vma->vm_object = nullptr;
-  vma->object_offset = 0;
-  vma->fault_count = 0;
-  vma->preferred_numa_node = hw::percpu::numa_node_id();
-
   for (std::size_t i = 0; i < aligned_size; i += bytes_per_page) {
-    if (auto map_res = m_pagemap.map(addr + i, phys_base + i, final_access, cache, pkey, page_size);
-        !map_res) {
-      if (i > 0) {
-        [[maybe_unused]] auto _ = m_pagemap.unmap_range(addr, i);
-        tlb::ShootdownCoordinator::broadcast(&m_pagemap, addr, i, page_size != PageSize::Size4K);
-      }
-
-      s_vma_cache->free(vma);
+    const auto offset = static_cast<VirtualAddress::OffsetType>(i);
+    if (auto map_res =
+            m_pagemap.map(addr + offset, phys_base + offset, final_access, cache, pkey, page_size);
+        !map_res) [[unlikely]] {
+      [[maybe_unused]] auto _ = m_pagemap.unmap_range(addr, i);
+      release_vma(vma);
       return std::unexpected(map_res.error());
     }
   }
 
-  m_vma_tree.insert(addr.value(), vma);
+  if (!m_vma_tree.insert(addr.value(), vma)) [[unlikely]] {
+    [[maybe_unused]] auto _ = m_pagemap.unmap_range(addr, aligned_size);
+    release_vma(vma);
+    return std::unexpected(Error::OutOfMemory);
+  }
+
   link_vma(vma);
 
   return addr;
@@ -274,82 +301,79 @@ auto AddressSpace::create_alias(const VirtualAddress src_addr, const std::size_t
     return std::unexpected(Error::InvalidAlignment);
   }
 
-  utils::ExclusivePreemptGuard guard(m_as_lock);
+  if (size_bytes == 0) {
+    return std::unexpected(Error::InvalidArgument);
+  }
 
-  const VirtualAddress alias_addr = find_free_gap(size_bytes, PAGE_SIZE);
-
-  const auto vma_res = s_vma_cache->alloc();
-  if (!vma_res) {
+  VMArea* vma = allocate_vma();
+  if (!vma) {
     return std::unexpected(Error::OutOfMemory);
   }
 
-  auto vma = static_cast<VMArea*>(*vma_res);
-  new (vma) VMArea();
+  utils::ExclusivePreemptGuard guard(m_as_lock);
 
-  vma->start = alias_addr;
-  vma->end = alias_addr + size_bytes;
+  const VirtualAddress alias_addr = find_free_gap(size_bytes, PAGE_SIZE);
+  if (!alias_addr) [[unlikely]] {
+    release_vma(vma);
+    return std::unexpected(Error::OutOfMemory);
+  }
 
-  vma->flags.clear();
-  vma->flags.set_access(alias_flags);
-  vma->flags.set_type(VMAType::Anonymous);
+  init_vma(vma, alias_addr, size_bytes, alias_flags, CacheMode::WriteBack, PageSize::Size4K,
+           VMAType::Anonymous, NUMAPolicy::FirstTouch, 0);
   vma->flags.set_is_wired(true);
 
-  vma->vm_object = nullptr;
-  vma->object_offset = 0;
-  vma->fault_count = 0;
-
+  const bool wants_write = has_flag(alias_flags, AccessFlags::Write);
   std::size_t mapped_bytes = 0;
-  auto rollback = [&]() {
-    if (mapped_bytes > 0) {
-      [[maybe_unused]] auto _ = m_pagemap.unmap_range(alias_addr, mapped_bytes);
-      tlb::ShootdownCoordinator::broadcast(&m_pagemap, alias_addr, mapped_bytes, false);
-    }
 
-    s_vma_cache->free(vma);
+  const auto fail = [&](const Error err) -> std::expected<VirtualAddress, Error> {
+    [[maybe_unused]] auto _ = m_pagemap.unmap_range(alias_addr, mapped_bytes);
+    release_vma(vma);
+    return std::unexpected(err);
   };
 
   for (std::size_t i = 0; i < size_bytes; i += PAGE_SIZE) {
-    const VirtualAddress curr_src = src_addr + i;
-
+    const VirtualAddress curr_src = src_addr + static_cast<VirtualAddress::OffsetType>(i);
     auto trans = m_pagemap.translate(curr_src);
-    if (!trans) {
-      std::uint64_t fk;
-      VMArea* src_vma = nullptr;
 
-      if (m_vma_tree.get_floor(curr_src.value(), fk, src_vma) && curr_src >= src_vma->start &&
-          curr_src < src_vma->end) {
-        const auto src_flags = src_vma->flags.get_access();
-
-        auto fault_res = resolve_vma_fault_locked(src_vma, curr_src, src_flags);
-        if (!fault_res) {
-          rollback();
-          return std::unexpected(Error::NotMapped);
-        }
-
-        trans = m_pagemap.translate(curr_src);
+    // Fault the source in first if it is demand paged. A writable alias of copy-on-write memory
+    // must see the private copy, or writes through it would land in a shared page.
+    const bool needs_cow_break =
+        trans && wants_write && has_flag(trans->flags, AccessFlags::CopyOnWrite);
+    if (!trans || needs_cow_break) {
+      VMArea* src_vma = find_vma(curr_src);
+      if (!src_vma || !src_vma->vm_object) {
+        return fail(Error::NotMapped);
       }
 
-      if (!trans) {
-        rollback();
-        return std::unexpected(Error::NotMapped);
+      const bool src_writable = has_flag(src_vma->flags.get_access(), AccessFlags::Write);
+      const AccessFlags fault_type =
+          (wants_write && src_writable) ? AccessFlags::Write : AccessFlags::Read;
+      if (const auto fault_res = resolve_vma_fault_locked(src_vma, curr_src, fault_type);
+          !fault_res) {
+        return fail(fault_res.error());
+      }
+
+      trans = m_pagemap.translate(curr_src);
+      if (!trans) [[unlikely]] {
+        return fail(Error::NotMapped);
       }
     }
 
-    const std::size_t src_page_bytes = get_page_bytes(trans->mapped_size);
-    const std::size_t offset = curr_src.page_offset(src_page_bytes);
-    const PhysicalAddress target_phys = trans->phys_address + offset;
-
-    auto map_res = m_pagemap.map(alias_addr + i, target_phys, alias_flags, trans->cache,
-                                 trans->pkey, PageSize::Size4K);
-    if (!map_res) {
-      rollback();
-      return std::unexpected(map_res.error());
+    // translate() already points at the exact 4 KiB frame, even inside a huge page.
+    if (auto map_res = m_pagemap.map(alias_addr + static_cast<VirtualAddress::OffsetType>(i),
+                                     trans->phys_address, alias_flags, trans->cache, trans->pkey,
+                                     PageSize::Size4K);
+        !map_res) {
+      return fail(map_res.error());
     }
 
     mapped_bytes += PAGE_SIZE;
   }
 
-  m_vma_tree.insert(alias_addr.value(), vma);
+  if (!m_vma_tree.insert(alias_addr.value(), vma)) [[unlikely]] {
+    return fail(Error::OutOfMemory);
+  }
+
   link_vma(vma);
 
   return alias_addr;

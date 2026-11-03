@@ -7,13 +7,12 @@ void TicketSpinlock::lock() noexcept {
 
   while (true) {
     const std::uint32_t curr = m_now_serving.load(std::memory_order_acquire);
-
     if (curr == my_ticket) [[likely]] {
       return;
     }
 
+    // Wrap-safe: tickets are handed out in order, so the distance is never "negative".
     const std::uint32_t distance = my_ticket - curr;
-
     if (distance == 1) {
       detail::wait_monitor(&m_now_serving, curr);
     } else {
@@ -23,15 +22,14 @@ void TicketSpinlock::lock() noexcept {
 }
 
 void TicketSpinlock::unlock() noexcept {
-  const std::uint32_t curr = m_now_serving.load(std::memory_order_relaxed);
-  m_now_serving.store(curr + 1, std::memory_order_release);
+  // Only the owner writes this counter, so no read-modify-write is needed.
+  m_now_serving.store(m_now_serving.load(std::memory_order_relaxed) + 1, std::memory_order_release);
 }
 
 bool TicketSpinlock::try_lock() noexcept {
-  const std::uint32_t curr = m_now_serving.load(std::memory_order_relaxed);
-  std::uint32_t expected = curr;
-
-  return m_next_ticket.compare_exchange_strong(expected, curr + 1, std::memory_order_acquire,
+  // Free means nobody holds or waits for a ticket: take the next one only if it is served now.
+  std::uint32_t ticket = m_now_serving.load(std::memory_order_relaxed);
+  return m_next_ticket.compare_exchange_strong(ticket, ticket + 1, std::memory_order_acquire,
                                                std::memory_order_relaxed);
 }
 }  // namespace kernel::utils

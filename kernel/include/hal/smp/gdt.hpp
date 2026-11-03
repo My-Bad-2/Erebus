@@ -57,13 +57,21 @@ enum class IstIndex : uint8_t {
   Ist7 = 7
 };
 
+/// IST slots of the events that cannot trust the stack they arrive on. Each gets its own stack,
+/// so that an NMI hitting a #MC handler, say, does not overwrite the #MC frame.
+inline constexpr IstIndex DOUBLE_FAULT_IST = IstIndex::Ist1;
+inline constexpr IstIndex NMI_IST = IstIndex::Ist2;
+inline constexpr IstIndex MACHINE_CHECK_IST = IstIndex::Ist3;
+
 struct [[gnu::packed]] TaskStateSegment {
   std::uint32_t reserved0{0};
   std::uint64_t rsp0{0};  // Ring 0 Stack Pointer
   std::uint64_t rsp1{0};
   std::uint64_t rsp2{0};
   std::uint64_t reserved1{0};
-  std::array<std::uint64_t, 7> ist{};  // Interrupt Stack Tables
+  // A plain array: the packed layout leaves it 4-byte aligned, and calling std::array's
+  // operator[] on a misaligned object would be undefined behaviour.
+  std::uint64_t ist[7]{};  // Interrupt Stack Tables
   std::uint64_t reserved2{0};
   std::uint16_t reserved3{0};
   std::uint16_t iopb_offset{sizeof(TaskStateSegment)};  // Disable I/O bitmap
@@ -133,6 +141,15 @@ class alignas(std::hardware_destructive_interference_size) GlobalDescriptorTable
     }
 
     return *this;
+  }
+
+  [[nodiscard]] memory::VirtualAddress interrupt_stack(const IstIndex idx) const noexcept {
+    return idx == IstIndex::None ? memory::VirtualAddress{}
+                                 : memory::VirtualAddress{m_tss.ist[std::to_underlying(idx) - 1]};
+  }
+
+  [[nodiscard]] memory::VirtualAddress kernel_stack() const noexcept {
+    return memory::VirtualAddress{m_tss.rsp0};
   }
 };
 }  // namespace kernel::hw::gdt

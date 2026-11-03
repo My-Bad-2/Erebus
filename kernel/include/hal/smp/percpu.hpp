@@ -1,10 +1,17 @@
+/// @file percpu.hpp
+/// @brief The per-CPU area and the GS-relative accessors that reach it.
+///
+/// Every CPU has one PerCpu, and its GS base points at it, so `percpu::id()` and friends are a
+/// single GS-relative load. The BSP's area is static; the APs' are built by the BSP before it
+/// starts them (see smp.hpp), which is also where the dense CPU and NUMA IDs come from.
+
 #pragma once
 
 #include <bitfield.hpp>
 #include <cstddef>
 #include <cstdint>
 
-#include "crypto/blake2b_prng.hpp"
+#include "crypto/random.hpp"
 #include "gdt.hpp"
 #include "gs.hpp"
 #include "hal/apic/lapic.hpp"
@@ -28,6 +35,9 @@ class CpuTopology {
   BF_RW(std::uint32_t, numa_node, 32, 32)
 };
 
+/// @brief Nesting counters of the contexts a CPU can be in, one byte each.
+///
+/// The layout is fixed: the accessors below read several counters with one GS-relative load.
 class CpuContext {
   std::uint64_t m_data;
 
@@ -48,47 +58,42 @@ struct alignas(std::hardware_destructive_interference_size) PerCpu {
   PerNumaNode* numa_node{nullptr};
   const CpuInfo* info{nullptr};
   CpuTopology topology{0};
+  memory::VirtualAddress stack_top{};  ///< Kernel stack the CPU was started on.
   gdt::GlobalDescriptorTable gdt_table{};
 
   alignas(std::hardware_destructive_interference_size) CpuContext context{0};
-  std::array<utils::CLHNode, 2> node;
-  utils::CLHNode* curr_node{&node[0]};
-  utils::CLHNode* prev_node{&node[1]};
+
+  // Queue nodes for QSpinlock waiters, one per nesting level. Remote CPUs write to these when
+  // they queue behind us, so they get a cache line to themselves.
+  alignas(std::hardware_destructive_interference_size)
+      std::array<utils::McsNode, utils::QSpinlock::MAX_NESTING> qnodes{};
 
   alignas(std::hardware_destructive_interference_size) memory::vmm::tlb::PcidManager pcid_manager;
   apic::Lapic lapic;
-  crypto::Blake2bPrng rng;
+  crypto::CpuRandomState random{};
 
-  constexpr explicit PerCpu() noexcept : rng(crypto::Blake2bPrng::create()) {}
+  constexpr explicit PerCpu() noexcept = default;
 };
 
 namespace percpu {
+/// @brief Dense ID of the calling CPU: 0 for the BSP, then the APs in boot protocol order.
 [[gnu::always_inline]] inline std::uint32_t id() noexcept {
   return READ_PCP(topology).get_cpu_id();
 }
+
+/// @brief NUMA node of the calling CPU, as a dense PMM node ID.
 [[gnu::always_inline]] inline std::uint32_t numa_node_id() noexcept {
   return READ_PCP(topology).get_numa_node();
 }
 [[gnu::always_inline]] inline PerCpu* self() noexcept { return READ_PCP(self); }
-[[gnu::always_inline]] inline crypto::Blake2bPrng& rng() noexcept { return self()->rng; }
 [[nodiscard]] inline memory::vmm::tlb::PcidManager& pcid_manager() noexcept {
   return self()->pcid_manager;
 }
 [[nodiscard]] inline apic::Lapic& lapic() noexcept { return self()->lapic; }
 
-// Used by QSpinlock
-[[nodiscard, gnu::always_inline]] inline utils::CLHNode* get_curr_node() noexcept {
-  return READ_PCP(curr_node);
-}
-[[gnu::always_inline]] inline void set_curr_node(utils::CLHNode* node) noexcept {
-  WRITE_PCP(curr_node, node);
-}
-[[nodiscard, gnu::always_inline]] inline utils::CLHNode* get_prev_node() noexcept {
-  return READ_PCP(prev_node);
-}
-[[gnu::always_inline]] inline void set_prev_node(utils::CLHNode* node) noexcept {
-  WRITE_PCP(prev_node, node);
-}
+/// @brief Per-CPU area of the CPU with dense ID @p cpu_id (0 is the BSP).
+/// @pre The CPU is registered with the SMP code, or is the BSP.
+[[nodiscard]] PerCpu* cpu_area(std::uint32_t cpu_id) noexcept;
 
 // CPU context
 inline constexpr std::size_t CTX_BASE = offsetof(PerCpu, context);
@@ -96,7 +101,8 @@ inline constexpr std::size_t AST_BYTE = CTX_BASE + 0;
 inline constexpr std::size_t PREEMPT_BYTE = CTX_BASE + 1;
 inline constexpr std::size_t SOFTIRQ_BYTE = CTX_BASE + 2;
 inline constexpr std::size_t HARDIRQ_BYTE = CTX_BASE + 3;
-inline constexpr std::size_t NMI_MCE_BYTE = CTX_BASE + 4;  // Nibble-split
+inline constexpr std::size_t NMI_BYTE = CTX_BASE + 4;
+inline constexpr std::size_t MCE_BYTE = CTX_BASE + 5;
 
 [[nodiscard, gnu::always_inline]] inline std::uint8_t ast_flags() noexcept {
   return gs::read<AST_BYTE, std::uint8_t>();
@@ -127,37 +133,37 @@ inline constexpr std::size_t NMI_MCE_BYTE = CTX_BASE + 4;  // Nibble-split
   return gs::read<HARDIRQ_BYTE, std::uint8_t>() > 0;
 }
 
-[[gnu::always_inline]] inline void nmi_enter() noexcept { gs::add<NMI_MCE_BYTE, 1>(1); }
-[[gnu::always_inline]] inline void nmi_exit() noexcept { gs::sub<NMI_MCE_BYTE, 1>(1); }
+[[gnu::always_inline]] inline void nmi_enter() noexcept { gs::inc<NMI_BYTE, 1>(); }
+[[gnu::always_inline]] inline void nmi_exit() noexcept { gs::dec<NMI_BYTE, 1>(); }
 
 [[nodiscard, gnu::always_inline]] inline bool in_nmi() noexcept {
-  return (gs::read<NMI_MCE_BYTE, std::uint8_t>() & 0x0F) > 0;
+  return gs::read<NMI_BYTE, std::uint8_t>() > 0;
 }
 
-[[gnu::always_inline]] inline void mce_enter() noexcept {
-  // Add 1 to the upper nibble (1 << 4 = 16).
-  gs::add<NMI_MCE_BYTE, 1>(16);
-}
-
-[[gnu::always_inline]] inline void mce_exit() noexcept { gs::sub<NMI_MCE_BYTE, 1>(16); }
+[[gnu::always_inline]] inline void mce_enter() noexcept { gs::inc<MCE_BYTE, 1>(); }
+[[gnu::always_inline]] inline void mce_exit() noexcept { gs::dec<MCE_BYTE, 1>(); }
 
 [[nodiscard, gnu::always_inline]] inline bool in_mce() noexcept {
-  return (gs::read<NMI_MCE_BYTE, std::uint8_t>() & 0xF0) > 0;
+  return gs::read<MCE_BYTE, std::uint8_t>() > 0;
 }
 
+/// @brief Whether the CPU is handling any interrupt, exception-like NMI/#MC included.
 [[nodiscard, gnu::always_inline]] inline bool in_interrupt() noexcept {
-  // Reads Bytes 2 (soft), 3 (hard), 4 (nmi/mce), and 5 (unused zeros)
-  const auto combined_irqs = gs::read<SOFTIRQ_BYTE, std::uint64_t>();
-  return combined_irqs != 0;
+  // Softirq, hardirq, NMI and MCE are bytes 2-5: one 32-bit load covers them.
+  return gs::read<SOFTIRQ_BYTE, std::uint32_t>() != 0;
 }
 
+/// @brief Whether the CPU may block: no preemption disabled and no interrupt in progress.
 [[nodiscard, gnu::always_inline]] inline bool can_sleep() noexcept {
-  // Reads Preempt (Byte 1), Soft (Byte 2), Hard (Byte 3), NMI/MCE (Byte 4)
-  const auto combined_state = gs::read<PREEMPT_BYTE, std::uint64_t>();
-  return combined_state == 0;
+  // Bytes 1-5. Byte 0 holds the AST flags and bytes 6-7 are unused.
+  constexpr std::uint64_t BLOCKERS = 0x0000'FFFF'FFFF'FF00ull;
+  return (gs::read<CTX_BASE, std::uint64_t>() & BLOCKERS) == 0;
 }
 
+/// @brief Sets up the BSP's per-CPU area, GDT and GS base. The first thing the kernel does.
 void early_initialize() noexcept;
-void initialize(memory::VirtualAddress bsp_rsp) noexcept;
+
+/// @brief Loads @p cpu's GDT and points GS at it. Run by every CPU on itself.
+void install(PerCpu* cpu) noexcept;
 }  // namespace percpu
 }  // namespace kernel::hw

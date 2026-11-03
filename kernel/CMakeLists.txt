@@ -1,63 +1,81 @@
 # ==============================================================================
-# Subproject: kernel
+# The kernel image
+#
+# Everything but main.cpp is compiled once, into kernel_objects. The kernel
+# links those with main.cpp; the test kernel in tests/ links the same objects
+# with its own build of main.cpp and the tests.
 # ==============================================================================
 
+# The boot-time self-tests these enabled are now tests of the test kernel.
+unset(EREBUS_MM_SELFTEST CACHE)
+unset(EREBUS_SMP_SELFTEST CACHE)
+
+# ------------------------------------------------------------------------------
+# build_info.hpp: name, version and the commit it was configured from
+# ------------------------------------------------------------------------------
 find_package(Git QUIET)
-set(GIT_HASH "unknown")
-if (GIT_FOUND AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
-    execute_process(
-            COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
-            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-            OUTPUT_VARIABLE GIT_HASH
-            OUTPUT_STRIP_TRAILING_WHITESPACE
-            ERROR_QUIET
-    )
+set(BUILD_INFO_GIT_COMMIT "unknown")
+if (GIT_FOUND AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
+  execute_process(
+      COMMAND "${GIT_EXECUTABLE}" rev-parse --short HEAD
+      WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"
+      OUTPUT_VARIABLE BUILD_INFO_GIT_COMMIT
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET
+  )
 endif ()
 
-string(TOLOWER "${PROJECT_NAME}" PROJ_NS)
+string(TOLOWER "${PROJECT_NAME}" BUILD_INFO_NAMESPACE)
+set(generated_dir "${CMAKE_CURRENT_BINARY_DIR}/include/generated")
+configure_file("${PROJECT_SOURCE_DIR}/cmake/templates/build_info.hpp.in"
+    "${generated_dir}/build_info.hpp" @ONLY)
 
-set(HEADER_CONTENT
-        "#ifndef KERNEL_BUILD_INFO_HPP
-#define KERNEL_BUILD_INFO_HPP 1
+# ------------------------------------------------------------------------------
+# kernel_objects
+# ------------------------------------------------------------------------------
+set(KERNEL_MAIN "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
 
-#include <string_view>
+file(GLOB_RECURSE kernel_sources CONFIGURE_DEPENDS "src/*.cpp" "src/*.c" "src/*.S")
+file(GLOB_RECURSE kernel_headers CONFIGURE_DEPENDS "include/*.h" "include/*.hpp")
+list(REMOVE_ITEM kernel_sources "${KERNEL_MAIN}")
 
-namespace ${PROJ_NS}::build {
-	inline constexpr std::string_view os_name = \"${PROJECT_NAME}\";
-	inline constexpr std::string_view os_version = \"${PROJECT_VERSION}\";
-	inline constexpr std::string_view git_commit = \"${GIT_HASH}\";
-}")
-
-set(VERSION_HEADER "${CMAKE_CURRENT_BINARY_DIR}/include/generated/build_id.hpp")
-file(CONFIGURE
-        OUTPUT "${VERSION_HEADER}"
-        CONTENT "${HEADER_CONTENT}"
+add_library(kernel_objects OBJECT)
+target_sources(kernel_objects
+    PRIVATE ${kernel_sources}
+    PUBLIC FILE_SET HEADERS BASE_DIRS include FILES ${kernel_headers}
+    PUBLIC FILE_SET generated TYPE HEADERS BASE_DIRS "${generated_dir}"
+    FILES "${generated_dir}/build_info.hpp"
 )
 
-file(GLOB_RECURSE KERNEL_SOURCES CONFIGURE_DEPENDS
-        "src/*.cpp"
-        "src/*.c"
-        "src/*.S"
-        "include/*.h"
-        "include/*.hpp"
+# The C++ headers come before klib's: libstdc++'s <cstdlib> and friends reach klib's C headers
+# through #include_next, which only searches the directories after their own.
+target_link_libraries(kernel_objects PUBLIC
+    erebus::kernel_abi
+    erebus::warnings
+    erebus::cxx_headers
+    erebus::klib
+    uacpi::uacpi
+    Zydis
+    lgrt
 )
 
-if (NOT KERNEL_SOURCES)
-    message(WARNING "Kernel: No source files found in ${CMAKE_CURRENT_SOURCE_DIR}")
-endif ()
+erebus_code_quality(kernel_objects)
 
-add_executable(kernel ${KERNEL_SOURCES})
+# ==============================================================================
+# Function: add_kernel_image
+# Usage:    add_kernel_image(<target> <sources...>)
+#
+# A bootable kernel ELF: kernel_objects, the given sources (a main.cpp among
+# them) and the kernel's linker script.
+# ==============================================================================
+function(add_kernel_image target)
+  set(linker_script "${PROJECT_SOURCE_DIR}/kernel/linker/linker.ld")
 
-target_link_libraries(kernel PRIVATE os_kernel_flags klib freestanding-cxx-hdrs uacpi Zydis lgrt)
-target_include_directories(kernel PRIVATE
-        "${CMAKE_CURRENT_SOURCE_DIR}/include"
-        "${CMAKE_CURRENT_BINARY_DIR}/include/generated"
-)
+  add_executable(${target} ${ARGN})
+  target_link_libraries(${target} PRIVATE kernel_objects)
+  target_link_options(${target} PRIVATE "LINKER:--script=${linker_script}")
+  set_target_properties(${target} PROPERTIES LINK_DEPENDS "${linker_script}")
+endfunction()
 
-set(LINKER_SCRIPT "${CMAKE_CURRENT_SOURCE_DIR}/linker/linker.ld")
-target_link_options(kernel PRIVATE "-T${LINKER_SCRIPT}")
-set_target_properties(kernel PROPERTIES LINK_DEPENDS "${LINKER_SCRIPT}")
-
-if (COMMAND apply_code_quality)
-    apply_code_quality(kernel)
-endif ()
+add_kernel_image(kernel "${KERNEL_MAIN}")
+erebus_code_quality(kernel)

@@ -1,12 +1,16 @@
 #pragma once
 
 #include <bitfield.hpp>
+#include <cstddef>
+#include <cstdint>
 #include <expected>
+#include <string_view>
 
 #include "hal/io.hpp"
 
 namespace kernel::drivers::uart {
 enum class ReceiveError : std::uint8_t {
+  Empty,           // Nothing received yet (try_read_char() only)
   Overrun,         // Data lost because the driver didn't read it fast enough
   Parity,          // Hardware detected electrical noise/corruption
   Framing,         // Start/Stop bits misaligned (baud rate mismatch)
@@ -99,9 +103,17 @@ class MCR {
   BF_BIT_RW(loopback, 4)
 };
 
+/// @brief Polled driver for a 16550-compatible UART.
+///
+/// Output never blocks for long: the driver remembers how much room the transmit FIFO has, so
+/// it only looks at the line status once per FIFO-full of bytes, and if the UART stops draining
+/// (no hardware, a stuck line, flow control nobody honours) it gives up after a bounded wait and
+/// drops output until the transmitter comes back. A console must not be able to hang the kernel.
 class SerialPort {
   hw::IoResource m_io;
   std::uint8_t m_fifo_depth{1};
+  std::uint8_t m_tx_room{0};  // bytes the transmit FIFO is known to take without asking
+  bool m_stalled{false};      // last wait timed out; only poll once per byte until it recovers
 
   REG_WO(THR, 0, std::uint8_t)  // Transmit Holding
   REG_RO(RBR, 0, std::uint8_t)  // Receive Buffer
@@ -146,21 +158,35 @@ class SerialPort {
     }
   }
 
+  [[nodiscard]] bool probe() const noexcept;
+  [[nodiscard]] bool wait_for_tx_room() noexcept;
+  void put(std::uint8_t byte) noexcept;
+  [[nodiscard]] std::expected<char, ReceiveError> take(LSR lsr) const noexcept;
+
  public:
+  /// The crystal of a PC serial port. Divisor 1 gives 115200 baud.
+  static constexpr std::uint32_t DEFAULT_CLOCK_HZ = 1'843'200;
+
   constexpr explicit SerialPort(const hw::IoResource io) noexcept : m_io(io) {}
 
+  /// @brief Checks that a UART is there and sets it up for 8N1 with FIFOs.
+  /// @param baud_rate     0 keeps the divisor the firmware programmed.
+  /// @param base_clock_hz UART input clock; 0 means DEFAULT_CLOCK_HZ.
   [[nodiscard]] std::expected<void, std::string_view> initialize(
-      std::uint32_t baud_rate = 115200, std::uint32_t base_clock_hz = 1843200) noexcept;
+      std::uint32_t baud_rate = 115200, std::uint32_t base_clock_hz = DEFAULT_CLOCK_HZ) noexcept;
 
   [[nodiscard]] bool is_transmit_fifo_empty() const noexcept {
     return read<Lsr>().get_thr_empty() != 0;
   }
   [[nodiscard]] bool has_data() const noexcept { return read<Lsr>().get_data_ready() != 0; }
 
-  void append(std::string_view str) const noexcept;
-  void push(char c) const noexcept;
+  /// @brief Sends @p str, turning `\n` into `\r\n`.
+  void append(std::string_view str) noexcept;
+  void push(char c) noexcept;
+  void append_fill(std::size_t count, char c) noexcept;
 
-  void append_fill(const std::size_t count, const char c) const noexcept;
+  /// @brief Waits (boundedly) until every byte has left the shift register.
+  void flush() noexcept;
 
   [[nodiscard]] static constexpr char* advance(std::size_t /* n */) noexcept {
     // UARTs are stream devices, not memory buffers. Formatter must fall back
@@ -168,13 +194,10 @@ class SerialPort {
     return nullptr;
   }
 
+  /// @brief Waits for a byte. A byte that arrived damaged is consumed and reported as an error.
   [[nodiscard]] std::expected<char, ReceiveError> read_char() const noexcept;
-  [[nodiscard]] std::expected<char, ReceiveError> try_read_char() const noexcept {
-    if (!has_data()) {
-      return '\0';
-    }
 
-    return read_char();
-  }
+  /// @brief Like read_char(), but returns ReceiveError::Empty instead of waiting.
+  [[nodiscard]] std::expected<char, ReceiveError> try_read_char() const noexcept;
 };
 }  // namespace kernel::drivers::uart

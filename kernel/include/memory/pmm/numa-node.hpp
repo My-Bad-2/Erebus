@@ -1,15 +1,28 @@
+/// @file numa-node.hpp
+/// @brief A NUMA memory node and its three mobility zones.
+
 #pragma once
+
+#include <array>
+#include <utility>
 
 #include "mobility-zone.hpp"
 
 namespace kernel::memory::pmm {
+/// @brief Rough classification of a node's memory technology, derived from HMAT when available.
 enum class MemoryTier : std::uint8_t {
-  HBM = 0,        // Higher bandwidth memory
-  DDR = 1,        // Standard Main Memory
-  CXL_LOCAL = 2,  // PCIe-attached Compute Express Link Memory
-  PMEM = 3,       // Persistent Memory
+  HBM = 0,        // High bandwidth memory
+  DDR = 1,        // Standard main memory
+  CXL_LOCAL = 2,  // PCIe-attached Compute Express Link memory
+  PMEM = 3,       // Persistent memory
 };
 
+/// @brief All physical memory attached to one proximity domain.
+///
+/// Memory is split into one MobilityZone per PageMobility class. A request is first served by the
+/// zone matching its mobility; if that zone is empty the node steals a block from a sibling zone
+/// (in the order given by `s_fallback_hierarchy`) and keeps the remainder in the requesting
+/// zone, so the next requests of that class find memory without stealing again.
 class alignas(std::hardware_destructive_interference_size) NumaNode {
   std::uint32_t m_node_id;
   MemoryTier m_tier;
@@ -46,6 +59,8 @@ class alignas(std::hardware_destructive_interference_size) NumaNode {
     return m_zones[std::to_underlying(m)];
   }
 
+  /// @brief Allocates from this node only, stealing from sibling zones if necessary.
+  /// @return The block's head descriptor, or nullptr if no zone of the node can satisfy it.
   [[nodiscard]] Page* alloc_pages(PageMobility requested_mobility,
                                   std::uint8_t requested_order) noexcept;
 };

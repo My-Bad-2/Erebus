@@ -1,22 +1,13 @@
 #include "memory/vmm/pagemap/pagemap.hpp"
 
+#include <cpuid.h>
+
 #include "memory/pmm.hpp"
 #include "memory/vmm/pagemap/tlb.hpp"
 #include "utils/logger.hpp"
 
 namespace kernel::memory::vmm {
 namespace {
-std::uint8_t max_lvls = 0;
-
-bool nxe_supported = false;
-bool pge_supported = false;
-bool umip_supported = false;
-bool smep_supported = false;
-bool smap_supported = false;
-bool pke_supported = false;
-bool pcid_supported = false;
-bool tce_supported = false;
-
 enum class PatMemoryType : std::uint64_t {
   Uncacheable = 0x00,
   WriteCombining = 0x01,
@@ -43,14 +34,23 @@ class PatMsr {
   BF_RW(std::uint8_t, pat7, 56, 8)
 };
 
-void free_table_recursive(const PhysicalAddress table_phys, const std::uint8_t lvl) noexcept {
+// What each PAT index means with the layout programmed in initialize_hw().
+constexpr CacheMode PAT_INDEX_TO_MODE[8] = {
+    CacheMode::WriteBack,        CacheMode::WriteThrough,   CacheMode::UncacheableMinus,
+    CacheMode::Uncacheable,      CacheMode::WriteCombining, CacheMode::WriteProtected,
+    CacheMode::UncacheableMinus, CacheMode::Uncacheable,
+};
+
+// Frees a table and every table below it. Leaf frames belong to whoever mapped them.
+void free_table_recursive(const PhysicalAddress table_phys, const std::uint8_t lvl,
+                          const std::uint32_t first = 0, const std::uint32_t last = 512) noexcept {
   if (lvl > 1) {
     const auto* table = DirectMap::phys_to_virt(table_phys).as<PageTableEntry>();
-    for (std::uint32_t i = 0; i < 512; ++i) {
-      if (table[i].is_present() && !table[i].is_huge()) {
-        if (auto child_phys = table[i].extract_address(PageSize::Size4K)) {
-          free_table_recursive(*child_phys, static_cast<std::uint8_t>(lvl - 1));
-        }
+    for (std::uint32_t i = first; i < last; ++i) {
+      const PTEntry entry = table[i].load(std::memory_order_relaxed);
+      if (entry.get_present() && !entry.get_huge()) {
+        free_table_recursive(PhysicalAddress{entry.get_pfn_4k() << PAGE_SHIFT_4KB},
+                             static_cast<std::uint8_t>(lvl - 1));
       }
     }
   }
@@ -60,114 +60,127 @@ void free_table_recursive(const PhysicalAddress table_phys, const std::uint8_t l
 }  // namespace
 
 AccessFlags PageMap::extract_flags(const PTEntry& s) noexcept {
-  auto flags = AccessFlags::None;
+  auto flags = AccessFlags::Read;
 
   if (s.get_rw()) {
-    flags = flags | AccessFlags::Write;
+    flags |= AccessFlags::Write;
   }
 
   if (s.get_user()) {
-    flags = flags | AccessFlags::User;
+    flags |= AccessFlags::User;
   }
 
   if (s.get_global()) {
-    flags = flags | AccessFlags::Global;
+    flags |= AccessFlags::Global;
   }
 
   if (!s.get_nx()) {
-    flags = flags | AccessFlags::Execute;
+    flags |= AccessFlags::Execute;
   }
 
   if (s.get_cow()) {
-    flags = flags | AccessFlags::CopyOnWrite;
+    flags |= AccessFlags::CopyOnWrite;
   }
 
   if (s.get_shared()) {
-    flags = flags | AccessFlags::Shared;
+    flags |= AccessFlags::Shared;
   }
 
   if (s.get_stack()) {
-    flags = flags | AccessFlags::Stack;
+    flags |= AccessFlags::Stack;
   }
 
-  return flags | AccessFlags::Read;
+  return flags;
 }
 
 CacheMode PageMap::extract_cache(const PTEntry& s, const bool is_huge) noexcept {
-  const bool pwt = s.get_pwt() == 1;
-  const bool pcd = s.get_pcd() == 1;
-
   const bool pat = is_huge ? s.get_pat_large() : s.get_pat_4k();
-
-  if (!pat && !pcd && !pwt) {
-    return CacheMode::WriteBack;
-  }
-
-  if (!pat && !pcd && pwt) {
-    return CacheMode::WriteThrough;
-  }
-
-  if (!pat && pcd && !pwt) {
-    return CacheMode::UncacheableMinus;
-  }
-
-  if (!pat && pcd && pwt) {
-    return CacheMode::Uncacheable;
-  }
-
-  if (pat && !pcd && !pwt) {
-    return CacheMode::WriteCombining;
-  }
-
-  return CacheMode::WriteBack;
+  const std::uint32_t index = (pat ? 4u : 0u) | (s.get_pcd() ? 2u : 0u) | (s.get_pwt() ? 1u : 0u);
+  return PAT_INDEX_TO_MODE[index];
 }
 
-PageMap::PageMap() noexcept : m_lvls{max_lvls} {
+AccessFlags PageMap::leaf_flags(const VirtualAddress virt, const AccessFlags flags) noexcept {
+  // Kernel mappings are identical in every address space, so they can survive CR3 switches.
+  // User mappings must not: a global user page would leak into the next process.
+  return virt.is_upper_half() ? (flags | AccessFlags::Global) : (flags & ~AccessFlags::Global);
+}
+
+PageMap::PageMap() noexcept
+    : m_generation{s_next_generation.fetch_add(1, std::memory_order_relaxed)},
+      m_lvls{g_paging_features.levels} {
   const auto root_res = pmm::alloc_pages_zeroed(pmm::PageMobility::Unmovable, 0);
   if (!root_res) {
     utils::logger::fatal("Unable to allocate page for top pml table!\n");
   }
 
-  const PhysicalAddress root_phys{*root_res};
-  m_root_phys = root_phys;
+  m_root_phys = *root_res;
+  auto* root = DirectMap::phys_to_virt(m_root_phys).as<PageTableEntry>();
 
-  if (s_kernel_root) [[likely]] {
-    auto* new_root_table = DirectMap::phys_to_virt(root_phys).as<PageTableEntry>();
-    auto* kernel_root_table = s_kernel_root.as<PageTableEntry>();
-
-    for (std::size_t i = MAX_PAGE_ENTRIES / 2; i < MAX_PAGE_ENTRIES; ++i) {
-      PTEntry k_entry = kernel_root_table[i].load(std::memory_order_relaxed);
-      new_root_table[i].store(k_entry, std::memory_order_relaxed);
+  if (s_kernel_root.value() != 0) [[likely]] {
+    // Share the kernel's tables. They are all present (see below), so the copy can never miss
+    // a kernel mapping created later.
+    const auto* kernel_root = DirectMap::phys_to_virt(s_kernel_root).as<PageTableEntry>();
+    for (std::uint32_t i = KERNEL_HALF_START; i < MAX_PAGE_ENTRIES; ++i) {
+      root[i].store(kernel_root[i].load(std::memory_order_relaxed), std::memory_order_relaxed);
     }
-  } else {
-    s_kernel_root = DirectMap::phys_to_virt(root_phys);
+
+    return;
   }
+
+  // This is the kernel map. Populate the whole upper half now (1 MiB of tables) so that no new
+  // top-level entry ever has to be added after other address spaces copied the half.
+  for (std::uint32_t i = KERNEL_HALF_START; i < MAX_PAGE_ENTRIES; ++i) {
+    const auto table = pmm::alloc_pages_zeroed(pmm::PageMobility::Unmovable, 0);
+    if (!table) {
+      utils::logger::fatal("Unable to allocate the kernel's top-level page tables!\n");
+    }
+
+    root[i].store(PageTableEntry::build_directory(*table, false), std::memory_order_relaxed);
+  }
+
+  s_kernel_root = m_root_phys;
 }
 
-PageMap::~PageMap() noexcept { free_table_recursive(m_root_phys, m_lvls); }
+PageMap::~PageMap() noexcept {
+  if (is_kernel()) [[unlikely]] {
+    utils::logger::fatal("Attempted to destroy the kernel page map!\n");
+  }
+
+  // The upper half belongs to the kernel and is shared by everyone; only free our own half.
+  free_table_recursive(m_root_phys, m_lvls, 0, KERNEL_HALF_START);
+}
 
 void early_initialize_hw() noexcept {
   const hw::CpuInfo* info = hw::profile_manager.get_current();
+  PagingFeatures& f = g_paging_features;
 
-  supports_1gb_pages = info->has<hw::Feature::GIB>();
-  smap_supported = info->has<hw::Feature::SMAP>();
-  smep_supported = info->has<hw::Feature::SMEP>();
-  nxe_supported = info->has<hw::Feature::NX>();
-  pge_supported = info->has<hw::Feature::PGE>();
-  umip_supported = info->has<hw::Feature::UMIP>();
-  pke_supported = info->has<hw::Feature::PKU>();
-  pcid_supported = info->has<hw::Feature::PCID>();
-  tce_supported = info->has<hw::Feature::TCE>();
+  f.huge_1g = info->has<hw::Feature::GIB>();
+  f.smap = info->has<hw::Feature::SMAP>();
+  f.smep = info->has<hw::Feature::SMEP>();
+  f.nx = info->has<hw::Feature::NX>();
+  f.pge = info->has<hw::Feature::PGE>();
+  f.umip = info->has<hw::Feature::UMIP>();
+  f.pke = info->has<hw::Feature::PKU>();
+  f.pcid = info->has<hw::Feature::PCID>();
+  f.invpcid = info->has<hw::Feature::INVPCID>();
+  f.invlpgb = info->has<hw::Feature::INVLPGB>();
+  f.tce = info->has<hw::Feature::TCE>();
 
-  const hw::CR4 cr4 = hw::read::cr4();
-  const bool la57_active = cr4.get_la57();
-  max_lvls = la57_active ? 5 : 4;
+  if (f.invlpgb) {
+    std::uint32_t eax, ebx, ecx, edx;
+    __cpuid(0x80000008, eax, ebx, ecx, edx);
+    f.invlpgb_max_count = static_cast<std::uint16_t>(edx & 0xFFFF);
+  }
+
+  f.levels = hw::read::cr4().get_la57() ? 5 : 4;
 }
 
 void initialize_hw() noexcept {
+  const PagingFeatures& f = g_paging_features;
+
   hw::EFER efer = hw::read::efer();
-  efer.set_nxe(nxe_supported);
-  efer.set_tce(tce_supported);
+  efer.set_nxe(f.nx);
+  efer.set_tce(f.tce);
   hw::write::efer(efer);
 
   hw::CR0 cr0 = hw::read::cr0()
@@ -178,16 +191,19 @@ void initialize_hw() noexcept {
                     .with_pg(true);  // paging on
   hw::write::cr0(cr0);
 
+  // Turning PCIDE on requires CR3[11:0] == 0, which holds for the tables Limine hands us.
   hw::CR4 cr4 = hw::read::cr4();
   cr4.set_pae(true);
-  cr4.set_pge(pge_supported);
-  cr4.set_smep(smep_supported);
-  cr4.set_smap(smap_supported);
-  cr4.set_umip(umip_supported);
-  cr4.set_pke(pke_supported);
-  cr4.set_pcide(pcid_supported);
+  cr4.set_pge(f.pge);
+  cr4.set_smep(f.smep);
+  cr4.set_smap(f.smap);
+  cr4.set_umip(f.umip);
+  cr4.set_pke(f.pke);
+  cr4.set_pcide(f.pcid);
   hw::write::cr4(cr4);
 
+  // Indices 0-3 keep their power-on meaning so PWT/PCD alone still behave as documented;
+  // build_schema() and PAT_INDEX_TO_MODE depend on exactly this layout.
   constexpr std::uint32_t MSR_PAT = 0x00000277;
 
   PatMsr pat{0};

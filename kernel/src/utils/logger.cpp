@@ -1,52 +1,75 @@
 #include "utils/logger.hpp"
 
-#include <uacpi/acpi.h>
-
 #include "drivers/uart.hpp"
+#include "utils/assert.hpp"
 
 namespace kernel::utils::logger {
 namespace {
 std::optional<drivers::uart::SerialPort> console;
 TicketSpinlock console_lock;
 
+// Interrupt handlers log too, so the console lock must be taken with interrupts off, or one that
+// arrives while its own CPU is printing deadlocks. IrqSaveGuard is no good here: it also counts
+// preemption through GS, and the first messages are printed before GS is set up.
+class [[nodiscard]] ConsoleGuard {
+  std::uint64_t m_flags;
+
+ public:
+  ConsoleGuard() noexcept : m_flags(hw::irq::save()) { console_lock.lock(); }
+
+  ~ConsoleGuard() noexcept {
+    console_lock.unlock();
+    hw::irq::restore(m_flags);
+  }
+
+  ConsoleGuard(const ConsoleGuard&) = delete;
+  ConsoleGuard& operator=(const ConsoleGuard&) = delete;
+};
+
+// Until the firmware's console is known, try COM1. If nothing answers there, stay silent rather
+// than spin on a port that is not there.
+bool console_probed = false;
+
 void ensure_console_init() noexcept {
-  if (!console.has_value()) [[unlikely]] {
-    drivers::uart::SerialPort early_port(hw::IoResource(hw::IoType::PMIO, 0x3f8, 1));
-    auto _ = early_port.initialize(115200);
-    console.emplace(early_port);
+  if (console_probed) [[likely]] {
+    return;
+  }
+
+  console_probed = true;
+  drivers::uart::SerialPort com1(hw::IoResource(hw::IoType::PMIO, 0x3f8, 1));
+  if (com1.initialize(115200)) {
+    console.emplace(com1);
     console->append("\x1b[2J");  // Clear screen on host (can be safely removed)
   }
 }
 }  // namespace
 
-void initialize(const void* spcr_raw) noexcept {
-  if (!spcr_raw) return;
+void initialize(const drivers::uart::SerialPort& port) noexcept {
+  ConsoleGuard guard;
 
-  NakedGuard guard(console_lock);
-
-  const auto* spcr = static_cast<const acpi_spcr*>(spcr_raw);
-  if (spcr != nullptr) [[unlikely]] {
-    const auto type =
-        spcr->base_address.address_space_id == 0 ? hw::IoType::MMIO : hw::IoType::PMIO;
-    const std::uint8_t stride =
-        spcr->base_address.access_size > 0 ? spcr->base_address.access_size : 1;
-
-    drivers::uart::SerialPort acpi_port(
-        hw::IoResource(type, spcr->base_address.address_space_id, stride));
-
-    if (acpi_port.initialize(115200).has_value()) {
-      console.emplace(acpi_port);
-
-      auto msg = "[CONSOLE] Upgrade to ACPI SPCR routing.\n";
-      while (*msg) console->push(*msg++);
-    }
+  // Whatever COM1 still has queued may be cut off once nobody writes to it; let it drain.
+  if (console) {
+    console->flush();
   }
+
+  console_probed = true;
+  console.emplace(port);
+  console->append("[CONSOLE] Switched to the ACPI SPCR console.\n");
 }
 
 void write_console(const std::string_view msg) noexcept {
-  NakedGuard guard(console_lock);
+  ConsoleGuard guard;
   ensure_console_init();
 
-  for (const char c : msg) console->push(c);
+  if (console) {
+    console->append(msg);
+  }
 }
 }  // namespace kernel::utils::logger
+
+namespace kernel::utils {
+void assertion_failed(const char* condition, const std::source_location where) noexcept {
+  logger::fatal("Assertion failed: {} ({}:{} in {})\n", condition, where.file_name(), where.line(),
+                where.function_name());
+}
+}  // namespace kernel::utils

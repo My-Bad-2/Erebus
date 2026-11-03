@@ -7,161 +7,165 @@
 
 namespace klib {
 namespace {
-[[gnu::always_inline]] void memswap(void* __restrict a, void* __restrict b,
-                                    std::size_t size) noexcept {
-  using namespace string;
+using Compare = int (*)(const void*, const void*);
 
-  if (size == 8) [[likely]] {
-    const auto temp = unaligned_load<std::uint64_t>(a);
-    unaligned_store<std::uint64_t>(a, unaligned_load<std::uint64_t>(b));
-    unaligned_store<std::uint64_t>(b, temp);
-    return;
+// Partitions this short are left for the insertion sort pass at the end.
+constexpr std::size_t INSERTION_THRESHOLD = 16;
+
+[[gnu::always_inline]] inline void swap_bytes(void* a, void* b, std::size_t size) noexcept {
+  using string::unaligned_load;
+  using string::unaligned_store;
+
+  auto* p1 = static_cast<char*>(a);
+  auto* p2 = static_cast<char*>(b);
+
+  for (; size >= 8; size -= 8, p1 += 8, p2 += 8) {
+    const auto tmp = unaligned_load<std::uint64_t>(p1);
+    unaligned_store(p1, unaligned_load<std::uint64_t>(p2));
+    unaligned_store(p2, tmp);
   }
 
-  if (size == 4) [[likely]] {
-    const auto temp = unaligned_load<std::uint32_t>(a);
-    unaligned_store<std::uint32_t>(a, unaligned_load<std::uint32_t>(b));
-    unaligned_store<std::uint32_t>(b, temp);
-    return;
+  if (size >= 4) {
+    const auto tmp = unaligned_load<std::uint32_t>(p1);
+    unaligned_store(p1, unaligned_load<std::uint32_t>(p2));
+    unaligned_store(p2, tmp);
+    size -= 4;
+    p1 += 4;
+    p2 += 4;
   }
 
-  char* p1 = static_cast<char*>(a);
-  char* p2 = static_cast<char*>(b);
-
-  while (size >= 8) {
-    const auto temp = unaligned_load<std::uint64_t>(p1);
-    unaligned_store<std::uint64_t>(p1, unaligned_load<std::uint64_t>(p2));
-    unaligned_store<std::uint64_t>(p2, temp);
-    p1 += 8;
-    p2 += 8;
-    size -= 8;
-  }
-
-  while (size > 0) {
-    const char temp = *p1;
+  for (; size > 0; --size, ++p1, ++p2) {
+    const char tmp = *p1;
     *p1 = *p2;
-    *p2 = temp;
-    ++p1;
-    ++p2;
-    --size;
+    *p2 = tmp;
   }
 }
 
-using cmp_func_t = int (*)(const void*, const void*);
+class Sorter {
+  char* m_base;
+  std::size_t m_size;
+  Compare m_compare;
 
-void heap_sort(char* base, std::size_t num, std::size_t size, cmp_func_t compar) noexcept {
-  if (num < 2) {
-    return;
+  [[nodiscard]] char* at(const std::size_t i) const noexcept { return m_base + i * m_size; }
+
+  [[nodiscard]] bool less(const std::size_t i, const std::size_t j) const noexcept {
+    return m_compare(at(i), at(j)) < 0;
   }
 
-  auto sift_down = [&](std::size_t root, std::size_t end) {
-    while (root * 2 + 1 <= end) {
-      std::size_t child = root * 2 + 1;
-
-      // Pick the larger child
-      if (child + 1 <= end && compar(base + child * size, base + (child + 1) * size) < 0) {
-        child++;
-      }
-
-      // Swap if child is greater than root
-      if (compar(base + root * size, base + child * size) < 0) {
-        memswap(base + root * size, base + child * size, size);
-        root = child;
-      } else {
-        break;
-      }
-    }
-  };
-
-  // Heapify
-  for (ptrdiff_t i = (num - 2) / 2; i >= 0; --i) {
-    sift_down(static_cast<std::size_t>(i), num - 1);
+  void swap(const std::size_t i, const std::size_t j) const noexcept {
+    swap_bytes(at(i), at(j), m_size);
   }
 
-  // Extract max
-  for (ptrdiff_t i = num - 1; i > 0; --i) {
-    memswap(base, base + i * size, size);
-    sift_down(0, static_cast<std::size_t>(i - 1));
-  }
-}
-
-void introsort(char* base, std::size_t num, std::size_t size, cmp_func_t compar,
-               std::size_t depth_limit) noexcept {
-  while (num > 16) {
-    if (depth_limit == 0) [[unlikely]] {
-      heap_sort(base, num, size, compar);
-      return;
-    }
-
-    depth_limit--;
-
-    std::size_t mid = num / 2;
-    if (compar(base + mid * size, base) < 0) {
-      memswap(base + mid * size, base, size);
-    }
-
-    if (compar(base + (num - 1) * size, base) < 0) {
-      memswap(base + (num - 1) * size, base, size);
-    }
-
-    if (compar(base + (num - 1) * size, base + mid * size) < 0) {
-      memswap(base + (num - 1) * size, base + mid * size, size);
-    }
-
-    memswap(base + mid * size, base, size);
-
-    std::size_t left = 1;
-    std::size_t right = num - 1;
-
+  void sift_down(std::size_t root, const std::size_t first, const std::size_t end) const noexcept {
     while (true) {
-      while (left <= right && compar(base + left * size, base) < 0) {
-        left++;
+      std::size_t child = 2 * root + 1;
+      if (child >= end) {
+        return;
       }
 
-      while (left <= right && compar(base + right * size, base) > 0) {
-        right--;
+      if (child + 1 < end && less(first + child, first + child + 1)) {
+        ++child;
       }
 
+      if (!less(first + root, first + child)) {
+        return;
+      }
+
+      swap(first + root, first + child);
+      root = child;
+    }
+  }
+
+  // Sorts [first, first + count) in O(n log n), whatever the input.
+  void heap_sort(const std::size_t first, const std::size_t count) const noexcept {
+    for (std::size_t i = count / 2; i-- > 0;) {
+      sift_down(i, first, count);
+    }
+
+    for (std::size_t end = count - 1; end > 0; --end) {
+      swap(first, first + end);
+      sift_down(0, first, end);
+    }
+  }
+
+  // Hoare partition of [first, first + count) around the median of three. Returns where the
+  // pivot ended up; everything before it compares <= and everything after >=.
+  [[nodiscard]] std::size_t partition(const std::size_t first,
+                                      const std::size_t count) const noexcept {
+    const std::size_t mid = first + count / 2;
+    const std::size_t last = first + count - 1;
+
+    if (less(mid, first)) swap(mid, first);
+    if (less(last, first)) swap(last, first);
+    if (less(last, mid)) swap(last, mid);
+    swap(mid, first);
+
+    // Both scans stop on elements equal to the pivot, which keeps runs of equal keys balanced.
+    std::size_t left = first + 1;
+    std::size_t right = last;
+    while (true) {
+      while (left <= right && less(left, first)) ++left;
+      while (left <= right && less(first, right)) --right;
       if (left >= right) {
         break;
       }
 
-      memswap(base + left * size, base + right * size, size);
-      left++;
-      right--;
+      swap(left++, right--);
     }
 
-    memswap(base, base + right * size, size);
-    std::size_t pivot_idx = right;
+    swap(first, right);
+    return right;
+  }
 
-    if (pivot_idx < num / 2) {
-      introsort(base, pivot_idx, size, compar, depth_limit);
-      base = base + (pivot_idx + 1) * size;
-      num = num - (pivot_idx + 1);
-    } else {
-      introsort(base + (pivot_idx + 1) * size, num - (pivot_idx + 1), size, compar, depth_limit);
-      num = pivot_idx;
+ public:
+  Sorter(void* base, const std::size_t size, const Compare compare) noexcept
+      : m_base(static_cast<char*>(base)), m_size(size), m_compare(compare) {}
+
+  // Quicksort down to short partitions, falling back to heap sort once the recursion runs
+  // deeper than it should, which bounds the worst case at O(n log n). Recursing into the
+  // smaller side keeps the stack at O(log n).
+  void introsort(std::size_t first, std::size_t count, std::size_t depth_limit) const noexcept {
+    while (count > INSERTION_THRESHOLD) {
+      if (depth_limit-- == 0) [[unlikely]] {
+        heap_sort(first, count);
+        return;
+      }
+
+      const std::size_t pivot = partition(first, count);
+      const std::size_t left_count = pivot - first;
+      const std::size_t right_count = count - left_count - 1;
+
+      if (left_count < right_count) {
+        introsort(first, left_count, depth_limit);
+        first = pivot + 1;
+        count = right_count;
+      } else {
+        introsort(pivot + 1, right_count, depth_limit);
+        count = left_count;
+      }
     }
   }
-}
+
+  // Finishes the job: introsort left every element within its short partition, so each moves
+  // only a few places.
+  void insertion_sort(const std::size_t count) const noexcept {
+    for (std::size_t i = 1; i < count; ++i) {
+      for (std::size_t j = i; j > 0 && less(j, j - 1); --j) {
+        swap(j, j - 1);
+      }
+    }
+  }
+};
 }  // namespace
 
-void qsort(void* __restrict ptr, std::size_t count, std::size_t size, cmp_func_t compar) noexcept {
+void qsort(void* ptr, const std::size_t count, const std::size_t size,
+           const Compare compare) noexcept {
   if (count < 2 || size == 0) {
     return;
   }
 
-  char* base = static_cast<char*>(ptr);
-
-  // 2 * log2(count)
-  std::size_t depth_limit = static_cast<std::size_t>(std::bit_width(count)) * 2;
-
-  introsort(base, depth_limit, size, compar, depth_limit);
-
-  for (std::size_t i = 1; i < count; ++i) {
-    for (std::size_t j = i; j > 0 && compar(base + j * size, base + (j - 1) * size) < 0; --j) {
-      memswap(base + j * size, base + (j - 1) * size, size);
-    }
-  }
+  const Sorter sorter{ptr, size, compare};
+  sorter.introsort(0, count, 2 * static_cast<std::size_t>(std::bit_width(count)));
+  sorter.insertion_sort(count);
 }
 }  // namespace klib

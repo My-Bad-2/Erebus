@@ -1,18 +1,23 @@
-/**
- * @file kformat.hpp
- * @brief Main frontend and parser for the string formatting engine.
- *
- * This file coordinates the formatting pipeline by parsing runtime format
- * specifiers, matching them with the compile-time verified `format_string`
- * indices, and safely dispatching the corresponding arguments to their
- * respective type formatters.
- */
-
+/// @file kformat.hpp
+/// @brief std::format-style formatting into bounded buffers, with format strings checked at
+///        compile time.
+///
+/// @code
+/// char buf[64];
+/// klib::kprint(buf, sizeof(buf), "{} pages at {:#x}", count, address);
+/// @endcode
+///
+/// format_to() writes into any sink with `push(char)` and `append(std::string_view)`; kprint()
+/// wraps a StringBuffer around a char array, truncating and always terminating. Types get their
+/// output from klib::formatter, see formatters.hpp.
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
+#include <span>
+#include <string_view>
 #include <type_traits>
+#include <utility>
 
 #include "kformat/format_string.hpp"
 #include "kformat/formatters.hpp"
@@ -20,21 +25,17 @@
 
 namespace klib {
 namespace detail {
-/**
- * @brief Parses formatting directives inside a curly-brace placeholder.
- *
- * @param view The full format string view.
- * @param pos The current index positioned immediately after the parsed argument
- * index or `{`.
- * @param spec The `FormatSpec` instance to populate with parsed directives.
- * @return The advanced string index positioned exactly after the closing `}`.
- *
- * @note Syntax rules: `[[fill]align][sign][#][0][width][.precision][type]`
- */
+/// @brief Parses the specifier of one placeholder into `spec`.
+///
+/// Syntax: `[[fill]align][sign][#][0][width][.precision][type]`, where type is one of
+/// `x X b B o p`. Anything else is ignored, but still available to custom formatters as
+/// FormatSpec::custom.
+///
+/// @param pos Index right after the `{` and any argument index.
+/// @return Index right after the closing `}`.
 constexpr std::size_t parse_spec(const std::string_view view, std::size_t pos,
                                  FormatSpec& spec) noexcept {
-  // If there's no format specifier (e.g. `{0}` or `{}`), fast forward to
-  // closing brace.
+  // No specifier: skip to the closing brace.
   if (pos >= view.size() || view[pos] != ':') {
     while (pos < view.size() && view[pos] != '}') {
       ++pos;
@@ -61,14 +62,12 @@ constexpr std::size_t parse_spec(const std::string_view view, std::size_t pos,
     spec.fill = view[pos];
     spec.align = view[pos + 1];
     pos += 2;
-  } else if (pos < spec_end &&
-             (view[pos] == '<' || view[pos] == '>' || view[pos] == '^')) {
+  } else if (pos < spec_end && (view[pos] == '<' || view[pos] == '>' || view[pos] == '^')) {
     spec.align = view[pos++];
   }
 
   // Parse Sign Prefix
-  if (pos < spec_end &&
-      (view[pos] == '+' || view[pos] == '-' || view[pos] == ' ')) {
+  if (pos < spec_end && (view[pos] == '+' || view[pos] == '-' || view[pos] == ' ')) {
     spec.sign = view[pos++];
   }
 
@@ -138,19 +137,10 @@ constexpr std::size_t parse_spec(const std::string_view view, std::size_t pos,
   return spec_end < view.size() ? spec_end + 1 : spec_end;
 }
 
-/**
- * @brief Dispatcher resolving a runtime index to a variadic template argument.
- *
- * @tparam CurrentIdx The recursion counter.
- * @param target_idx The resolved runtime format positional index.
- * @param sink The buffer output sink.
- * @param spec The format specifications.
- * @param arg The active head argument.
- * @param args The remaining argument tail.
- */
+/// @brief Formats argument number `target_idx` of the pack. A linear walk, which is fine for
+///        the handful of arguments a format string has.
 template <std::size_t CurrentIdx = 0, typename Sink, typename T, typename... Ts>
-constexpr void dispatch_arg(std::size_t target_idx, Sink& sink,
-                            const FormatSpec& spec, T&& arg,
+constexpr void dispatch_arg(std::size_t target_idx, Sink& sink, const FormatSpec& spec, T&& arg,
                             Ts&&... args) noexcept {
   if (target_idx == CurrentIdx) {
     formatter<std::decay_t<T>>::format(sink, arg, spec);
@@ -158,27 +148,19 @@ constexpr void dispatch_arg(std::size_t target_idx, Sink& sink,
   }
 
   if constexpr (sizeof...(Ts) > 0)
-    dispatch_arg<CurrentIdx + 1>(target_idx, sink, spec,
-                                 std::forward<Ts>(args)...);
+    dispatch_arg<CurrentIdx + 1>(target_idx, sink, spec, std::forward<Ts>(args)...);
 }
 
-// No-op dispatcher when parameter pack is empty
+// An index past the last argument formats nothing; the format string check rules it out anyway.
 template <std::size_t CurrentIdx = 0, typename Sink>
 constexpr void dispatch_arg(std::size_t, Sink&, const FormatSpec&) noexcept {}
 }  // namespace detail
 
-/**
- * @brief Processes a verified format string and dispatches outputs to a sink
- * buffer.
- *
- * @param sink The target sink object exposing `.push(char)` and
- * `.append(string_view)`.
- * @param fmt The compile-time validated format string struct.
- * @param args Variadic payload containing formatting values.
- */
+/// @brief Formats `args` according to `fmt` into `sink`.
+///
+/// `{{` and `}}` print braces; placeholders are `{}` or `{N}` with an optional `:spec`.
 template <typename Sink, typename... Args>
-constexpr void format_to(Sink& sink, format_string<Args...> fmt,
-                         Args&&... args) noexcept {
+constexpr void format_to(Sink& sink, format_string<Args...> fmt, Args&&... args) noexcept {
   const std::string_view view = fmt.get();
   std::size_t pos = 0;
   std::size_t auto_idx = 0;
@@ -223,36 +205,21 @@ constexpr void format_to(Sink& sink, format_string<Args...> fmt,
   }
 }
 
-/**
- * @brief Pointer-and-size wrapper for formatted printing into a memory block.
- *
- * @param buffer Raw char pointer to target block.
- * @param max_size Absolute bound of the target memory array (including
- * terminator).
- * @param fmt Verified formatting payload.
- * @param args Target variables.
- * @return Total number of bytes written (or attempted, if truncated).
- */
+/// @brief Formats into `buffer`, writing at most `max_size - 1` characters and a terminator.
+///
+/// @return The length the full output would have had, as snprintf() does: a result of
+///         `max_size` or more means it was truncated.
 template <typename... Args>
-constexpr std::size_t kprint(char* buffer, const std::size_t max_size,
-                             format_string<Args...> fmt,
+constexpr std::size_t kprint(char* buffer, const std::size_t max_size, format_string<Args...> fmt,
                              Args&&... args) noexcept {
   StringBuffer buf(buffer, max_size);
   format_to(buf, fmt, std::forward<Args>(args)...);
   return buf.finish();
 }
 
-/**
- * @brief Span-based wrapper for formatted printing into a memory block.
- *
- * @param buffer Bounds-checked span describing the memory payload.
- * @param fmt Verified formatting payload.
- * @param args Target variables.
- * @return Total number of bytes written (or attempted, if truncated).
- */
+/// @brief kprint() into a span.
 template <typename... Args>
-constexpr std::size_t kprint(const std::span<char> buffer,
-                             format_string<Args...> fmt,
+constexpr std::size_t kprint(const std::span<char> buffer, format_string<Args...> fmt,
                              Args&&... args) noexcept {
   StringBuffer buf(buffer);
   format_to(buf, fmt, std::forward<Args>(args)...);

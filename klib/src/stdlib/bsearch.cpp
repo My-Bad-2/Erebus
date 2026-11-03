@@ -1,8 +1,5 @@
-#include <bit>
 #include <cstddef>
-#include <cstdint>
 
-#include "../include/string.hpp"
 #include "stdlib.h"
 
 namespace klib {
@@ -18,12 +15,12 @@ void* bsearch(const void* key, const void* ptr, std::size_t count, std::size_t s
 
   const char* base = static_cast<const char*>(ptr);
 
-  // Exact match on first element
   if (compar(key, base) == 0) {
     return const_cast<char*>(base);
   }
 
-  // Locates the subset window rapidly.
+  // Gallop: double the bound until it passes the key, which brackets the key between the last
+  // two bounds in O(log i) comparisons for a key at index i.
   std::size_t bound = 1;
   while (bound < count && compar(key, base + bound * size) > 0) {
     bound *= 2;

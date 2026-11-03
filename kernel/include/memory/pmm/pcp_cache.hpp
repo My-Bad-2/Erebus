@@ -1,16 +1,30 @@
+/// @file pcp_cache.hpp
+/// @brief Per-CPU page caches sitting in front of the buddy zones.
+
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <new>
 
 #include "page.hpp"
-#include "utils/ring_buffer.hpp"
 
 namespace kernel::memory::pmm {
-// Cache order 0, 1, 2, and 3 pages.
-constexpr std::uint8_t PCP_MAX_ORDER = 3;
+/// @brief Orders 0 through PCP_MAX_ORDER are served from the per-CPU caches.
+inline constexpr std::uint8_t PCP_MAX_ORDER = 3;
 
+/// @brief A small per-CPU stack of free blocks of one order.
+///
+/// Most allocations are order 0 and are freed shortly after on the same CPU, so keeping a
+/// handful of blocks per CPU avoids the zone lock entirely on the common path. The list is a
+/// ring: allocation and local frees work LIFO at the tail (the most recently freed block is the
+/// one most likely to still be in cache) while draining takes the oldest blocks from the head.
+///
+/// The zone moves blocks in and out `batch` at a time: it refills an empty list with `batch`
+/// blocks and drains `batch` blocks once the list reaches `high`.
+///
+/// Only the owning CPU touches a list, and only with interrupts disabled.
 class PcpList {
   std::uint16_t m_head{0};
   std::uint16_t m_tail{0};
@@ -25,29 +39,25 @@ class PcpList {
   Page* m_pages[MAX_CAPACITY]{};
 
  public:
+  /// @brief Sizes `high` and `batch` from the zone's free memory.
+  ///
+  /// Order 0 gets up to 256 cached blocks with batches of 32, and each order above that halves
+  /// both. Small zones get a quarter or half of that so a few CPUs cannot hoard the whole zone.
+  /// The result always satisfies `1 <= batch <= high <= MAX_CAPACITY`, which is what makes the
+  /// "drain at high" rule sufficient to never overflow the ring.
   void tune(const std::uint64_t zone_free_pages, const std::uint8_t order) noexcept {
-    // Base limits: Order 0 gets 256. Order 3 gets 32.
-    const std::uint16_t base_high = 256 >> order;
+    const std::uint16_t base_high = MAX_CAPACITY >> order;
     const std::uint16_t base_batch = 32 >> order;
 
+    std::uint16_t divisor = 1;
     if (zone_free_pages < 1024) {
-      m_high = base_high / 4;
-      m_batch = std::max<std::uint16_t>(1, base_batch / 4);
+      divisor = 4;
     } else if (zone_free_pages < 8192) {
-      m_high = base_high / 2;
-      m_batch = std::max<std::uint16_t>(1, base_batch / 2);
-    } else {
-      m_high = base_high;
-      m_batch = base_batch;
+      divisor = 2;
     }
 
-    if (m_high == 0) {
-      m_high = 1;
-    }
-
-    if (m_batch == 0) {
-      m_batch = 1;
-    }
+    m_high = std::clamp<std::uint16_t>(base_high / divisor, 1, MAX_CAPACITY);
+    m_batch = std::clamp<std::uint16_t>(base_batch / divisor, 1, m_high);
   }
 
   [[nodiscard]] constexpr std::uint16_t size() const noexcept { return m_count; }
@@ -56,18 +66,14 @@ class PcpList {
   [[nodiscard]] constexpr bool needs_drain() const noexcept { return m_count >= m_high; }
   [[nodiscard]] constexpr std::uint16_t batch_size() const noexcept { return m_batch; }
 
-  // Push to tail
+  /// @pre The list has room, i.e. the caller drained it once needs_drain() became true.
   [[gnu::always_inline]] void push_hot(Page* p) noexcept {
-    if (m_count >= MAX_CAPACITY) [[unlikely]] {
-      return;
-    }
-
     m_pages[m_tail] = p;
     m_tail = (m_tail + 1) & MASK;
     m_count++;
   }
 
-  // Pop from tail (LIFO ensures the hottest pages stay in L1 Cache)
+  /// @return The most recently pushed block, or nullptr if empty.
   [[nodiscard, gnu::always_inline]] Page* pop_hot() noexcept {
     if (m_count == 0) [[unlikely]] {
       return nullptr;
@@ -78,7 +84,7 @@ class PcpList {
     return m_pages[m_tail];
   }
 
-  // Pop from head (FIFO flushes the oldest/coldest pages to global buddy
+  /// @return The oldest block, or nullptr if empty.
   [[nodiscard, gnu::always_inline]] Page* pop_cold() noexcept {
     if (m_count == 0) [[unlikely]] {
       return nullptr;
@@ -91,6 +97,7 @@ class PcpList {
   }
 };
 
+/// @brief One CPU's cache for one zone: a list per cached order.
 struct alignas(std::hardware_destructive_interference_size) PcpCache {
   std::array<PcpList, PCP_MAX_ORDER + 1> lists;
 };

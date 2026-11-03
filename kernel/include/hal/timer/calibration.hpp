@@ -13,7 +13,9 @@ enum class Source : std::uint8_t {
   IntelMsrPlatformInfo,  // Intel SDM Vol. 4 MSR_PLATFORM_INFO (0xCE)
   AmdMsrPstateDef,       // AMD BKDG / PPR MSRC001_00[6B:64] P-State 0
   HpetSoftware,          // Software-timed TSC against HPET Main Counter
-  HpetDirect             // Direct HPET Main Counter timekeeping
+  HpetDirect,            // Direct HPET Main Counter timekeeping
+  PmTimerSoftware,       // Software-timed TSC against the ACPI PM timer
+  PmTimerDirect,         // Direct ACPI PM timer timekeeping
 };
 
 struct Result {

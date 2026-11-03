@@ -1,12 +1,13 @@
 #include "memory/heap.hpp"
 
+#include <string.h>
+
 #include <new>
 
-#include "boot/boot.hpp"
+#include "hal/smp/smp.hpp"
 #include "memory/address.hpp"
 #include "memory/pmm.hpp"
 #include "memory/pmm/bootstrap.hpp"
-#include "string.h"
 #include "utils/logger.hpp"
 
 namespace kernel::memory::heap {
@@ -18,6 +19,15 @@ constexpr std::uint32_t KMALLOC_MAX_SHIFT = 15;  // 2^15 = 32KB
 constexpr std::uint32_t NUM_KMALLOC_CACHES = KMALLOC_MAX_SHIFT - KMALLOC_MIN_SHIFT + 1;
 constexpr std::size_t MIN_ALLOC_SIZE = std::size_t{1} << KMALLOC_MIN_SHIFT;
 
+// A slab grows until it holds MIN_OBJECTS_PER_SLAB objects, but not past MAX_SLAB_ORDER unless a
+// single object needs more. High-order blocks get scarce once memory fragments, and every CPU
+// pins a few slabs per cache, so big slabs are expensive.
+constexpr std::uint32_t MIN_OBJECTS_PER_SLAB = 32;
+constexpr std::uint8_t MAX_SLAB_ORDER = 3;
+
+// SlabState::total is 15 bits wide and object indices must stay clear of SLUB_NO_IDX.
+static_assert((PAGE_SIZE << MAX_SLAB_ORDER) / sizeof(void*) <= 0x7FFF);
+
 KmemCache* g_meta_cache = nullptr;
 KmemCache* g_meta_cpu_array = nullptr;
 KmemCache* g_meta_node_array = nullptr;
@@ -28,7 +38,7 @@ char* page_to_virt(const pmm::Page* page) noexcept {
   return DirectMap::phys_to_virt(pmm::page_to_phys(page)).as<char>();
 }
 
-pmm::Page* virt_to_page(void* ptr) noexcept {
+pmm::Page* virt_to_page(const void* ptr) noexcept {
   if (const auto phys = DirectMap::virt_to_phys(VirtualAddress{ptr})) [[likely]] {
     return pmm::phys_to_page(*phys);
   }
@@ -43,24 +53,39 @@ pmm::Page* virt_to_page(void* ptr) noexcept {
 
   return std::countr_zero(std::bit_ceil(size)) - KMALLOC_MIN_SHIFT;
 }
+
+[[nodiscard]] std::uint8_t slab_order_for(const std::uint32_t size) noexcept {
+  std::uint8_t order = 0;
+  while ((PAGE_SIZE << order) < size) {
+    ++order;
+  }
+
+  while (order < MAX_SLAB_ORDER && (PAGE_SIZE << order) / size < MIN_OBJECTS_PER_SLAB) {
+    ++order;
+  }
+
+  return order;
+}
+
+[[nodiscard]] bool mostly_empty(const SlabState& state) noexcept {
+  return state.in_use <= state.total / 2;
+}
 }  // namespace
 
 void initialize() noexcept {
-  const std::uint32_t total_cpus = boot::mp_request.response->cpu_count;
+  const std::uint32_t total_cpus = hw::smp::possible_cpus();
   const std::uint32_t total_numa_nodes = pmm::g_topology.active_nodes();
 
-  constexpr std::size_t L1_CACHE_LINE = std::hardware_destructive_interference_size;
+  constexpr std::size_t CACHE_LINE = std::hardware_destructive_interference_size;
+  const std::size_t cpu_bytes = utils::maths::align_up(sizeof(CpuCache) * total_cpus, CACHE_LINE);
+  const std::size_t node_bytes =
+      utils::maths::align_up(sizeof(NodeCache) * total_numa_nodes, CACHE_LINE);
+  const std::size_t per_cache_bytes = sizeof(KmemCache) + cpu_bytes + node_bytes;
 
-  constexpr std::size_t base_sz = sizeof(KmemCache);
-  const std::size_t cpu_sz = utils::maths::align_up(sizeof(CpuCache) * total_cpus, L1_CACHE_LINE);
-  const std::size_t node_sz =
-      utils::maths::align_up(sizeof(NodeCache) * total_numa_nodes, L1_CACHE_LINE);
-
-  const std::size_t single_meta_sz = base_sz + cpu_sz + node_sz;
-  const std::size_t total_boot_size = single_meta_sz * 3;
-
-  std::uint32_t order = 0;
-  while ((PAGE_SIZE << order) < total_boot_size) {
+  // The three caches that allocate cache descriptors cannot allocate their own, so they are
+  // carved out of one block taken straight from the PMM. That block is never freed.
+  std::uint8_t order = 0;
+  while ((PAGE_SIZE << order) < per_cache_bytes * 3) {
     order++;
   }
 
@@ -69,55 +94,33 @@ void initialize() noexcept {
     utils::logger::fatal("Failed to allocate boot page for kmem cache!\n");
   }
 
-  pmm::Page* boot_page = pmm::phys_to_page(*boot_phys);
-  boot_page->set_state(pmm::PageState::Active);
-  boot_page->slub.cache = nullptr;
+  char* cursor = DirectMap::phys_to_virt(*boot_phys).as<char>();
 
-  char* base_ptr = page_to_virt(boot_page);
+  const auto carve_bootstrap_cache = [&](const std::uint32_t obj_size) -> KmemCache* {
+    char* cache_mem = cursor;
+    cursor += sizeof(KmemCache);
+    auto* cpus = reinterpret_cast<CpuCache*>(cursor);
+    cursor += cpu_bytes;
+    auto* nodes = reinterpret_cast<NodeCache*>(cursor);
+    cursor += node_bytes;
 
-  auto carve_mother_cache = [&](std::size_t obj_sz) -> KmemCache* {
-    auto c = reinterpret_cast<KmemCache*>(base_ptr);
-    base_ptr += base_sz;
-    auto* ca = reinterpret_cast<CpuCache*>(base_ptr);
-    base_ptr += cpu_sz;
-    auto* na = reinterpret_cast<NodeCache*>(base_ptr);
-    base_ptr += node_sz;
-
-    std::span cpu_span(ca, total_cpus);
+    const std::span cpu_span(cpus, total_cpus);
     std::uninitialized_default_construct(cpu_span.begin(), cpu_span.end());
 
-    std::span node_span(na, total_numa_nodes);
+    const std::span node_span(nodes, total_numa_nodes);
     std::uninitialized_default_construct(node_span.begin(), node_span.end());
 
-    std::uint32_t c_order = 0;
-    while ((PAGE_SIZE << c_order) < obj_sz) {
-      c_order++;
-    }
-
-    std::uint32_t objects_per_slab = (PAGE_SIZE << c_order) / obj_sz;
-    while (c_order < pmm::MAX_ORDER && objects_per_slab < 32) {
-      c_order++;
-      objects_per_slab = (PAGE_SIZE << c_order) / obj_sz;
-    }
-
-    // Guards against 15-bit SlabState::total overflow
-    if (objects_per_slab > 32767) [[unlikely]] {
-      while (((PAGE_SIZE << c_order) / obj_sz) > 32767 && c_order > 0) {
-        c_order--;
-      }
-    }
-
-    return new (c)
-        KmemCache(obj_sz, obj_sz, c_order, CacheFlags::None, nullptr, cpu_span, node_span);
+    // All three object sizes are multiples of the cache line, so no extra alignment is needed.
+    return new (cache_mem) KmemCache(obj_size, obj_size, slab_order_for(obj_size), CacheFlags::None,
+                                     nullptr, cpu_span, node_span);
   };
 
-  // Carve out the primordial caches
-  g_meta_cache = carve_mother_cache(sizeof(KmemCache));
-  g_meta_cpu_array = carve_mother_cache(sizeof(CpuCache) * total_cpus);
-  g_meta_node_array = carve_mother_cache(sizeof(NodeCache) * total_numa_nodes);
+  g_meta_cache = carve_bootstrap_cache(sizeof(KmemCache));
+  g_meta_cpu_array = carve_bootstrap_cache(sizeof(CpuCache) * total_cpus);
+  g_meta_node_array = carve_bootstrap_cache(sizeof(NodeCache) * total_numa_nodes);
 
   for (std::uint32_t i = 0; i < NUM_KMALLOC_CACHES; ++i) {
-    const std::uint32_t size = 1 << (i + KMALLOC_MIN_SHIFT);
+    const std::uint32_t size = 1u << (i + KMALLOC_MIN_SHIFT);
 
     if (auto cache = KmemCache::create(size, sizeof(void*))) {
       g_kmalloc_caches[i] = *cache;
@@ -127,79 +130,30 @@ void initialize() noexcept {
   }
 }
 
-void KmemCache::destroy() noexcept {
-  auto return_page_to_pmm = [this](pmm::Page* page) {
-    const SlabState state = page->read_slub_state();
-    if (state.in_use > 0) [[unlikely]] {
-      // If in_use > 0, the kernel is destroying a cache while objects are still
-      // allocated.
-      utils::logger::warn("KmemCache: Destroying cache with {} active objects!\n", state.in_use);
-    }
-
-    page->slub.cache = nullptr;
-    page->set_state(pmm::PageState::Free);
-    pmm::free_pages(pmm::page_to_phys(page), m_order);
-  };
-
-  for (const auto& cpu : m_cpu_caches) {
-    if (cpu.page) {
-      return_page_to_pmm(cpu.page);
-    }
-
-    pmm::Page* current_partial = cpu.cpu_partial;
-    while (current_partial) {
-      pmm::Page* next = current_partial->slub.next_partial;
-      return_page_to_pmm(current_partial);
-      current_partial = next;
-    }
-  }
-
-  for (auto& [lock, num_partial, partial_head, partial_tail] : m_node_caches) {
-    utils::IrqSaveGuard guard(lock);
-
-    pmm::Page* current = partial_head;
-    while (current) {
-      pmm::Page* next = current->slub.next_partial;
-      return_page_to_pmm(current);
-      current = next;
-    }
-  }
-
-  g_meta_cpu_array->free(m_cpu_caches.data());
-  g_meta_node_array->free(m_node_caches.data());
-  g_meta_cache->free(this);
-}
-
 std::expected<KmemCache*, Error> KmemCache::create(const std::uint32_t obj_size,
-                                                   const std::uint32_t alignment,
-                                                   const CacheFlags flags,
+                                                   const std::uint32_t alignment, CacheFlags flags,
                                                    void (*ctor)(void*)) noexcept {
-  const std::uint32_t total_cpus = boot::mp_request.response->cpu_count;
-  const std::uint32_t total_numa_nodes = pmm::g_topology.active_nodes();
+  if (obj_size == 0 || !std::has_single_bit(alignment)) [[unlikely]] {
+    return std::unexpected(Error::InvalidArgument);
+  }
 
-  std::uint32_t actual_req_size = obj_size;
+  // Poisoning would wipe out the constructed state the next alloc() expects to find.
+  if (ctor) {
+    flags = flags & ~CacheFlags::Poison;
+  }
+
+  std::uint32_t stride = obj_size;
   if (has_flag(flags, CacheFlags::RedZone)) {
-    actual_req_size += sizeof(std::uint64_t);
+    stride += sizeof(std::uint64_t);
   }
 
+  // Objects sit at multiples of `size` from a block aligned to the slab size, so a stride that
+  // is a multiple of the alignment is enough to align every object.
   const std::uint32_t align = std::max<std::uint32_t>(alignment, sizeof(void*));
-  const std::uint32_t size = utils::maths::align_up(actual_req_size, align);
-
-  std::uint32_t order = 0;
-  while ((PAGE_SIZE << order) < size) {
-    ++order;
-  }
-
-  std::uint32_t objects_per_slab = (PAGE_SIZE << order) / size;
-  while (order < pmm::MAX_ORDER && objects_per_slab < 32) {
-    ++order;
-    objects_per_slab = (PAGE_SIZE << order) / size;
-  }
-
-  if (objects_per_slab > 32767) [[unlikely]] {
-    while (((PAGE_SIZE << order) / size) > 32767 && order > 0) {
-      --order;
-    }
+  const std::uint32_t size = utils::maths::align_up(stride, align);
+  const std::uint8_t order = slab_order_for(size);
+  if (order > pmm::MAX_ORDER) [[unlikely]] {
+    return std::unexpected(Error::InvalidArgument);
   }
 
   const auto cache_mem = g_meta_cache->alloc();
@@ -220,22 +174,80 @@ std::expected<KmemCache*, Error> KmemCache::create(const std::uint32_t obj_size,
     return std::unexpected(Error::OutOfMemory);
   }
 
-  auto* cache_ptr = static_cast<KmemCache*>(*cache_mem);
-  auto* cpu_arr = static_cast<CpuCache*>(*cpu_mem);
-  auto* node_arr = static_cast<NodeCache*>(*node_mem);
-
-  std::span cpu_span(cpu_arr, total_cpus);
+  const std::span cpu_span(static_cast<CpuCache*>(*cpu_mem), hw::smp::possible_cpus());
   std::uninitialized_default_construct(cpu_span.begin(), cpu_span.end());
 
-  std::span node_span(node_arr, total_numa_nodes);
+  const std::span node_span(static_cast<NodeCache*>(*node_mem), pmm::g_topology.active_nodes());
   std::uninitialized_default_construct(node_span.begin(), node_span.end());
 
-  return new (cache_ptr) KmemCache(obj_size, size, order, flags, ctor, cpu_span, node_span);
+  return new (*cache_mem) KmemCache(obj_size, size, order, flags, ctor, cpu_span, node_span);
 }
 
-void* CpuCache::alloc(const std::uint32_t object_size, const KmemCache* cache) noexcept {
-  void* obj = local_freelist;
-  if (obj != nullptr) [[likely]] {
+void KmemCache::destroy() noexcept {
+  utils::IrqDisableGuard irq_guard;
+
+  // Slabs that still hold live objects are leaked rather than freed: handing them back to the
+  // PMM would turn the caller's bug into silent memory corruption.
+  std::uint64_t live_objects = 0;
+  const auto release_if_unused = [&](pmm::Page* slab, const std::uint32_t live) {
+    if (live == 0) {
+      release_slab(slab);
+    } else {
+      live_objects += live;
+    }
+  };
+
+  for (CpuCache& cpu : m_cpu_caches) {
+    if (pmm::Page* slab = cpu.page) {
+      std::uint32_t owned = cpu.bump_left;
+      for (void* obj = cpu.local_freelist; obj; obj = *static_cast<void**>(obj)) {
+        ++owned;
+      }
+
+      release_if_unused(slab, slab->read_slub_state().in_use - owned);
+    }
+
+    for (pmm::Page* slab = cpu.cpu_partial; slab;) {
+      pmm::Page* next = slab->slub.next_partial;
+      release_if_unused(slab, slab->read_slub_state().in_use);
+      slab = next;
+    }
+
+    cpu = CpuCache{};
+  }
+
+  for (NodeCache& node : m_node_caches) {
+    // Detach the whole list first; slabs go back to the PMM without the node lock held.
+    pmm::Page* slab = nullptr;
+    {
+      utils::NakedGuard guard{node.lock};
+      slab = node.partial_head;
+      node.partial_head = node.partial_tail = nullptr;
+      node.num_partial = 0;
+    }
+
+    while (slab) {
+      pmm::Page* next = slab->slub.next_partial;
+      slab->slub.on_node_list = false;
+      release_if_unused(slab, slab->read_slub_state().in_use);
+      slab = next;
+    }
+  }
+
+  if (live_objects > 0) [[unlikely]] {
+    // The leaked slabs still point at this cache, so it has to stay alive too.
+    utils::logger::warn("KmemCache: destroyed with {} live objects, leaking the cache\n",
+                        live_objects);
+    return;
+  }
+
+  g_meta_cpu_array->free(m_cpu_caches.data());
+  g_meta_node_array->free(m_node_caches.data());
+  g_meta_cache->free(this);
+}
+
+void* CpuCache::alloc(const std::uint32_t object_size) noexcept {
+  if (void* obj = local_freelist) [[likely]] {
     local_freelist = *static_cast<void**>(obj);
     if (local_freelist) {
       __builtin_prefetch(local_freelist, 1, 0);
@@ -245,7 +257,7 @@ void* CpuCache::alloc(const std::uint32_t object_size, const KmemCache* cache) n
   }
 
   if (bump_left > 0) [[likely]] {
-    obj = bump_ptr;
+    void* obj = bump_ptr;
     bump_ptr += object_size;
     bump_left--;
     __builtin_prefetch(bump_ptr, 1, 0);
@@ -255,88 +267,76 @@ void* CpuCache::alloc(const std::uint32_t object_size, const KmemCache* cache) n
   return nullptr;
 }
 
-std::expected<void*, Error> KmemCache::refill(CpuCache& cpu, const std::uint32_t cpu_id) noexcept {
-  const std::uint32_t node_id = hw::percpu::numa_node_id();
+pmm::Page* KmemCache::slab_of(const void* obj) const noexcept {
+  const auto phys = DirectMap::virt_to_phys(VirtualAddress{obj});
+  if (!phys) [[unlikely]] {
+    utils::logger::fatal("KmemCache: {} is not a heap pointer\n", obj);
+  }
 
-  // Attempt to reclaim remote frees from the curr active page
-  if (cpu.page) {
-    SlabState state = cpu.page->read_slub_state();
-    SlabState new_state;
+  // Slabs are buddy blocks and therefore aligned to their own size.
+  const std::uint64_t pfn = phys->value() >> PAGE_SHIFT_4KB;
+  return pmm::pfn_to_page(pfn & ~((1ul << m_order) - 1));
+}
 
-    do {
-      new_state = state;
-      if (state.remote_head_idx == SLUB_NO_IDX) {
-        break;  // No remote frees to claim
-      }
+std::uint16_t KmemCache::index_of(const pmm::Page* slab, const void* obj) const noexcept {
+  return static_cast<std::uint16_t>((static_cast<const char*>(obj) - page_to_virt(slab)) / m_size);
+}
 
-      new_state.remote_head_idx = SLUB_NO_IDX;
-      new_state.generation++;  // ABA prevention
-    } while (!cpu.page->try_update_slub_state(state, new_state));
+void* KmemCache::object_at(const pmm::Page* slab, const std::uint16_t idx) const noexcept {
+  return page_to_virt(slab) + (static_cast<std::size_t>(idx) * m_size);
+}
 
-    if (state.remote_head_idx != SLUB_NO_IDX) {
-      void* obj = page_to_virt(cpu.page) + (state.remote_head_idx * m_size);
-      cpu.local_freelist = *static_cast<void**>(obj);
-      return obj;
+void* KmemCache::claim_remote_objects(CpuCache& cpu, pmm::Page* slab) noexcept {
+  SlabState state = slab->read_slub_state();
+  SlabState new_state;
+
+  do {
+    if (state.remote_head_idx == SLUB_NO_IDX) {
+      return nullptr;
     }
 
-    abandon_active_page(cpu, cpu_id);
-  }
+    // Everything that was on the remote list now belongs to this CPU, so by the accounting
+    // invariant every object of the slab counts as in use again.
+    new_state = state;
+    new_state.remote_head_idx = SLUB_NO_IDX;
+    new_state.in_use = state.total;
+    new_state.frozen = 1;
+    new_state.generation++;
+  } while (!slab->try_update_slub_state(state, new_state));
 
-  // Attempt to pull from CPU partial list, fallback to Node partial list
-  pmm::Page* partial = cpu.cpu_partial;
-  if (partial) [[likely]] {
-    cpu.cpu_partial = partial->slub.next_partial;
-    cpu.partial_count--;
-  } else {
-    partial = pop_from_node_partial(node_id);
-  }
+  void* obj = object_at(slab, state.remote_head_idx);
+  cpu.local_freelist = *static_cast<void**>(obj);
+  return obj;
+}
 
-  // If we successfully grabbed a partial page, freeze and claim it
-  if (partial) {
-    SlabState state = partial->read_slub_state();
-    if (state.remote_head_idx == SLUB_NO_IDX) [[unlikely]] {
-      utils::logger::fatal("KmemCache: Pulled a completely full page from partial list!\n");
-    }
-
-    SlabState new_state;
-    do {
-      new_state = state;
-      new_state.frozen = 1;
-      new_state.remote_head_idx = SLUB_NO_IDX;
-      new_state.generation++;
-    } while (!partial->try_update_slub_state(state, new_state));
-
-    cpu.page = partial;
-    cpu.bump_ptr = nullptr;
-    cpu.bump_left = 0;
-
-    // A partial page is guaranteed to have free objects, and since bump_left ==
-    // 0, all free objects are guaranteed to reside in the remote_head_idx list.
-    void* obj = page_to_virt(partial) + (state.remote_head_idx * m_size);
-    cpu.local_freelist = *static_cast<void**>(obj);
-    return obj;
-  }
-
-  // Exhausted all partial lists. Request a fresh page from PMM.
-  const auto raw_page = pmm::alloc_pages(pmm::PageMobility::Unmovable, m_order);
-  if (!raw_page) [[unlikely]] {
+std::expected<pmm::Page*, Error> KmemCache::new_slab() noexcept {
+  const auto phys = pmm::alloc_pages(pmm::PageMobility::Unmovable, m_order);
+  if (!phys) [[unlikely]] {
     return std::unexpected(Error::OutOfMemory);
   }
 
-  pmm::Page* new_page = pmm::phys_to_page(*raw_page);
-  const std::uint16_t total = static_cast<std::uint16_t>((PAGE_SIZE << m_order) / m_size);
+  pmm::Page* slab = pmm::phys_to_page(*phys);
+  const auto total = static_cast<std::uint16_t>((PAGE_SIZE << m_order) / m_size);
 
-  char* current_obj = page_to_virt(new_page);
-  for (std::uint16_t i = 0; i < total; ++i) {
+  char* obj = page_to_virt(slab);
+  for (std::uint16_t i = 0; i < total; ++i, obj += m_size) {
     if (m_ctor) {
-      m_ctor(current_obj);
+      m_ctor(obj);
     } else {
-      apply_poison(current_obj);
+      apply_poison(obj);
     }
 
-    setup_redzone(current_obj);
-    current_obj += m_size;
+    setup_redzone(obj);
   }
+
+  // kfree() can be handed a pointer into any frame of the slab and finds the cache from there.
+  for (std::size_t i = 0; i < (1ul << m_order); ++i) {
+    slab[i].slub.cache = this;
+  }
+
+  slab->slub.prev_partial = nullptr;
+  slab->slub.next_partial = nullptr;
+  slab->slub.on_node_list = false;
 
   const SlabState init_state = {
       .remote_head_idx = SLUB_NO_IDX,
@@ -345,295 +345,312 @@ std::expected<void*, Error> KmemCache::refill(CpuCache& cpu, const std::uint32_t
       .total = total,
       .generation = 0,
   };
+  slab->slub.state.store(std::bit_cast<std::uint64_t>(init_state), std::memory_order_relaxed);
 
-  new_page->slub.state.store(std::bit_cast<std::uint64_t>(init_state), std::memory_order_relaxed);
-  new_page->slub.cache = this;
-  new_page->set_state(pmm::PageState::Active);
+  return slab;
+}
 
-  cpu.page = new_page;
-  cpu.bump_ptr = page_to_virt(new_page) + m_size;
-  cpu.bump_left = total - 1;
+std::expected<void*, Error> KmemCache::refill(CpuCache& cpu) noexcept {
+  // Other CPUs may have freed objects into the active slab since we last looked.
+  if (cpu.page) {
+    if (void* obj = claim_remote_objects(cpu, cpu.page)) {
+      return obj;
+    }
+
+    deactivate_slab(cpu);
+  }
+
+  pmm::Page* slab = cpu.cpu_partial;
+  if (slab) [[likely]] {
+    cpu.cpu_partial = slab->slub.next_partial;
+    cpu.partial_count--;
+  } else {
+    slab = pop_from_node_partial(hw::percpu::numa_node_id());
+  }
+
+  if (slab) {
+    // Partial slabs always have objects on their remote list (in_use < total), and nobody but
+    // the owner can take them off. Now that we own it, an empty list means broken bookkeeping.
+    void* obj = claim_remote_objects(cpu, slab);
+    if (!obj) [[unlikely]] {
+      utils::logger::fatal("KmemCache: Pulled a completely full page from partial list!\n");
+    }
+
+    cpu.page = slab;
+    cpu.bump_ptr = nullptr;
+    cpu.bump_left = 0;
+    return obj;
+  }
+
+  const auto fresh = new_slab();
+  if (!fresh) [[unlikely]] {
+    return std::unexpected(fresh.error());
+  }
+
+  const SlabState state = (*fresh)->read_slub_state();
+  char* first = page_to_virt(*fresh);
+
+  cpu.page = *fresh;
   cpu.local_freelist = nullptr;
-
-  return page_to_virt(new_page);
+  cpu.bump_ptr = first + m_size;
+  cpu.bump_left = state.total - 1;
+  return first;
 }
 
 void KmemCache::free(void* obj) noexcept {
   check_redzone(obj);
   apply_poison(obj);
 
-  utils::IrqDisableGuard irq_guard;
-  const std::uint32_t cpu_id = hw::percpu::id();
-  CpuCache& cpu = m_cpu_caches[cpu_id];
-  pmm::Page* page = virt_to_page(obj);
+  pmm::Page* slab = slab_of(obj);
 
-  // Freeing to the actively bumping page on this CPU
-  if (page == cpu.page) [[likely]] {
+  utils::IrqDisableGuard irq_guard;
+  CpuCache& cpu = m_cpu_caches[hw::percpu::id()];
+
+  // Our own active slab: no atomics needed, the object just goes on the local free list.
+  if (slab == cpu.page) [[likely]] {
     *static_cast<void**>(obj) = cpu.local_freelist;
     cpu.local_freelist = obj;
     return;
   }
 
-  __builtin_prefetch(&page->slub.state, 1, 0);
+  const std::uint16_t obj_idx = index_of(slab, obj);
 
-  char* base = page_to_virt(page);
-  const std::uint32_t offset = static_cast<std::uint32_t>(static_cast<char*>(obj) - base);
-  const std::uint16_t obj_idx = static_cast<std::uint16_t>(offset / m_size);
-
-  SlabState state = page->read_slub_state();
+  SlabState state = slab->read_slub_state();
   SlabState new_state;
   do {
+    *static_cast<void**>(obj) =
+        (state.remote_head_idx != SLUB_NO_IDX) ? object_at(slab, state.remote_head_idx) : nullptr;
+
     new_state = state;
-
-    void* next_ptr = (state.remote_head_idx != SLUB_NO_IDX)
-                         ? (base + (state.remote_head_idx * m_size))
-                         : nullptr;
-    *static_cast<void**>(obj) = next_ptr;
-
     new_state.remote_head_idx = obj_idx;
     new_state.in_use--;
-    new_state.generation++;  // Prevent ABA on remote freelist update
-  } while (!page->try_update_slub_state(state, new_state));
+    new_state.generation++;
+  } while (!slab->try_update_slub_state(state, new_state));
 
-  // If the page is frozen, it belongs exclusively to a CPU. The CPU owning it
-  // will handle routing when it abandons the page.
+  // A frozen slab belongs to a CPU, which sorts it out when it lets go of it.
   if (new_state.frozen) [[likely]] {
     return;
   }
 
-  const std::uint32_t node_id = page->get_numa_node();
-  if (new_state.in_use == 0) [[unlikely]] {
-    // Page is empty. Check if it was in the partial list.
-    if (state.in_use != state.total) {
-      remove_from_node_partial(page, node_id);
-    }
-
-    if (m_node_caches[node_id].num_partial < NodeCache::MIN_PARTIAL_PAGES) {
-      push_to_node_partial(page, node_id, true);
-    } else {
-      page->slub.cache = nullptr;
-      page->set_state(pmm::PageState::Free);
-      pmm::free_pages(pmm::page_to_phys(page), m_order);
-    }
-  } else if (state.in_use == state.total) [[unlikely]] {
-    // Transitioned from completely full to partial. Add to node partial list.
-    const bool mostly_empty = new_state.in_use <= (new_state.total / 2);
-    push_to_node_partial(page, node_id, mostly_empty);
+  if (state.in_use == state.total) {
+    // Full slabs are on no list, and only the free that takes one below full sees this
+    // transition, so we are the only one who can publish it.
+    publish_partial(slab);
+  } else if (new_state.in_use == 0) {
+    discard_if_empty(slab);
   }
 }
 
-void KmemCache::abandon_active_page(CpuCache& cpu, std::uint32_t cpu_id) noexcept {
-  pmm::Page* page = cpu.page;
-  if (!page) {
+void KmemCache::deactivate_slab(CpuCache& cpu) noexcept {
+  pmm::Page* slab = cpu.page;
+  if (!slab) {
     return;
   }
 
-  char* base = page_to_virt(page);
-
+  // Chain the local free list and the unused bump region into one list that is spliced onto
+  // the slab's remote list below.
   void* chain_head = nullptr;
   void* chain_tail = nullptr;
-  std::uint16_t local_free_count = 0;
+  std::uint16_t owned = 0;
 
-  // Traverse and chain the local freelist (objects freed locally)
-  if (cpu.local_freelist) {
-    chain_head = cpu.local_freelist;
-    void* curr = chain_head;
-    local_free_count++;
-
-    while (*static_cast<void**>(curr) != nullptr) {
-      curr = *static_cast<void**>(curr);
-      local_free_count++;
-    }
-
-    chain_tail = curr;
+  for (void* obj = cpu.local_freelist; obj; obj = *static_cast<void**>(obj)) {
+    chain_head = chain_head ? chain_head : obj;
+    chain_tail = obj;
+    ++owned;
   }
 
-  // Process and chain the remaining bump-allocated objects
-  if (cpu.bump_left > 0) {
-    char* current = cpu.bump_ptr;
-    void* bump_head = current;
-    void* bump_tail = current;
-
-    for (std::uint16_t i = 0; i < cpu.bump_left; ++i) {
-      void* next = (i == cpu.bump_left - 1) ? nullptr : (current + m_size);
-      *reinterpret_cast<void**>(current) = next;
-      bump_tail = current;
-      current += m_size;
-    }
-
+  char* bump = cpu.bump_ptr;
+  for (std::uint16_t i = 0; i < cpu.bump_left; ++i, bump += m_size) {
     if (chain_tail) {
-      *static_cast<void**>(chain_tail) = bump_head;
-      chain_tail = bump_tail;
+      *static_cast<void**>(chain_tail) = bump;
     } else {
-      chain_head = bump_head;
-      chain_tail = bump_tail;
+      chain_head = bump;
     }
+
+    chain_tail = bump;
+    ++owned;
   }
 
-  const std::uint16_t total_local_free = local_free_count + cpu.bump_left;
-  SlabState state = page->read_slub_state();
+  cpu.page = nullptr;
+  cpu.local_freelist = nullptr;
+  cpu.bump_ptr = nullptr;
+  cpu.bump_left = 0;
+
+  const std::uint16_t head_idx = chain_head ? index_of(slab, chain_head) : SLUB_NO_IDX;
+
+  SlabState state = slab->read_slub_state();
   SlabState new_state;
   bool to_cpu_partial = false;
 
   do {
     new_state = state;
-    new_state.in_use -= total_local_free;
-    to_cpu_partial = (new_state.in_use > 0 && new_state.in_use < new_state.total &&
-                      cpu.partial_count < CpuCache::MAX_CPU_PARTIAL);
+
+    if (chain_tail) {
+      *static_cast<void**>(chain_tail) =
+          (state.remote_head_idx != SLUB_NO_IDX) ? object_at(slab, state.remote_head_idx) : nullptr;
+      new_state.remote_head_idx = head_idx;
+    }
+
+    new_state.in_use = state.in_use - owned;
+
+    // A partially used slab is worth keeping close; it stays frozen on this CPU's list.
+    to_cpu_partial = new_state.in_use > 0 && new_state.in_use < new_state.total &&
+                     cpu.partial_count < CpuCache::MAX_CPU_PARTIAL;
     new_state.frozen = to_cpu_partial ? 1 : 0;
-
-    if (chain_tail && state.remote_head_idx != SLUB_NO_IDX) {
-      void* remote_head_ptr = base + (state.remote_head_idx * m_size);
-      *static_cast<void**>(chain_tail) = remote_head_ptr;
-    }
-
-    if (chain_head) {
-      const std::uint32_t head_offset =
-          static_cast<std::uint32_t>(static_cast<char*>(chain_head) - base);
-      new_state.remote_head_idx = static_cast<std::uint16_t>(head_offset / m_size);
-    }
-
     new_state.generation++;
-  } while (!page->try_update_slub_state(state, new_state));
+  } while (!slab->try_update_slub_state(state, new_state));
 
-  // Route the page based on the pre-calculated destination
   if (to_cpu_partial) {
-    page->slub.next_partial = cpu.cpu_partial;
-    cpu.cpu_partial = page;
+    slab->slub.next_partial = cpu.cpu_partial;
+    cpu.cpu_partial = slab;
     cpu.partial_count++;
-  } else if (new_state.in_use == 0) {
-    page->slub.cache = nullptr;
-    page->set_state(pmm::PageState::Free);
-    pmm::free_pages(pmm::page_to_phys(page), m_order);
   } else if (new_state.in_use < new_state.total) {
-    const std::uint32_t node_id = page->get_numa_node();
-    const bool mostly_empty = new_state.in_use <= (new_state.total / 2);
-    push_to_node_partial(page, node_id, mostly_empty);
-  } else {
-    // Page is completely full. Eat 5-stars and do nothing.
+    // Partial or empty. publish_partial() decides whether an empty slab is worth keeping.
+    publish_partial(slab);
   }
 
-  cpu.page = nullptr;
-  cpu.bump_ptr = nullptr;
-  cpu.bump_left = 0;
-  cpu.local_freelist = nullptr;
+  // Otherwise every object is live. The slab stays on no list until a free makes it partial.
 }
 
-void KmemCache::push_to_node_partial(pmm::Page* page, const std::uint32_t node_id,
-                                     const bool mostly_empty) noexcept {
-  if (!page) [[unlikely]] {
-    return;
-  }
-
-  auto& [lock, num_partial, partial_head, partial_tail] = m_node_caches[node_id];
-  utils::NakedGuard guard(lock);
-
-  if (mostly_empty) {
-    // Push to head
-    page->slub.next_partial = partial_head;
-    page->slub.prev_partial = nullptr;
-
-    if (partial_head) {
-      partial_head->slub.prev_partial = page;
-    } else {
-      partial_tail = page;
-    }
-
-    partial_head = page;
-  } else {
-    // Push to tail (almost full)
-    page->slub.prev_partial = partial_tail;
-    page->slub.next_partial = nullptr;
-
-    if (partial_tail) {
-      partial_tail->slub.next_partial = page;
-    } else {
-      partial_head = page;
-    }
-
-    partial_tail = page;
-  }
-
-  num_partial++;
+void KmemCache::release_slab(pmm::Page* slab) const noexcept {
+  pmm::free_pages(pmm::page_to_phys(slab), m_order);
 }
 
-void KmemCache::remove_from_node_partial(pmm::Page* page, std::uint32_t node_id) noexcept {
-  if (!page) [[unlikely]] {
-    return;
-  }
+void KmemCache::publish_partial(pmm::Page* slab) noexcept {
+  NodeCache& node = m_node_caches[slab->get_numa_node()];
+  bool release = false;
 
-  auto& [lock, num_partial, partial_head, partial_tail] = m_node_caches[node_id];
-  utils::NakedGuard guard(lock);
+  {
+    utils::NakedGuard guard(node.lock);
 
-  if (num_partial == 0) [[unlikely]] {
-    utils::logger::warn("KmemCache: Partial list underflow detected!\n");
-    return;
-  }
+    // Frees keep landing while we wait for the lock, so look at the state again. Nobody else
+    // can claim the slab: it is unfrozen and not on any list yet.
+    const SlabState state = slab->read_slub_state();
+    if (state.in_use == 0 && node.num_partial >= NodeCache::MIN_PARTIAL_PAGES) {
+      release = true;
+    } else if (mostly_empty(state)) {
+      slab->slub.prev_partial = nullptr;
+      slab->slub.next_partial = node.partial_head;
 
-  if (page->slub.prev_partial) {
-    page->slub.prev_partial->slub.next_partial = page->slub.next_partial;
-  } else {
-    partial_head = page->slub.next_partial;
-  }
+      if (node.partial_head) {
+        node.partial_head->slub.prev_partial = slab;
+      } else {
+        node.partial_tail = slab;
+      }
 
-  if (page->slub.next_partial) {
-    page->slub.next_partial->slub.prev_partial = page->slub.prev_partial;
-  } else {
-    partial_tail = page->slub.prev_partial;
-  }
-
-  page->slub.next_partial = nullptr;
-  page->slub.prev_partial = nullptr;
-  num_partial--;
-}
-
-pmm::Page* KmemCache::pop_from_node_partial(std::uint32_t node_id) noexcept {
-  auto& [lock, num_partial, partial_head, partial_tail] = m_node_caches[node_id];
-  utils::NakedGuard guard(lock);
-
-  pmm::Page* page = partial_head;
-  if (page) {
-    partial_head = page->slub.next_partial;
-
-    if (partial_head) [[likely]] {
-      partial_head->slub.prev_partial = nullptr;
+      node.partial_head = slab;
     } else {
-      partial_tail = nullptr;
+      slab->slub.prev_partial = node.partial_tail;
+      slab->slub.next_partial = nullptr;
+
+      if (node.partial_tail) {
+        node.partial_tail->slub.next_partial = slab;
+      } else {
+        node.partial_head = slab;
+      }
+
+      node.partial_tail = slab;
     }
 
-    page->slub.next_partial = nullptr;
-    page->slub.prev_partial = nullptr;
-    num_partial--;
+    if (!release) {
+      slab->slub.on_node_list = true;
+      node.num_partial++;
+    }
   }
 
-  return page;
+  // Give the slab back after dropping the node lock: the PMM takes zone locks of its own, and
+  // keeping the two lock classes unnested means there is no ordering between them to get wrong.
+  if (release) {
+    release_slab(slab);
+  }
+}
+
+void KmemCache::discard_if_empty(pmm::Page* slab) noexcept {
+  NodeCache& node = m_node_caches[slab->get_numa_node()];
+
+  {
+    utils::NakedGuard guard(node.lock);
+
+    // Off the list means either a CPU popped it and owns it now, or whoever is about to publish
+    // it has not got there yet. Either way the slab is not ours to touch.
+    if (!slab->slub.on_node_list || slab->read_slub_state().in_use != 0) {
+      return;
+    }
+
+    if (node.num_partial <= NodeCache::MIN_PARTIAL_PAGES) {
+      return;
+    }
+
+    if (slab->slub.prev_partial) {
+      slab->slub.prev_partial->slub.next_partial = slab->slub.next_partial;
+    } else {
+      node.partial_head = slab->slub.next_partial;
+    }
+
+    if (slab->slub.next_partial) {
+      slab->slub.next_partial->slub.prev_partial = slab->slub.prev_partial;
+    } else {
+      node.partial_tail = slab->slub.prev_partial;
+    }
+
+    slab->slub.next_partial = nullptr;
+    slab->slub.prev_partial = nullptr;
+    slab->slub.on_node_list = false;
+    node.num_partial--;
+  }
+
+  release_slab(slab);
+}
+
+pmm::Page* KmemCache::pop_from_node_partial(const std::uint32_t node_id) noexcept {
+  NodeCache& node = m_node_caches[node_id];
+  utils::NakedGuard guard(node.lock);
+
+  pmm::Page* slab = node.partial_head;
+  if (slab) {
+    node.partial_head = slab->slub.next_partial;
+
+    if (node.partial_head) [[likely]] {
+      node.partial_head->slub.prev_partial = nullptr;
+    } else {
+      node.partial_tail = nullptr;
+    }
+
+    slab->slub.next_partial = nullptr;
+    slab->slub.prev_partial = nullptr;
+    slab->slub.on_node_list = false;
+    node.num_partial--;
+  }
+
+  return slab;
 }
 
 void* kmalloc(const std::size_t size, const std::size_t alignment) noexcept {
-  if (size == 0) [[unlikely]] {
+  if (size == 0 || !std::has_single_bit(alignment)) [[unlikely]] {
     return nullptr;
   }
 
+  // kmalloc caches are powers of two and their slabs are aligned to their size, so rounding the
+  // size up to the alignment is enough to get an aligned object.
   const std::size_t required_size = std::max(size, alignment);
   const std::uint32_t index = size_to_index(required_size);
 
   if (index < NUM_KMALLOC_CACHES) [[likely]] {
-    KmemCache* cache = g_kmalloc_caches[index];
-    const auto res = cache->alloc();
+    const auto res = g_kmalloc_caches[index]->alloc();
     return res ? *res : nullptr;
   }
 
-  // The request is >32 KB. Directly ask the PMM
+  // Too big for the caches: take whole pages. Buddy blocks are aligned to their size as well.
   const std::size_t page_count = utils::maths::div_round_up(required_size, PAGE_SIZE);
-  const std::uint8_t order = static_cast<std::uint8_t>(std::countr_zero(std::bit_ceil(page_count)));
+  const auto order = static_cast<std::uint8_t>(std::countr_zero(std::bit_ceil(page_count)));
 
-  auto raw_page = pmm::alloc_pages(pmm::PageMobility::Unmovable, order);
+  const auto raw_page = pmm::alloc_pages(pmm::PageMobility::Unmovable, order);
   if (!raw_page) [[unlikely]] {
     return nullptr;
   }
 
+  // A null cache is how kfree() recognises a page allocation.
   pmm::Page* page = pmm::phys_to_page(*raw_page);
-  page->set_state(pmm::PageState::Active);
   page->slub.cache = nullptr;
 
   return page_to_virt(page);
@@ -653,20 +670,18 @@ void kfree(void* ptr) noexcept {
   if (KmemCache* cache = page->slub.cache) [[likely]] {
     cache->free(ptr);
   } else {
-    const std::uint8_t order = page->get_order();
-    page->set_state(pmm::PageState::Free);
-    pmm::free_pages(pmm::page_to_phys(page), order);
+    pmm::free_pages(pmm::page_to_phys(page), page->get_order());
   }
 }
 
 void* krealloc(void* ptr, const std::size_t new_size, const std::size_t align) noexcept {
+  if (ptr == nullptr) {
+    return kmalloc(new_size, align);
+  }
+
   if (new_size == 0) {
     kfree(ptr);
     return nullptr;
-  }
-
-  if (ptr == nullptr) {
-    return kmalloc(new_size, align);
   }
 
   const pmm::Page* page = virt_to_page(ptr);
@@ -675,14 +690,11 @@ void* krealloc(void* ptr, const std::size_t new_size, const std::size_t align) n
   }
 
   const KmemCache* old_cache = page->slub.cache;
-  const std::size_t old_size = old_cache ? old_cache->size() : (PAGE_SIZE << page->get_order());
-  const std::size_t required_size = std::max(new_size, align);
+  const std::size_t old_size = old_cache ? old_cache->obj_size() : (PAGE_SIZE << page->get_order());
 
-  // In-place reuse if current capacity satisfies the new constraints
-  if (old_size >= required_size) [[likely]] {
-    if (utils::maths::is_aligned(reinterpret_cast<std::uintptr_t>(ptr), align)) {
-      return ptr;
-    }
+  if (new_size <= old_size &&
+      utils::maths::is_aligned(reinterpret_cast<std::uintptr_t>(ptr), align)) [[likely]] {
+    return ptr;
   }
 
   void* new_ptr = kmalloc(new_size, align);
@@ -697,6 +709,7 @@ void* krealloc(void* ptr, const std::size_t new_size, const std::size_t align) n
 }  // namespace kernel::memory::heap
 
 using namespace kernel::memory::heap;
+
 [[nodiscard]] void* operator new(const std::size_t size) {
   void* ptr = kmalloc(size);
   if (!ptr) [[unlikely]] {
@@ -722,10 +735,10 @@ using namespace kernel::memory::heap;
   return kmalloc(size);
 }
 
-[[nodiscard]] void* operator new(std::size_t size, std::align_val_t alignment) {
+[[nodiscard]] void* operator new(const std::size_t size, std::align_val_t alignment) {
   void* ptr = kmalloc(size, static_cast<std::size_t>(alignment));
   if (!ptr) [[unlikely]] {
-    kernel::utils::logger::fatal("Out of memory in aligne doperator new");
+    kernel::utils::logger::fatal("Out of memory in aligned operator new");
   }
 
   return ptr;
@@ -740,12 +753,12 @@ using namespace kernel::memory::heap;
   return ptr;
 }
 
-[[nodiscard]] void* operator new(std::size_t size, std::align_val_t alignment,
+[[nodiscard]] void* operator new(const std::size_t size, std::align_val_t alignment,
                                  const std::nothrow_t&) noexcept {
   return kmalloc(size, static_cast<std::size_t>(alignment));
 }
 
-[[nodiscard]] void* operator new[](std::size_t size, std::align_val_t alignment,
+[[nodiscard]] void* operator new[](const std::size_t size, std::align_val_t alignment,
                                    const std::nothrow_t&) noexcept {
   return kmalloc(size, static_cast<std::size_t>(alignment));
 }

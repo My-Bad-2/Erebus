@@ -3,17 +3,17 @@
 
 namespace klib {
 void* memmove(void* dest, const void* src, size_t count) noexcept {
+  using string::transfer;
+
   if (count == 0 || dest == src) [[unlikely]] {
     return dest;
   }
 
-  using namespace string;
-  [[assume(count > 0)]];
-
   const auto d_base = reinterpret_cast<std::uintptr_t>(dest);
   const auto s_base = reinterpret_cast<std::uintptr_t>(src);
 
-  // Forward copy (dest < src / non-overlapping)
+  // Copying forwards is right unless dest starts inside src. Unsigned wrap-around folds both
+  // other cases, dest below src and no overlap at all, into one comparison.
   if (d_base - s_base >= count) [[likely]] {
     if (count <= 16) [[likely]] {
       if (count >= 8) {
@@ -40,11 +40,14 @@ void* memmove(void* dest, const void* src, size_t count) noexcept {
       return dest;
     }
 
-    hw_rep_movsb(dest, src, count);
+    // `rep movsb` copies as if a byte at a time from the front, which is right when dest is
+    // below src.
+    string::rep_movsb(dest, src, count);
     return dest;
   }
 
-  // Backward Copy (dest > src and regions overlap)
+  // dest overlaps the end of src: copy backwards. Each transfer() loads before it stores, so the
+  // short cases need no direction at all.
   if (count <= 64) {
     if (count <= 16) {
       if (count >= 8) {
@@ -71,16 +74,15 @@ void* memmove(void* dest, const void* src, size_t count) noexcept {
     return dest;
   }
 
-  // Backward Loop (> 64 bytes)
+  // Longer: 64-byte blocks from the top down, then whatever is left at the bottom.
   std::size_t rem = count;
 
-  while (rem >= 64) {  // NOLINT(*-id-dependent-backward-branch)
+  while (rem >= 64) {
     rem -= 64;
     transfer<std::uint64_t>(d_base, s_base, rem + 56, rem + 48, rem + 40, rem + 32, rem + 24,
                             rem + 16, rem + 8, rem + 0);
   }
 
-  // Process remaining tail
   if (rem > 0) {
     if (rem <= 16) {
       if (rem >= 8) {

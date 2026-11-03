@@ -1,3 +1,6 @@
+/// @file flags.hpp
+/// @brief Architecture-neutral mapping attributes and the raw x86-64 page table entry layout.
+
 #pragma once
 
 #include <bitfield.hpp>
@@ -7,12 +10,18 @@
 #include "core/errors.hpp"
 
 namespace kernel::memory::vmm {
+/// @brief Mapping granularity. The value is the paging level that holds the leaf entry.
 enum class PageSize : std::uint8_t {
   Size4K = 1,
   Size2M = 2,
   Size1G = 3,
 };
 
+/// @brief What a mapping allows, plus a few software-only attributes.
+///
+/// Read/Write/Execute/User/Global map directly onto PTE bits. CopyOnWrite, Shared, Swapped and
+/// Stack live in the PTE's software-available bits. Mmio and Populate never reach the page
+/// tables: they only steer the VMA layer.
 enum class AccessFlags : std::uint32_t {
   None = 0,
   Read = 1 << 0,
@@ -25,9 +34,9 @@ enum class AccessFlags : std::uint32_t {
   Swapped = 1 << 7,  // Page is evicted
   Accessed = 1 << 8,
   Dirty = 1 << 9,
-  Mmio = 1 << 10,  // Memory Mapped IO (Forces Uncacheable)
+  Mmio = 1 << 10,  // Device memory; callers pick an uncached CacheMode
   Stack = 1 << 11,
-  Populate = 1 << 12,  // Instantly allocates physical memory
+  Populate = 1 << 12,  // Fault the whole range in at allocation time
 };
 
 constexpr AccessFlags operator|(const AccessFlags a, const AccessFlags b) noexcept {
@@ -50,10 +59,17 @@ constexpr AccessFlags& operator&=(AccessFlags& a, const AccessFlags b) noexcept 
   return a = a & b;
 }
 
+/// @brief True if *all* bits of @p flag are set in @p flags.
 constexpr bool has_flag(const AccessFlags flags, const AccessFlags flag) noexcept {
   return (flags & flag) == flag;
 }
 
+/// @brief The flags a user of `protect()` is allowed to change. The rest describe what a mapping
+///        is (shared, copy-on-write, a stack, ...) and are kept as they are.
+inline constexpr AccessFlags PROTECTION_FLAGS =
+    AccessFlags::Read | AccessFlags::Write | AccessFlags::Execute;
+
+/// @brief Memory type of a mapping, encoded through the PAT (see initialize_hw()).
 enum class CacheMode : std::uint8_t {
   WriteBack,         // Normal RAM
   WriteThrough,      // Writes update cache and RAM synchronously
@@ -63,21 +79,11 @@ enum class CacheMode : std::uint8_t {
   WriteProtected     // reads hit cache, writes go to RAM
 };
 
-enum class ArchFlags : std::uint64_t {
-  Present = 1ul << 0,
-  ReadWrite = 1ul << 1,
-  User = 1ul << 2,
-  PWT = 1ul << 3,
-  PCD = 1ul << 4,
-  Accessed = 1ul << 5,
-  Dirty = 1ul << 6,
-  PatLeaf = 1ul << 7,
-  Huge = 1ul << 7,
-  Global = 1ul << 8,
-  PatHuge = 1ul << 12,
-  NX = 1ul << 63
-};
-
+/// @brief Bit layout of an x86-64 paging structure entry.
+///
+/// The same layout serves every level; which fields are meaningful depends on whether the entry
+/// is a leaf. Bit 7 is the PAT bit in a 4 KiB leaf but the page-size bit in a PDE/PDPTE, and a
+/// huge leaf moves its PAT bit to bit 12 (which is why its frame number starts higher).
 class PTEntry {
   std::uint64_t m_data;
 
@@ -95,26 +101,23 @@ class PTEntry {
   BF_BIT_RW(accessed, 5)
   BF_BIT_RW(dirty, 6)
 
-  // If mapping a 4KB page (Leaf), bit 7 is the Page Attribute Table (PAT) bit.
-  // If mapping a 2MB/1GB page, bit 7 is the Page Size (Huge) bit.
-  BF_BIT_RW(pat_4k, 7)
-  BF_BIT_RW(huge, 7)
+  BF_BIT_RW(pat_4k, 7)  // 4 KiB leaf only
+  BF_BIT_RW(huge, 7)    // PDE/PDPTE only
   BF_BIT_RW(global, 8)
-  BF_BIT_RW(cow, 9)       // OS specific: Triggers Copy-on-Write
-  BF_BIT_RW(shared, 10)   // OS specific: Mapped in multiple address spaces
-  BF_BIT_RW(swapped, 11)  // OS specific: Evicted to disk
+  BF_BIT_RW(cow, 9)       // Software: write must copy the frame first
+  BF_BIT_RW(shared, 10)   // Software: mapped in multiple address spaces
+  BF_BIT_RW(swapped, 11)  // Software: evicted, the frame field holds a swap slot
 
-  // For 2MB/1GB pages, PAT is moved to bit 12.
-  BF_BIT_RW(pat_large, 12)
+  BF_BIT_RW(pat_large, 12)  // 2 MiB / 1 GiB leaf only
 
-  // Page Frame Numbers
-  BF_RW(std::uint64_t, pfn_4k, 12, 40)  // 4KB PFN
-  BF_RW(std::uint64_t, pfn_2m, 21, 31)  // 2MB PFN
-  BF_RW(std::uint64_t, pfn_1g, 30, 22)  // 1GB PFN
+  // Frame numbers; the field used depends on the size of the leaf (or 4 KiB for a directory).
+  BF_RW(std::uint64_t, pfn_4k, 12, 40)
+  BF_RW(std::uint64_t, pfn_2m, 21, 31)
+  BF_RW(std::uint64_t, pfn_1g, 30, 22)
 
   BF_RW(std::uint8_t, avl_high, 52, 6)
-  BF_BIT_RW(stack, 58)              // OS specific: Is stack memory
-  BF_RW(std::uint8_t, pkey, 59, 4)  // Protection Keys (PKRU)
-  BF_BIT_RW(nx, 63)                 // No-Execute
+  BF_BIT_RW(stack, 58)              // Software: stack memory
+  BF_RW(std::uint8_t, pkey, 59, 4)  // Protection key (PKRU)
+  BF_BIT_RW(nx, 63)                 // No-execute
 };
 }  // namespace kernel::memory::vmm

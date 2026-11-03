@@ -1,13 +1,13 @@
 #pragma once
 
 #include <bitfield.hpp>
+#include <utility>
 
 #include "apic.hpp"
 #include "drivers/clock.hpp"
 #include "hal/hal.hpp"
 #include "hal/io.hpp"
 #include "memory/address.hpp"
-#include "utility"
 
 namespace kernel::hw::apic {
 constexpr std::uint32_t IA32_APIC_BASE = 0x1B;
@@ -200,6 +200,7 @@ class Lapic {
  private:
   MmioResource m_mmio{};
   std::uint32_t m_cached_id{0};
+  std::uint32_t m_logical_id{0};
   ApicMode m_mode{ApicMode::Disabled};
   Capabilities m_caps{};
 
@@ -215,29 +216,34 @@ class Lapic {
   std::pair<std::uint32_t, TimerDivide> compute_timer_count_and_div(
       std::uint64_t ns) const noexcept;
 
+  /// Sends an IPI. In xAPIC mode @p icr carries the destination in its low 8 bits, like in
+  /// x2APIC mode; the shift into ICR[63:56] happens here.
   void dispatch_icr(const IcrSchema icr) const noexcept {
     if (m_mode == ApicMode::x2APIC) [[likely]] {
+      // WRMSR to the x2APIC registers is not serializing (Intel SDM, "MSR Access in x2APIC
+      // Mode"; AMD behaves the same), so without the fences the IPI can overtake the stores the
+      // target is supposed to see. Every mailbox-style IPI user depends on this ordering.
       constexpr std::uint32_t IA32_X2APIC_ICR = 0x830;
+      asm volatile("mfence; lfence" ::: "memory");
       write::msr(IA32_X2APIC_ICR, icr.raw());
-    } else {
-      constexpr std::uint32_t icr_low = std::to_underlying(Reg::IcrLow);
-      constexpr std::uint32_t icr_high = std::to_underlying(Reg::IcrHigh);
-
-      IcrSchema icr_lo = m_mmio.read<std::uint32_t>(icr_low);
-      while (icr_lo.get_delivery_status()) {
-        cpu_relax();
-        icr_lo = m_mmio.read<std::uint32_t>(icr_low);
-      }
-
-      m_mmio.write<std::uint32_t>(icr_high, static_cast<std::uint32_t>(icr.raw() >> 32));
-      m_mmio.write<std::uint32_t>(icr_low, static_cast<std::uint32_t>(icr.raw()));
-
-      icr_lo = m_mmio.read<std::uint32_t>(icr_low);
-      while (icr_lo.get_delivery_status()) {
-        cpu_relax();
-        icr_lo = m_mmio.read<std::uint32_t>(icr_low);
-      }
+      return;
     }
+
+    // In xAPIC mode the ICR is two registers. An interrupt that sends an IPI of its own between
+    // the two writes would leave us with its destination, so keep interrupts out.
+    constexpr std::uint32_t icr_low = std::to_underlying(Reg::IcrLow);
+    constexpr std::uint32_t icr_high = std::to_underlying(Reg::IcrHigh);
+
+    const std::uint64_t flags = irq::save();
+
+    while (IcrSchema{m_mmio.read<std::uint32_t>(icr_low)}.get_delivery_status()) {
+      pause();
+    }
+
+    m_mmio.write<std::uint32_t>(icr_high, (icr.get_destination() & 0xFF) << 24);
+    m_mmio.write<std::uint32_t>(icr_low, static_cast<std::uint32_t>(icr.raw()));
+
+    irq::restore(flags);
   }
 
   static constexpr std::uint32_t TSC_DEADLINE_MSR = 0x6E0;
@@ -250,6 +256,9 @@ class Lapic {
 
   [[nodiscard]] ApicMode mode() const noexcept { return m_mode; }
   [[nodiscard]] uint32_t id() const noexcept { return m_cached_id; }
+
+  /// @brief x2APIC logical ID (`cluster << 16 | 1 << (id % 16)`), or 0 in xAPIC mode.
+  [[nodiscard]] uint32_t logical_id() const noexcept { return m_logical_id; }
   [[nodiscard]] const Capabilities& capabilities() const noexcept { return m_caps; }
   [[nodiscard]] static bool is_bsp() noexcept {
     return BaseMsrSchema{read::msr(IA32_APIC_BASE)}.get_bsp();
@@ -330,11 +339,10 @@ class Lapic {
     const auto lvt = LvtSchema{}.with_vector(vector).with_timer_mode(TimerMode::TscDeadline);
     write(Reg::LvtTimer, lvt);
 
-    // In x2APIC mode, writing LvtTimer is a WRMSR which is already strictly ordered before WRMSR to
-    // 0x6E0.
-    if (m_mode == ApicMode::xAPIC) [[unlikely]] {
-      asm volatile("mfence" : /* No Output */ : /* No Input */ : "memory");
-    }
+    // The LVT write and the deadline MSR are not ordered against each other in either APIC mode;
+    // without the fence the deadline can be armed under the old timer mode (Intel SDM,
+    // "TSC-Deadline Mode").
+    asm volatile("mfence" ::: "memory");
 
     write::msr(TSC_DEADLINE_MSR, std::max(1ul, target_tsc));
   }
@@ -376,8 +384,15 @@ class Lapic {
     arm_periodic(vector, count, div);
   }
 
-  void configure_nmi(const Reg lint_reg = Reg::LvtLint1, const bool masked = false) const noexcept {
-    write(lint_reg, LvtSchema{}.with_delivery_mode(DeliveryMode::NMI).with_masked(masked));
+  /// @brief Routes the LINT pin @p lint_reg to the CPU as an NMI. NMIs are always edge-triggered.
+  void configure_nmi(const Reg lint_reg = Reg::LvtLint1,
+                     const PinPolarity polarity = PinPolarity::High,
+                     const bool masked = false) const noexcept {
+    write(lint_reg, LvtSchema{}
+                        .with_delivery_mode(DeliveryMode::NMI)
+                        .with_polarity(polarity)
+                        .with_trigger_mode(TriggerMode::Edge)
+                        .with_masked(masked));
   }
 
   void configure_pmu(const std::uint8_t vector, const DeliveryMode delivery = DeliveryMode::Fixed,
@@ -408,6 +423,9 @@ class Lapic {
     write(target_reg, lvt);
   }
 
+  /// @brief Sends @p vector to the CPU, or in logical mode the CPUs, named by @p dest_id.
+  ///
+  /// The vector is ignored for NMI, INIT and SIPI delivery.
   void send_ipi(const std::uint32_t dest_id, const std::uint8_t vector,
                 const DeliveryMode delivery = DeliveryMode::Fixed,
                 const DestinationMode dest_mode = DestinationMode::Physical) const noexcept {
@@ -420,16 +438,23 @@ class Lapic {
     dispatch_icr(icr);
   }
 
+  /// @brief Sends @p vector to a group of CPUs picked by @p shorthand, in a single ICR write.
+  void send_ipi(const DestinationShorthand shorthand, const std::uint8_t vector,
+                const DeliveryMode delivery = DeliveryMode::Fixed) const noexcept {
+    const auto icr = IcrSchema{}
+                         .with_vector(vector)
+                         .with_delivery_mode(delivery)
+                         .with_level_assert()
+                         .with_shorthand(shorthand);
+    dispatch_icr(icr);
+  }
+
   [[gnu::always_inline]] void send_self_ipi(const std::uint8_t vector) const noexcept {
     if (m_mode == ApicMode::x2APIC) {
       constexpr std::uint32_t IA32_X2APIC_SELF_IPI = 0x83F;
       write::msr(IA32_X2APIC_SELF_IPI, vector);
     } else {
-      const auto icr = IcrSchema{}
-                           .with_vector(vector)
-                           .with_shorthand(DestinationShorthand::Self)
-                           .with_level_assert();
-      dispatch_icr(icr);
+      send_ipi(DestinationShorthand::Self, vector);
     }
   }
 

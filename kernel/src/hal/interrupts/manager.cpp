@@ -1,6 +1,7 @@
 #include "hal/apic/ioapic.hpp"
 #include "hal/interrupts/interrupt_manager.hpp"
 #include "hal/smp/percpu.hpp"
+#include "hal/smp/smp.hpp"
 #include "utils/lock.hpp"
 #include "utils/logger.hpp"
 
@@ -104,37 +105,58 @@ void InterruptManager::unregister_handler(const std::uint8_t vector,
 
 void InterruptManager::route_event(const Event& event) noexcept {
   if (event.category == EventClass::Interrupt) [[likely]] {
+    // The local APIC raises the spurious vector when an interrupt goes away before it could be
+    // delivered. Nothing is in service, so there is nothing to acknowledge either: an EOI here
+    // would retire some other interrupt.
+    if (event.vector == std::to_underlying(InterruptVector::LocalApicSpurious)) [[unlikely]] {
+      return;
+    }
+
+    percpu::hardirq_enter();
+
     auto& [lock, direct_callback, direct_dpc, direct_ctx, list, lvl_triggered, ioapic] =
         s_slots[event.vector];
 
     bool handled = false;
     bool yield = false;
+
+    // A single handler is called without the slot lock, so the same vector can be handled on
+    // every CPU at once and the handler is free to take locks or wait for other CPUs (TLB
+    // shootdowns do). Registration happens at init time; a snapshot is all that is needed.
+    Callback callback;
+    DpcCallback dpc;
+    void* ctx;
     {
       utils::NakedGuard guard(lock);
+      callback = direct_callback;
+      dpc = direct_dpc;
+      ctx = direct_ctx;
+    }
 
-      if (direct_dpc != nullptr) [[likely]] {
-        const InterruptStatus status = direct_callback(event, direct_ctx);
+    if (callback != nullptr) [[likely]] {
+      const InterruptStatus status = callback(event, ctx);
 
-        if (status == InterruptStatus::ScheduleDPC && direct_dpc) [[unlikely]] {
+      if (status == InterruptStatus::ScheduleDPC && dpc) [[unlikely]] {
+        // Queue a DPC
+        handled = true;
+      } else {
+        handled = status != InterruptStatus::Unhandled;
+        yield = status == InterruptStatus::YieldRequested;
+      }
+    } else {
+      // Shared vectors walk the list, which needs the lock.
+      utils::NakedGuard guard(lock);
+      for (auto& reg : list) {
+        InterruptStatus status = reg.m_callback(event, reg.m_ctx);
+
+        if (status == InterruptStatus::ScheduleDPC && reg.m_dpc) [[unlikely]] {
           // Queue a DPC
           handled = true;
-        } else {
-          handled = status != InterruptStatus::Unhandled;
-          yield = status == InterruptStatus::YieldRequested;
+          continue;
         }
-      } else {
-        for (auto& reg : list) {
-          InterruptStatus status = reg.m_callback(event, reg.m_ctx);
 
-          if (status == InterruptStatus::ScheduleDPC && reg.m_dpc) [[unlikely]] {
-            // Queue a DPC
-            handled = true;
-            continue;
-          }
-
-          handled |= (status != InterruptStatus::Unhandled);
-          yield |= (status == InterruptStatus::YieldRequested);
-        }
+        handled |= (status != InterruptStatus::Unhandled);
+        yield |= (status == InterruptStatus::YieldRequested);
       }
     }
 
@@ -152,6 +174,7 @@ void InterruptManager::route_event(const Event& event) noexcept {
       // yield
     }
 
+    percpu::hardirq_exit();
     return;
   }
 
@@ -165,13 +188,24 @@ void InterruptManager::route_event(const Event& event) noexcept {
 }
 
 void InterruptManager::handle_exception(const Event& event) noexcept {
+  // Never run the handler under the slot lock: page faults happen on every CPU at once, may
+  // nest, and may have to wait for other CPUs (to shoot down TLB entries), any of which would
+  // deadlock against a lock held across the call.
+  Callback callback = nullptr;
+  void* ctx = nullptr;
   {
     auto& slot = s_slots[event.vector];
     utils::NakedGuard guard(slot.lock);
 
     const auto it = slot.list.begin();
-    if (it != slot.list.end())
-      if (it->m_callback(event, it->m_ctx) != InterruptStatus::Unhandled) return;
+    if (it != slot.list.end()) {
+      callback = it->m_callback;
+      ctx = it->m_ctx;
+    }
+  }
+
+  if (callback && callback(event, ctx) != InterruptStatus::Unhandled) {
+    return;
   }
 
   dump_event(event);
@@ -179,6 +213,13 @@ void InterruptManager::handle_exception(const Event& event) noexcept {
 }
 
 void InterruptManager::handle_nmi(const Event& event) noexcept {
+  percpu::nmi_enter();
+
+  // A panicking CPU stops the others with NMIs; those never come back from here.
+  if (smp::handle_stop_nmi()) {
+    std::unreachable();
+  }
+
   dump_event(event);
   utils::logger::fatal("NMI triggered!\n");
 }

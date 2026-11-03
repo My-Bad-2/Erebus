@@ -1,0 +1,56 @@
+# Builds the kernel and the test kernel, then boots the test kernel in QEMU, which runs every
+# test in tests/ and fails the job unless all of them pass. Debug keeps the kernel's assertions,
+# Release is what gets shipped; both are tested.
+name: Kernel tests
+
+on:
+  push:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  kernel-tests:
+    name: Kernel tests (${{ matrix.preset }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - preset: debug
+            build-dir: build-debug
+          - preset: release
+            build-dir: build
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+
+      - name: Set up the build
+        id: setup
+        uses: ./.github/actions/setup-erebus
+
+      - name: Configure
+        run: >-
+          cmake --preset ${{ matrix.preset }}
+          -DEREBUS_QEMU_ACCEL=${{ steps.setup.outputs.accel }}
+          -DEREBUS_QEMU_STRESS_TIMEOUT=${{ steps.setup.outputs.boot-timeout }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Run the kernel tests
+        run: cmake --build --preset ${{ matrix.preset }} --target check
+
+      - name: Keep the serial console
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: serial-console-${{ matrix.preset }}
+          path: ${{ matrix.build-dir }}/check/*.log
+          if-no-files-found: ignore

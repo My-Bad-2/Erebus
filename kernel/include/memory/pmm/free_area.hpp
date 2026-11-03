@@ -1,3 +1,6 @@
+/// @file free_area.hpp
+/// @brief Free list of one buddy order.
+
 #pragma once
 
 #include <cstdint>
@@ -5,16 +8,23 @@
 #include "page.hpp"
 
 namespace kernel::memory::pmm {
+/// @brief Doubly linked list of free blocks of a single order.
+///
+/// The list has a hot end and a cold end. Blocks freed at runtime are pushed hot because their
+/// cache lines are likely still resident; memory handed over at boot is pushed cold so that
+/// recently used blocks are always preferred. Allocation only ever pops from the hot end.
+///
+/// @note Not thread-safe: the owning MobilityZone serialises access with its lock.
 class alignas(32) FreeArea {
-  Page* m_hot_head{nullptr};   // recently freed
-  Page* m_cold_tail{nullptr};  // reclaimed / un-cached
+  Page* m_hot_head{nullptr};
+  Page* m_cold_tail{nullptr};
   std::uint32_t m_nr_free{0};
 
  public:
   constexpr FreeArea() noexcept = default;
   ~FreeArea() noexcept = default;
 
-  FreeArea(FreeArea const&) noexcept = delete;
+  FreeArea(const FreeArea&) noexcept = delete;
   FreeArea& operator=(const FreeArea&) = delete;
 
   [[nodiscard]] bool is_empty() const noexcept { return m_nr_free == 0; }
@@ -48,6 +58,7 @@ class alignas(32) FreeArea {
     m_nr_free++;
   }
 
+  /// @return The hottest block, or nullptr if the list is empty.
   [[nodiscard]] Page* pop_hot() noexcept {
     Page* page = m_hot_head;
 
@@ -69,6 +80,7 @@ class alignas(32) FreeArea {
     return page;
   }
 
+  /// @pre @p page is linked into *this* list.
   void remove(Page* page) noexcept {
     if (page->buddy.prev) [[likely]] {
       page->buddy.prev->buddy.next = page->buddy.next;
@@ -85,50 +97,6 @@ class alignas(32) FreeArea {
     page->buddy.next = nullptr;
     page->buddy.prev = nullptr;
     m_nr_free--;
-  }
-
-  std::uint32_t steal_half(FreeArea& dest_area) noexcept {
-    if (m_nr_free < 2) {
-      return 0;
-    }
-
-    const std::uint32_t steal_count = m_nr_free / 2;
-    Page* curr = m_cold_tail;
-
-    // Find the breaking point
-    for (std::uint32_t i = 0; i < steal_count; i++) {
-      if (!curr) [[unlikely]] {
-        return 0;  // The list is corrupted
-      }
-
-      curr = curr->buddy.prev;
-    }
-
-    if (!curr) {
-      return 0;
-    }
-
-    // `curr` is now the new tail of this list
-    Page* stolen_head = curr->buddy.next;
-
-    curr->buddy.next = nullptr;
-    stolen_head->buddy.prev = nullptr;
-
-    Page* stolen_tail = m_cold_tail;
-    m_cold_tail = curr;
-    m_nr_free -= steal_count;
-
-    if (dest_area.m_cold_tail) {
-      dest_area.m_cold_tail->buddy.next = stolen_head;
-      stolen_head->buddy.prev = dest_area.m_cold_tail;
-    } else {
-      dest_area.m_hot_head = stolen_head;
-    }
-
-    dest_area.m_cold_tail = stolen_tail;
-    dest_area.m_nr_free += steal_count;
-
-    return steal_count;
   }
 };
 }  // namespace kernel::memory::pmm

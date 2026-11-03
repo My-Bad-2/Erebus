@@ -1,98 +1,170 @@
 #include "drivers/uart.hpp"
 
+#include <limits>
+
 #include "hal/hal.hpp"
 
 namespace kernel::drivers::uart {
-std::expected<void, std::string_view> SerialPort::initialize(
-    const std::uint32_t baud_rate, const std::uint32_t base_clock_hz) noexcept {
-  // Probe for missing hardware or unmapped MMIO memory
-  if (read<Lsr>().raw() == 0xff) return std::unexpected("UART bus is high. Hardware missing.");
+namespace {
+// How many line status reads a wait for the transmitter may take. A 16-byte FIFO drains in
+// under 17 ms even at 9600 baud, and a port read costs about a microsecond, so this is a few
+// times the slowest legitimate wait.
+constexpr std::uint32_t TX_WAIT_LIMIT = 100'000;
+}  // namespace
 
-  write<Ier>(IER{0});
+bool SerialPort::probe() const noexcept {
+  // A floating bus reads all ones.
+  if (read<Lsr>().raw() == 0xFF) {
+    return false;
+  }
 
-  // 16550 samples 16x per bit.
-  const auto divisor_32 = base_clock_hz / (16 * baud_rate);
-  if (divisor_32 == 0 || divisor_32 > std::numeric_limits<std::uint16_t>::max())
-    return std::unexpected("Baud rate unsupported by current base clock.");
+  // A real UART keeps the low four bits of IER; missing hardware usually reads back 0x00 or
+  // 0xFF whatever was written. Interrupts stay off at the interrupt controller meanwhile.
+  write<Ier>(IER{0x00});
+  const bool cleared = (read<Ier>().raw() & 0x0F) == 0x00;
+  write<Ier>(IER{0x0F});
+  const bool set = (read<Ier>().raw() & 0x0F) == 0x0F;
+  write<Ier>(IER{0x00});
 
-  const auto divisor = static_cast<std::uint16_t>(divisor_32);
+  return cleared && set;
+}
 
-  // Configure Baud Rate via DLAB
-  write<Lcr>(LCR{0}.with_dlab());
-  write<Dll>(divisor & 0xFFU);
-  write<Dlm>(static_cast<std::uint8_t>(divisor >> std::uint8_t{8}));
+std::expected<void, std::string_view> SerialPort::initialize(const std::uint32_t baud_rate,
+                                                             std::uint32_t base_clock_hz) noexcept {
+  // With DLAB left on by the firmware, IER would alias the divisor latch.
+  write<Lcr>(read<Lcr>().without_dlab());
 
-  // Clear DLAB, set 8N1 (8 bits, No parity, 1 stop bit)
-  write<Lcr>(LCR{}.with_word_length(3).without_dlab());
+  if (!probe()) {
+    return std::unexpected("no UART responds at this address");
+  }
 
-  // Attempt to enable 16750 64-byte FIFO (ignored by older hardware)
+  if (baud_rate != 0) {
+    if (base_clock_hz == 0) {
+      base_clock_hz = DEFAULT_CLOCK_HZ;
+    }
+
+    // The UART samples every bit 16 times. Round to the nearest divisor.
+    const std::uint64_t bit_clock = 16ull * baud_rate;
+    const std::uint64_t divisor = (base_clock_hz + bit_clock / 2) / bit_clock;
+    if (divisor == 0 || divisor > std::numeric_limits<std::uint16_t>::max()) {
+      return std::unexpected("baud rate unsupported by the UART clock");
+    }
+
+    write<Lcr>(LCR{0}.with_dlab());
+    write<Dll>(static_cast<std::uint8_t>(divisor & 0xFF));
+    write<Dlm>(static_cast<std::uint8_t>(divisor >> 8));
+  }
+
+  // 8N1, DLAB off.
+  write<Lcr>(LCR{}.with_word_length(3));
+
+  // Ask for the 64-byte FIFO of a 16750; anything older ignores that bit.
   const auto fcr = FCR{}
-                       .with_fifo_enable()         // enable fifo
-                       .with_clear_rx()            // clear receiver
-                       .with_clear_tx()            // clear transmitter
-                       .with_enable_64byte_fifo()  // enable 64-byte fifo
-                       .with_trigger_level(3);     // trigger lvl 3
+                       .with_fifo_enable()
+                       .with_clear_rx()
+                       .with_clear_tx()
+                       .with_enable_64byte_fifo()
+                       .with_trigger_level(3);
   write<Fcr>(fcr);
 
-  // Read back IIR to verify actual hardware capabilities
+  // IIR[7:6] == 3 means working FIFOs (16550A and later); a plain 16550 reports 2 because its
+  // FIFO is broken, and a 16450 has none.
   const auto iir = read<Iir>();
-  if (iir.get_fifo_status() == 3)  // Detect PCIe 16750 UART / 16550 UART
-    m_fifo_depth = iir.get_fifo_64byte_enabled() != 0u ? 64 : 16;
-  else  // Legacy 16450 (No FIFO).
+  if (iir.get_fifo_status() == 3) {
+    m_fifo_depth = iir.get_fifo_64byte_enabled() != 0 ? 64 : 16;
+  } else {
     m_fifo_depth = 1;
+  }
 
-  // Enable OUT2, DTR, and RTS
+  // DTR and RTS for the other end, OUT2 so that interrupts can reach the PIC once wanted.
   write<Mcr>(MCR{}.with_dtr().with_rts().with_out2());
+
+  m_tx_room = 0;
+  m_stalled = false;
   return {};
 }
 
-void SerialPort::append(const std::string_view str) const noexcept {
-  [[assume(m_fifo_depth == 1 || m_fifo_depth == 16 || m_fifo_depth == 64)]];
-
-  std::uint8_t fifo_space_remaining = 0;
-
-  auto push_char = [&](const char c) {
-    if (fifo_space_remaining == 0) {
-      while (!is_transmit_fifo_empty()) hw::cpu_relax();
-
-      fifo_space_remaining = m_fifo_depth;
+bool SerialPort::wait_for_tx_room() noexcept {
+  // THRE means the whole transmit FIFO is empty, so a full FIFO's worth may follow.
+  const std::uint32_t limit = m_stalled ? 1 : TX_WAIT_LIMIT;
+  for (std::uint32_t i = 0; i < limit; ++i) {
+    if (read<Lsr>().get_thr_empty()) {
+      m_tx_room = m_fifo_depth;
+      m_stalled = false;
+      return true;
     }
 
-    write<THR>(static_cast<std::uint8_t>(c));
-    --fifo_space_remaining;
-  };
-
-  for (const auto c : str) {
-    if (c == '\n') push_char('\r');
-    push_char(c);
+    hw::pause();
   }
+
+  m_stalled = true;
+  return false;
 }
 
-void SerialPort::push(const char c) const noexcept {
+void SerialPort::put(const std::uint8_t byte) noexcept {
+  if (m_tx_room == 0 && !wait_for_tx_room()) [[unlikely]] {
+    return;  // the transmitter is stuck; better to lose output than the machine
+  }
+
+  write<THR>(byte);
+  --m_tx_room;
+}
+
+void SerialPort::push(const char c) noexcept {
   if (c == '\n') {
-    while (!is_transmit_fifo_empty()) hw::cpu_relax();
-    write<THR>('\r');
+    put('\r');
   }
 
-  while (!is_transmit_fifo_empty()) hw::cpu_relax();
-  write<THR>(c);
+  put(static_cast<std::uint8_t>(c));
 }
 
-void SerialPort::append_fill(const std::size_t count, const char c) const noexcept {
-  if (count == 0) return;
-  for (std::size_t i = 0; i < count; ++i) push(c);
+void SerialPort::append(const std::string_view str) noexcept {
+  for (const char c : str) {
+    push(c);
+  }
+}
+
+void SerialPort::append_fill(const std::size_t count, const char c) noexcept {
+  for (std::size_t i = 0; i < count; ++i) {
+    push(c);
+  }
+}
+
+void SerialPort::flush() noexcept {
+  for (std::uint32_t i = 0; i < TX_WAIT_LIMIT && !read<Lsr>().get_transmitter_empty(); ++i) {
+    hw::pause();
+  }
+}
+
+std::expected<char, ReceiveError> SerialPort::take(const LSR lsr) const noexcept {
+  // Always consume the byte, even a bad one: left in RBR it would come back on the next read.
+  // The error bits clear when LSR is read, so they come from the same read as data_ready.
+  const auto byte = static_cast<char>(read<RBR>());
+
+  if (lsr.get_break_interrupt()) return std::unexpected(ReceiveError::BreakInterrupt);
+  if (lsr.get_framing_error()) return std::unexpected(ReceiveError::Framing);
+  if (lsr.get_parity_error()) return std::unexpected(ReceiveError::Parity);
+  if (lsr.get_overrun_error()) return std::unexpected(ReceiveError::Overrun);
+
+  return byte;
 }
 
 std::expected<char, ReceiveError> SerialPort::read_char() const noexcept {
-  while (!has_data()) hw::cpu_relax();
+  LSR lsr = read<Lsr>();
+  while (!lsr.get_data_ready()) {
+    hw::cpu_relax();
+    lsr = read<Lsr>();
+  }
 
-  const auto lsr = read<Lsr>();
+  return take(lsr);
+}
 
-  if (lsr.get_overrun_error()) return std::unexpected(ReceiveError::Overrun);
-  if (lsr.get_parity_error()) return std::unexpected(ReceiveError::Parity);
-  if (lsr.get_framing_error()) return std::unexpected(ReceiveError::Framing);
-  if (lsr.get_break_interrupt()) return std::unexpected(ReceiveError::BreakInterrupt);
+std::expected<char, ReceiveError> SerialPort::try_read_char() const noexcept {
+  const LSR lsr = read<Lsr>();
+  if (!lsr.get_data_ready()) {
+    return std::unexpected(ReceiveError::Empty);
+  }
 
-  return static_cast<char>(read<RBR>());
+  return take(lsr);
 }
 }  // namespace kernel::drivers::uart

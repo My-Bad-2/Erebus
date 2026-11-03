@@ -1,90 +1,105 @@
 #include "hpet.hpp"
 
+#include <uacpi/tables.h>
+
 #include "drivers/acpi.hpp"
 #include "drivers/clock.hpp"
 #include "memory/vmm/vma/vma.hpp"
 #include "utils/logger.hpp"
 
 namespace kernel::drivers {
+namespace {
+// The HPET register block is 1 KiB (IA-PC HPET 1.0a, 2.3).
+constexpr std::size_t HPET_REGISTER_BYTES = 0x400;
+}  // namespace
+
 std::uint64_t SystemClock::initialize_hpet() noexcept {
   using namespace acpi;
+
   auto hpet_res = Table::find<ACPI_HPET_SIGNATURE>();
-  if (!hpet_res) utils::logger::fatal("HPET Table missing: {}\n", hpet_res.error());
+  if (!hpet_res) {
+    utils::logger::info("No HPET table.\n");
+    return 0;
+  }
 
   const Table hpet_tbl = std::move(*hpet_res);
   const auto hpet_hdr_res = hpet_tbl.as<acpi_hpet>();
-  if (!hpet_hdr_res) utils::logger::fatal("HPET Table invalid: {}\n", hpet_hdr_res.error());
+  if (!hpet_hdr_res) {
+    utils::logger::warn("HPET table invalid: {}\n", hpet_hdr_res.error());
+    return 0;
+  }
 
-  const acpi_hpet* hpet = *hpet_hdr_res;
-  const acpi_gas& base_addr = hpet->address;
+  const acpi_gas& base_addr = (*hpet_hdr_res)->address;
+  if (base_addr.address_space_id != UACPI_ADDRESS_SPACE_SYSTEM_MEMORY || base_addr.address == 0) {
+    utils::logger::warn("HPET is not in system memory (address space {}); ignoring it.\n",
+                        base_addr.address_space_id);
+    return 0;
+  }
 
-  if (base_addr.address_space_id != UACPI_ADDRESS_SPACE_SYSTEM_MEMORY)
-    utils::logger::fatal("Invalid address space. Expected System memory.\n");
+  const auto mapped = memory::vmm::map_device_registers(memory::PhysicalAddress{base_addr.address},
+                                                        HPET_REGISTER_BYTES);
+  if (!mapped) {
+    utils::logger::warn("Could not map the HPET at {:#x}: {}\n", base_addr.address,
+                        std::to_underlying(mapped.error()));
+    return 0;
+  }
 
-  memory::PhysicalAddress hpet_phys_addr{base_addr.address};
-
-  memory::vmm::AddressSpace* kspace = memory::vmm::kernel_space();
-  auto res = kspace->map_mmio(hpet_phys_addr, memory::PAGE_SIZE);
-  if (!res) utils::logger::fatal("Could not map hpet: {}\n", res.error());
-
-  memory::VirtualAddress hpet_vaddr = *res;
-  s_hpet.set_base(hpet_vaddr);
+  s_hpet.set_base(*mapped);
 
   const auto cap = hpet::GeneralCap{s_hpet.read<std::uint64_t>(hpet::GENERAL_CAP_AND_ID_OFFSET)};
   const std::uint8_t rev_id = cap.get_rev_id();
   const std::uint32_t period_fs = cap.get_counter_clk_period_fs();
 
   // Guard against unpopulated MMIO and spec violations.
-  // IA-PC HPET Spec 1.0a requires 0 < period_fs <= 100,000,00 fs (100 ns)
+  // IA-PC HPET 1.0a requires 0 < period <= 100 ns, i.e. 100,000,000 fs.
   if (rev_id == 0 || rev_id == 0xff || period_fs == 0 || period_fs > 100'000'000) {
+    utils::logger::warn("HPET at {:#x} looks bogus (revision {}, period {} fs); ignoring it.\n",
+                        base_addr.address, rev_id, period_fs);
     s_hpet.set_base(memory::VirtualAddress{});
     return 0;
   }
 
+  // Older HPETs only have a 32-bit main counter, which wraps every few minutes.
+  s_hpet_mask = cap.get_counter_64bit_cap() ? ~0ull : 0xFFFF'FFFFull;
+
   const auto cfg = hpet::GeneralConfig{s_hpet.read<std::uint64_t>(hpet::GENERAL_CONFIG_OFFSET)};
-  if (!cfg.get_enable_cnf() || cfg.get_legacy_replacement_cnf())
+  if (!cfg.get_enable_cnf() || cfg.get_legacy_replacement_cnf()) {
     s_hpet.write<std::uint64_t>(hpet::GENERAL_CONFIG_OFFSET,
                                 cfg.without_legacy_replacement_cnf().with_enable_cnf().raw());
+  }
 
   return period_fs;
 }
 
-std::uint64_t SystemClock::try_calibrate_with_hpet(std::uint64_t period_fs) noexcept {
-  // 10 ms window per rial: 10^13 / period_fs
-  constexpr std::uint64_t WINDOW_FS = 10'000'000'000'000ul;
-  const std::uint64_t target_hpet_ticks = std::max(1ul, WINDOW_FS / period_fs);
+std::uint64_t SystemClock::read_hpet() noexcept {
+  return s_hpet.read<std::uint64_t>(hpet::MAIN_COUNTER_OFFSET) & s_hpet_mask;
+}
 
-  std::array<std::uint64_t, 3> samples{};
-
-  for (std::size_t i = 0; i < samples.size(); ++i) {
-    // Align to an HPET counter tick edge
-    const std::uint64_t hpet_initial = s_hpet.read<std::uint64_t>(hpet::MAIN_COUNTER_OFFSET);
-    std::uint64_t hpet_start = hpet_initial;
-    while (hpet_start == hpet_initial)
-      hpet_start = s_hpet.read<std::uint64_t>(hpet::MAIN_COUNTER_OFFSET);
-
-    const std::uint64_t tsc_start = hw::read_tsc();
-
-    std::uint64_t hpet_end = hpet_start;
-    while ((hpet_end - hpet_start) < target_hpet_ticks) {
-      hw::cpu_relax();
-      hpet_end = s_hpet.read<std::uint64_t>(hpet::MAIN_COUNTER_OFFSET);
-    }
-
-    const std::uint64_t tsc_end = hw::read_tsc();
-
-    const std::uint64_t tsc_delta = tsc_end - tsc_start;
-    const std::uint64_t hpet_delta = hpet_end - hpet_start;
-
-    constexpr __uint128_t FS_PER_SEC = 1'000'000'000'000'000ul;
-    const __uint128_t numer = static_cast<__uint128_t>(tsc_delta) * FS_PER_SEC;
-    const __uint128_t denom = static_cast<__uint128_t>(hpet_delta) * period_fs;
-
-    samples[i] = static_cast<std::uint64_t>(numer / denom);
+bool SystemClock::initialize_pm_timer() noexcept {
+  // uACPI's copy of the FADT has the X_ fields filled in from the legacy ones where the
+  // firmware left them empty.
+  acpi_fadt* fadt = nullptr;
+  if (uacpi_table_fadt(&fadt) != UACPI_STATUS_OK || !fadt) {
+    return false;
   }
 
-  std::ranges::sort(samples);
-  s_calib_src = hw::timer::Source::HpetSoftware;
-  return samples[1];  // Median of 3 samples
+  // Hardware-reduced platforms have no fixed hardware, the PM timer included.
+  if (fadt->flags & ACPI_HW_REDUCED_ACPI) {
+    return false;
+  }
+
+  const acpi_gas& blk = fadt->x_pm_tmr_blk;
+  if (blk.address_space_id != UACPI_ADDRESS_SPACE_SYSTEM_IO || blk.address == 0 ||
+      blk.address > 0xFFFF || blk.register_bit_width < 24) {
+    return false;
+  }
+
+  s_pm_timer_port = static_cast<std::uint16_t>(blk.address);
+  s_pm_timer_mask = (fadt->flags & ACPI_TMR_VAL_EXT) ? 0xFFFF'FFFFull : 0xFF'FFFFull;
+  return true;
+}
+
+std::uint64_t SystemClock::read_pm_timer() noexcept {
+  return hw::IoResource{hw::IoType::PMIO, s_pm_timer_port}.read<std::uint32_t>(0) & s_pm_timer_mask;
 }
 }  // namespace kernel::drivers

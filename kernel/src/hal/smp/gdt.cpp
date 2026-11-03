@@ -34,16 +34,16 @@ void GlobalDescriptorTable::load() noexcept {
 
   asm volatile("lgdt %0" : /* No Output */ : "m"(gdtr) : "memory");
 
-  // Reset Data segments
+  // Reset the data segments. FS and GS get the null selector; only their bases matter in long
+  // mode, and those are written through the MSRs/WRGSBASE afterwards.
   asm volatile(
       "mov %0, %%ds \n\t"
       "mov %0, %%es \n\t"
       "mov %0, %%ss \n\t"
-      "xor %%eax, %%eax \n\t"
-      "mov %%eax, %%fs \n\t"
-      "mov %%eax, %%gs \n\t"
+      "mov %1, %%fs \n\t"
+      "mov %1, %%gs \n\t"
       : /* No Output */
-      : "r"(std::to_underlying(Selector::KernelData))
+      : "r"(std::to_underlying(Selector::KernelData)), "r"(0u)
       : "memory");
 
   // Far jump to flush the Code Segment (CS) cache

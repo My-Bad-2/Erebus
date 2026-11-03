@@ -5,7 +5,7 @@
 namespace kernel::hw::apic {
 std::pair<std::uint32_t, TimerDivide> Lapic::compute_timer_count_and_div(
     std::uint64_t ns) const noexcept {
-  static constexpr std::array<TimerDivide, 8> kDivTable = {
+  static constexpr std::array kDivTable = {
       TimerDivide::Div1,  TimerDivide::Div2,  TimerDivide::Div4,  TimerDivide::Div8,
       TimerDivide::Div16, TimerDivide::Div32, TimerDivide::Div64, TimerDivide::Div128,
   };
@@ -13,8 +13,9 @@ std::pair<std::uint32_t, TimerDivide> Lapic::compute_timer_count_and_div(
   const std::uint64_t base_ticks = std::max(1ul, m_bus_scaler.ns_to_ticks(ns));
   const int excess_bits = std::max(0, std::bit_width(base_ticks) - 32);
 
-  if (excess_bits > 7) [[unlikely]]
+  if (excess_bits > 7) [[unlikely]] {
     return {std::numeric_limits<std::uint32_t>::max(), TimerDivide::Div128};
+  }
 
   const auto scaled = static_cast<std::uint32_t>(std::max(1ul, base_ticks >> excess_bits));
   return {scaled, kDivTable[excess_bits]};
@@ -63,7 +64,10 @@ std::uint64_t Lapic::calibrate_bus_frequency() const noexcept {
     bus_hz = samples[1];
   }
 
-  if (bus_hz != 0) s_calibrated_bus_hz.store(bus_hz, std::memory_order_release);
+  if (bus_hz != 0) {
+    s_calibrated_bus_hz.store(bus_hz, std::memory_order_release);
+  }
+
   return bus_hz;
 }
 
@@ -77,7 +81,7 @@ void Lapic::initialize(memory::VirtualAddress mmio_base, bool prefer_x2apic) noe
   if (cpu->has<Feature::MCE>()) {
     constexpr std::uint32_t IA32_MCG_CAP = 0x179;
     const std::uint64_t mcg_cap = read::msr(IA32_MCG_CAP);
-    m_caps.has_cmci = (mcg_cap & (1 << 10)) != 0;
+    m_caps.has_cmci = (mcg_cap & (1u << 10)) != 0;
   }
 
   m_caps.has_amd_ext_apic = cpu->has<Feature::EXT_APIC>();
@@ -85,33 +89,42 @@ void Lapic::initialize(memory::VirtualAddress mmio_base, bool prefer_x2apic) noe
   BaseMsrSchema apic_base = read::msr(IA32_APIC_BASE);
   apic_base.set_global_enable();
 
-  if (prefer_x2apic && m_caps.has_x2apic) {
+  // The boot loader may have switched to x2APIC already, and there is no way back short of
+  // disabling the APIC altogether. Firmware only does that when it has to (APIC IDs past 255),
+  // so staying in x2APIC is the right call anyway.
+  if (apic_base.get_x2apic_enable() || (prefer_x2apic && m_caps.has_x2apic)) {
     apic_base.set_x2apic_enable();
     write::msr(IA32_APIC_BASE, apic_base.raw());
 
     m_mode = ApicMode::x2APIC;
     m_cached_id = read<IdSchema>(Reg::Id).get_x2apic_id();
+
+    // Hardwired from the APIC ID: cluster in the upper half, one bit per CPU in the lower one.
+    m_logical_id = read<LdrSchema>(Reg::Ldr).get_id();
   } else {
-    apic_base.clear_x2apic_enable();
     write::msr(IA32_APIC_BASE, apic_base.raw());
 
-    m_mode = ApicMode::x2APIC;
-    m_cached_id = read<IdSchema>(Reg::Id).get_x2apic_id();
+    m_mode = ApicMode::xAPIC;
+    m_cached_id = read<IdSchema>(Reg::Id).get_xapic_id();
+    m_logical_id = 0;
   }
 
   const auto ver = read<VersionSchema>(Reg::Version);
   m_caps.max_lvt_entry = ver.get_max_lvt_entry();
   m_caps.has_directed_eoi = ver.get_has_directed_eoi();
 
-  if (m_caps.has_amd_ext_apic)
+  if (m_caps.has_amd_ext_apic) {
     m_caps.amd_ext_lvt_count = read<AmdExtFeatureSchema>(Reg::AmdExtFeature).get_ext_lvt_count();
+  }
 
   // Accept all interrupts
   set_tpr(0);
 
   // Clear Error Status Register (Double-write for xAPIC)
   write(Reg::Esr, Raw32Schema{0});
-  if (m_mode == ApicMode::xAPIC) write(Reg::Esr, Raw32Schema{0});
+  if (m_mode == ApicMode::xAPIC) {
+    write(Reg::Esr, Raw32Schema{0});
+  }
 
   auto mask_lvt = [this](const Reg reg) { write(reg, read<LvtSchema>(reg).with_masked()); };
 
@@ -121,10 +134,13 @@ void Lapic::initialize(memory::VirtualAddress mmio_base, bool prefer_x2apic) noe
   mask_lvt(Reg::LvtLint0);
   mask_lvt(Reg::LvtLint1);
   mask_lvt(Reg::LvtError);
-  if (m_caps.has_cmci) mask_lvt(Reg::LvtCmci);
+  if (m_caps.has_cmci) {
+    mask_lvt(Reg::LvtCmci);
+  }
 
-  for (std::uint8_t i = 0; i < m_caps.amd_ext_lvt_count; ++i)
+  for (std::uint8_t i = 0; i < m_caps.amd_ext_lvt_count; ++i) {
     mask_lvt(static_cast<Reg>(std::to_underlying(Reg::AmdExtLvtBase) + i * 0x10));
+  }
 
   // Software enable
   const auto svr = SvrSchema{}.with_apic_enable().with_vector(0xFF);
@@ -135,6 +151,8 @@ void Lapic::initialize(memory::VirtualAddress mmio_base, bool prefer_x2apic) noe
                        drivers::SystemClock::backend() == drivers::ClockBackend::InvariantTsc;
 
   const std::uint64_t bus_hz = calibrate_bus_frequency();
-  if (bus_hz != 0) m_bus_scaler = drivers::FrequencyScaler{bus_hz};
+  if (bus_hz != 0) {
+    m_bus_scaler = drivers::FrequencyScaler{bus_hz};
+  }
 }
 }  // namespace kernel::hw::apic
