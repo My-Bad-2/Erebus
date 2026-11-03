@@ -191,14 +191,14 @@ Copyright 2026 Yash Verma.
 
 None of this would boot without other people's work. Thank you, all of you.
 
-| Project | What Erebus uses it for | License |
+| Project | What Erebus uses it for  |
 |---|---|---|
-| [Limine](https://github.com/Limine-Bootloader/Limine), by Mintsuki and contributors | The bootloader. Its UEFI binaries go into every ISO, and its protocol header is `kernel/include/boot/limine.h`. | BSD-2-Clause; the header is 0BSD |
-| [uACPI](https://github.com/uACPI/uACPI), by Daniil Tatianin | ACPI. The kernel only answers its questions, in `kernel/src/glue/uacpi.cpp`. | MIT |
-| [Zydis](https://github.com/zyantific/zydis) and [Zycore](https://github.com/zyantific/zycore-c), by Florian Bernd and Joel Höner | x86 instruction decoding and encoding, linked into the kernel | MIT |
-| [freestanding-cxx-hdrs-gnu](https://github.com/osdev0/freestanding-cxx-hdrs-gnu) | The freestanding part of GCC's libstdc++ headers: `<atomic>`, `<span>`, `<expected>` and friends | GPL-3.0 with the GCC Runtime Library Exception |
-| [freestanding-lgrt](https://github.com/osdev0/freestanding-lgrt) | Compiler runtime builtins from LLVM's compiler-rt, such as 128-bit division and wide atomics | Apache-2.0 with LLVM Exceptions |
-| [edk2-ovmf-stable-bins](https://github.com/osdev0/edk2-ovmf-stable-bins), OVMF from [TianoCore EDK II](https://github.com/tianocore/edk2) | UEFI firmware for QEMU. It only runs the kernel and is never part of an image. | BSD-2-Clause-Patent |
+| [Limine](https://github.com/Limine-Bootloader/Limine), by Mintsuki and contributors | The bootloader. Its UEFI binaries go into every ISO, and its protocol header is `kernel/include/boot/limine.h`. |
+| [uACPI](https://github.com/uACPI/uACPI), by Daniil Tatianin | ACPI. The kernel only answers its questions, in `kernel/src/glue/uacpi.cpp`. |
+| [Zydis](https://github.com/zyantific/zydis) and [Zycore](https://github.com/zyantific/zycore-c), by Florian Bernd and Joel Höner | x86 instruction decoding and encoding, linked into the kernel | 
+| [freestanding-cxx-hdrs-gnu](https://github.com/osdev0/freestanding-cxx-hdrs-gnu) | The freestanding part of GCC's libstdc++ headers: `<atomic>`, `<span>`, `<expected>` and friends | 
+| [freestanding-lgrt](https://github.com/osdev0/freestanding-lgrt) | Compiler runtime builtins from LLVM's compiler-rt, such as 128-bit division and wide atomics |
+| [edk2-ovmf-stable-bins](https://github.com/osdev0/edk2-ovmf-stable-bins), OVMF from [TianoCore EDK II](https://github.com/tianocore/edk2) | UEFI firmware for QEMU. It only runs the kernel and is never part of an image. |
 
 Each submodule carries its own license file under `third_party/`, and Limine's comes with the
 download.
