@@ -99,16 +99,16 @@ cmake --workflow --preset check                # configure, build and test in on
 A run looks like this:
 
 ```text
-ktest: running 196 tests on 4 CPUs
+ktest: running 248 tests on 4 CPUs
 ktest: pass Maths.alignment (0 ms)
 ...
-ktest: 196 passed, 0 failed, 0 skipped
+ktest: 246 passed, 0 failed, 2 skipped
 ktest: ALL PASSED
 ```
 
 Then there is the stress test, which boots the test kernel over and over: 1, 2, 4 and 8 CPUs,
-512 MiB and 2 GiB, one NUMA node or two, and CPU models with x2APIC, PCID/INVPCID/FSGSBASE or
-the hardware RNG taken away. Twice each. That's 112 boots.
+512 MiB and 2 GiB, one NUMA node or two, and CPU models with x2APIC, PCID/INVPCID/FSGSBASE, the
+hardware RNG, compacted XSAVE or XSAVE altogether taken away. Twice each. That's 168 boots.
 
 ```sh
 cmake --preset release
@@ -174,7 +174,7 @@ always bugs stop the build.
 ## Where things are
 
 ```text
-kernel/        the kernel: boot, hal, memory, drivers, crypto, patch, utils
+kernel/        the kernel: boot, hal, memory, sched, drivers, crypto, patch, utils
 klib/          the freestanding C library and kformat
 tests/         the in-kernel test framework, and the tests
 cmake/         build modules, the QEMU test runner, Doxygen templates

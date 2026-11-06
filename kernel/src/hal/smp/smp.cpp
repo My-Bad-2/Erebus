@@ -10,6 +10,7 @@
 #include "drivers/acpi.hpp"
 #include "drivers/clock.hpp"
 #include "hal/apic/ioapic.hpp"
+#include "hal/fpu.hpp"
 #include "hal/hal.hpp"
 #include "hal/interrupts/interrupts.hpp"
 #include "hal/smp/ipi.hpp"
@@ -18,6 +19,7 @@
 #include "memory/memory.hpp"
 #include "memory/pmm/bootstrap.hpp"
 #include "memory/vmm/vma/vma.hpp"
+#include "sched/thread.hpp"
 #include "utils/logger.hpp"
 #include "utils/maths.hpp"
 
@@ -65,7 +67,7 @@ std::atomic<std::uint32_t> g_stopped{0};
 template <typename Pred>
 bool spin_until(Pred&& done, const klib::Duration timeout) noexcept {
   if (drivers::SystemClock::scaler().freq_hz == 0) [[unlikely]] {
-    for (std::uint64_t spins = 0; spins < (1ull << 30); ++spins) {
+    for (std::uint64_t spins = 0; spins < (1ul << 30); ++spins) {
       if (done()) return true;
       pause();
     }
@@ -373,6 +375,19 @@ void bring_up_local(PerCpu* cpu) noexcept {
 
   e.apic_id = cpu->lapic.id();
   e.logical_dest = cpu->lapic.logical_id();
+
+  fpu::initialize();
+}
+
+// Turns the stack the calling CPU runs on into its first thread.
+void adopt_boot_stack(const PerCpu* cpu) noexcept {
+  const std::uint32_t id = cpu->topology.get_cpu_id();
+  const auto thread =
+      sched::Thread::adopt_boot_thread(id, cpu->stack_top - KSTACK_SIZE, KSTACK_SIZE);
+  if (!thread) {
+    utils::logger::fatal("SMP: no thread for CPU {}: {:#x}\n", id,
+                         std::to_underlying(thread.error()));
+  }
 }
 
 // Makes the calling CPU a target for IPIs. Interrupts must still be disabled.
@@ -382,7 +397,7 @@ void bring_up_local(PerCpu* cpu) noexcept {
     return false;
   }
 
-  g_online_mask[cpu / 64].fetch_or(1ull << (cpu % 64), std::memory_order_seq_cst);
+  g_online_mask[cpu / 64].fetch_or(1ul << (cpu % 64), std::memory_order_seq_cst);
   g_online_count.fetch_add(1, std::memory_order_seq_cst);
 
   // Pairs with the fence in ipi::call_many(). Whoever changed shared state (page tables, say)
@@ -399,7 +414,7 @@ void bring_up_local(PerCpu* cpu) noexcept {
   // NMIs can still wake the halted CPU and bring it back here; count it once.
   if (g_cpus[cpu].state.exchange(CpuState::Stopped, std::memory_order_acq_rel) !=
       CpuState::Stopped) {
-    g_online_mask[cpu / 64].fetch_and(~(1ull << (cpu % 64)), std::memory_order_relaxed);
+    g_online_mask[cpu / 64].fetch_and(~(1ul << (cpu % 64)), std::memory_order_relaxed);
     g_stopped.fetch_add(1, std::memory_order_release);
   }
 
@@ -417,6 +432,7 @@ void bring_up_local(PerCpu* cpu) noexcept {
   cpu->info = profile_manager.register_cpu();
 
   bring_up_local(cpu);
+  adopt_boot_stack(cpu);
 
   const std::uint32_t id = percpu::id();
   if (!go_online(id, CpuState::Booting)) {
@@ -538,6 +554,9 @@ void initialize(const memory::VirtualAddress bsp_stack_top) noexcept {
 
   apic::io_apic_manager.initialize();
   bring_up_local(bsp);
+
+  sched::Thread::initialize_subsystem();
+  adopt_boot_stack(bsp);
 
   g_cluster_dest =
       bsp->lapic.mode() == apic::ApicMode::x2APIC && !fadt_forces_physical_destinations();

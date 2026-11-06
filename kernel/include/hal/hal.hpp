@@ -269,6 +269,44 @@ class EFER {
   BF_BIT_RW(tce, 15)    // enables translation cache extension
 };
 
+class XCR0 {
+  std::uint64_t m_data;
+
+ public:
+  constexpr explicit XCR0(const std::uint64_t val = 0) : m_data(val) {}
+  [[nodiscard]] std::uint64_t raw() const noexcept { return m_data; }
+
+  static constexpr std::uint64_t XTILECFG = 1ull << 17;
+  static constexpr std::uint64_t XTILEDATA = 1ull << 18;
+
+  /// x87, SSE, AVX, AVX-512 and PKRU: everything a thread may have live without asking.
+  static constexpr std::uint64_t STANDARD_MASK = 0x2e7;
+  /// The same, plus the AMX tile state.
+  static constexpr std::uint64_t STANDARD_AMX_MASK = STANDARD_MASK | XTILECFG | XTILEDATA;
+
+  BF_BIT_RW(x87, 0)
+  BF_BIT_RW(sse, 1)
+  BF_BIT_RW(avx, 2)
+  BF_BIT_RW(bndreg, 3)
+  BF_BIT_RW(bndcsr, 4)
+  BF_BIT_RW(opmask, 5)
+  BF_BIT_RW(zmm_hi256, 6)
+  BF_BIT_RW(hi16_zmm, 7)
+  BF_BIT_RW(processor_trace, 8)
+  BF_BIT_RW(pkru, 9)
+  BF_BIT_RW(pasid, 10)
+  BF_BIT_RW(user_cet, 11)
+  BF_BIT_RW(supervisor_cet, 12)
+  BF_BIT_RW(hdc, 13)
+  BF_BIT_RW(uintr, 14)
+  BF_BIT_RW(lbr, 15)
+  BF_BIT_RW(hwp, 16)
+  BF_BIT_RW(xtilecfg, 17)
+  BF_BIT_RW(xtiledata, 18)
+  BF_BIT_RW(apx, 19)
+  BF_BIT_RW(bsr0, 20)
+};
+
 namespace read {
 [[gnu::always_inline]] inline CR0 cr0() noexcept {
   std::uint64_t val;
@@ -311,7 +349,18 @@ namespace read {
   return EFER{msr(IA32_EFER)};
 }
 
-DECLARE_STATIC_CALL(std::uint64_t, gs_base);
+[[gnu::always_inline]] inline XCR0 xcr0() noexcept {
+  std::uint32_t eax, edx;
+  asm volatile("xgetbv" : "=a"(eax), "=d"(edx) : "c"(0) : /* No Clobbers */);
+  return XCR0{(static_cast<std::uint64_t>(edx) << 32) | eax};
+}
+
+DECLARE_STATIC_CALL(std::uint64_t, read_gs_base);
+DECLARE_STATIC_CALL(std::uint64_t, read_fs_base);
+
+[[gnu::always_inline]] inline std::uint64_t gs_base() noexcept { return read_gs_base(); }
+
+[[gnu::always_inline]] inline std::uint64_t fs_base() noexcept { return read_fs_base(); }
 }  // namespace read
 
 namespace write {
@@ -349,7 +398,15 @@ namespace write {
   msr(IA32_EFER, val.raw());
 }
 
-DECLARE_STATIC_CALL(void, wrgsbase, std::uint64_t);
+[[gnu::always_inline]] inline void xcr0(const XCR0 val) noexcept {
+  std::uint32_t eax = static_cast<std::uint32_t>(val.raw());
+  std::uint32_t edx = static_cast<std::uint32_t>(val.raw() >> 32);
+
+  asm volatile("xsetbv" : /* No Output */ : "a"(eax), "d"(edx), "c"(0) : /* No Clobbers */);
+}
+
+DECLARE_STATIC_CALL(void, gs_base, std::uint64_t);
+DECLARE_STATIC_CALL(void, fs_base, std::uint64_t);
 }  // namespace write
 
 enum class InvpcidType : std::uint64_t {

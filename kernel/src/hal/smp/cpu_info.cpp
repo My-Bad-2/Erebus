@@ -282,6 +282,12 @@ void CpuInfo::initialize() noexcept {
     m_leaves[2] = {r.eax, r.ebx, r.ecx, r.edx};
   }
 
+  // Which XSAVE variants exist. Leaf 0xD means nothing on a CPU without XSAVE.
+  if (m_max_leaf >= 0xD && has<Feature::XSAVE>()) {
+    const auto [eax, ebx, ecx, edx] = query(0xD, 1);
+    m_leaves[5] = {eax, ebx, ecx, edx};
+  }
+
   if (m_max_ext_leaf >= 0x80000001) {
     const auto [eax, ebx, ecx, edx] = query(0x80000001);
     m_leaves[3] = {eax, ebx, ecx, edx};

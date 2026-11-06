@@ -19,6 +19,10 @@
 #include "memory/vmm/pagemap/tlb.hpp"
 #include "utils/locks/locks.hpp"
 
+namespace kernel::sched {
+class Thread;
+}
+
 namespace kernel::hw {
 struct alignas(std::hardware_destructive_interference_size) PerNumaNode {
   std::uint32_t numa_id;
@@ -58,7 +62,8 @@ struct alignas(std::hardware_destructive_interference_size) PerCpu {
   PerNumaNode* numa_node{nullptr};
   const CpuInfo* info{nullptr};
   CpuTopology topology{0};
-  memory::VirtualAddress stack_top{};  ///< Kernel stack the CPU was started on.
+  memory::VirtualAddress stack_top{};   ///< Kernel stack the CPU was started on.
+  sched::Thread* curr_thread{nullptr};  ///< What the CPU is running; see sched::current().
   gdt::GlobalDescriptorTable gdt_table{};
 
   alignas(std::hardware_destructive_interference_size) CpuContext context{0};
@@ -90,6 +95,9 @@ namespace percpu {
   return self()->pcid_manager;
 }
 [[nodiscard]] inline apic::Lapic& lapic() noexcept { return self()->lapic; }
+
+[[nodiscard]] inline sched::Thread* current_thread() noexcept { return READ_PCP(curr_thread); }
+inline void set_current_thread(sched::Thread* thread) noexcept { WRITE_PCP(curr_thread, thread); }
 
 /// @brief Per-CPU area of the CPU with dense ID @p cpu_id (0 is the BSP).
 /// @pre The CPU is registered with the SMP code, or is the BSP.

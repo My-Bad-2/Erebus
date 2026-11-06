@@ -20,8 +20,8 @@ namespace {
 // The two shapes a trampoline can have, read as one little-endian word: `jmp rel32; int3 x3`,
 // and `ret; nopl 0(%rax); int3 x3`.
 constexpr std::uint64_t JMP_REL32 = 0xE9;
-constexpr std::uint64_t INT3_PADDING = 0xCC'CCCCull << 40;
-constexpr std::uint64_t RETURN_TRAMPOLINE = 0xCC'CCCC'0040'1F0F'C3ull;
+constexpr std::uint64_t INT3_PADDING = 0xCC'CCCCul << 40;
+constexpr std::uint64_t RETURN_TRAMPOLINE = 0xCC'CCCC'0040'1F0F'C3ul;
 constexpr std::size_t TRAMPOLINE_ALIGN = 16;
 
 [[nodiscard]] constexpr bool is_trampoline(const std::uint64_t word) noexcept {

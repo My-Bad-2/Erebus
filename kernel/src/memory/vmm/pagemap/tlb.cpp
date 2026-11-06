@@ -113,7 +113,7 @@ void remote_shootdown_invlpgb(PageMap* pmap, const VirtualAddress virt,
         }
 
         const std::size_t word = remote_pcid / 64;
-        const std::uint64_t bit = 1ull << (remote_pcid % 64);
+        const std::uint64_t bit = 1ul << (remote_pcid % 64);
 
         if ((broadcasted_pcids[word] & bit) == 0) {
           ShootdownCoordinator::queue_invlpgb(virt, size_bytes, remote_pcid, stride);

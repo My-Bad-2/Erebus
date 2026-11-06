@@ -12,7 +12,7 @@ using memory::vmm::AddressSpace;
 using memory::vmm::has_flag;
 
 constexpr auto RW = AccessFlags::Read | AccessFlags::Write;
-constexpr VirtualAddress USER_BASE{0x0000100000000000ull};
+constexpr VirtualAddress USER_BASE{0x0000100000000000ul};
 constexpr std::size_t PAGES = 8;
 
 // The word at `v` in `as`, through the direct map: these page maps are never loaded into CR3,

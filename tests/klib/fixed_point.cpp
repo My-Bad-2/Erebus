@@ -56,7 +56,7 @@ KTEST(FixedPoint, most_negative_value) {
 KTEST(FixedPoint, large_scale_does_not_overflow) {
   // rem * 10^prec needs more than 64 bits here.
   char buf[64];
-  constexpr std::uint64_t scale = 1'000'000'000'000'000'000ull;
+  constexpr std::uint64_t scale = 1'000'000'000'000'000'000ul;
   klib::kprint(buf, sizeof(buf), "{:.18}", klib::fixed<scale>(scale + scale / 4));
   KEXPECT_STREQ(buf, "1.250000000000000000");
 }

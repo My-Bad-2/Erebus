@@ -7,7 +7,7 @@
 
 namespace kernel::drivers {
 namespace {
-constexpr std::uint64_t FS_PER_SEC = 1'000'000'000'000'000ull;
+constexpr std::uint64_t FS_PER_SEC = 1'000'000'000'000'000ul;
 constexpr std::uint64_t PM_TIMER_HZ = 3'579'545;
 
 // A reference counter to measure the TSC against. Its frequency is `hz_num / hz_den` Hz, which
@@ -126,7 +126,7 @@ std::uint64_t SystemClock::widen(const std::uint64_t raw) noexcept {
 std::uint64_t SystemClock::raw_ticks_slow() noexcept {
   switch (s_backend) {
     case ClockBackend::Hpet:
-      return s_backend_mask == ~0ull ? read_hpet() : widen(read_hpet());
+      return s_backend_mask == ~0ul ? read_hpet() : widen(read_hpet());
     case ClockBackend::AcpiPmTimer:
       return widen(read_pm_timer());
     default:
@@ -161,7 +161,7 @@ void SystemClock::initialize() noexcept {
     s_cached_apic_bus_hz = res.apic_bus_hz;
 
     if (res.tsc_hz != 0) {
-      use_backend(ClockBackend::InvariantTsc, res.tsc_hz, res.source, ~0ull);
+      use_backend(ClockBackend::InvariantTsc, res.tsc_hz, res.source, ~0ul);
     }
   }
 
@@ -183,7 +183,7 @@ void SystemClock::initialize() noexcept {
       }
 
       if (tsc_hz != 0) {
-        use_backend(ClockBackend::InvariantTsc, tsc_hz, source, ~0ull);
+        use_backend(ClockBackend::InvariantTsc, tsc_hz, source, ~0ul);
       }
     }
 

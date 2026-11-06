@@ -52,8 +52,8 @@ set(EREBUS_QEMU_STRESS_MEMORY "512M;2G" CACHE STRING "Guest memory sizes")
 set(EREBUS_QEMU_STRESS_NUMA_NODES "1;2" CACHE STRING
     "NUMA node counts; memory and CPUs are split evenly between the nodes")
 set(EREBUS_QEMU_STRESS_CPU_MODELS
-    "max,migratable=no;max,migratable=no,-x2apic;max,migratable=no,-pcid,-invpcid,-fsgsbase;max,migratable=no,-rdseed,-rdrand"
-    CACHE STRING "Guest CPU models: everything the host has, then without x2APIC, without the TLB and GS base extensions, and without a hardware RNG")
+    "max,migratable=no;max,migratable=no,-x2apic;max,migratable=no,-pcid,-invpcid,-fsgsbase;max,migratable=no,-rdseed,-rdrand;max,migratable=no,-xsaves,-xsavec;max,migratable=no,-xsave"
+    CACHE STRING "Guest CPU models: everything the host has, then without x2APIC, without the TLB and GS base extensions, without a hardware RNG, with the plain XSAVE save format, and with FXSAVE alone")
 set(EREBUS_QEMU_STRESS_EXPECT "" CACHE STRING
     "Extra regexes the console must show for a boot to pass")
 set(EREBUS_QEMU_STRESS_FAIL "\\[FTL\\]" CACHE STRING

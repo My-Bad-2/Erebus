@@ -19,7 +19,7 @@ KTEST(PageMap, maps_huge_pages_and_splits_them_to_protect_one_page) {
   const auto block = memory::pmm::alloc_pages(memory::pmm::PageMobility::Movable, 10);
   KREQUIRE(block.has_value());
 
-  const VirtualAddress va{0xFFFFC80000000000ull};
+  const VirtualAddress va{0xFFFFC80000000000ul};
   constexpr std::size_t SIZE = 4ul << 20;
   KREQUIRE(pm.map_range(va, *block, SIZE, RW).has_value());
 
@@ -44,6 +44,6 @@ KTEST(PageMap, maps_huge_pages_and_splits_them_to_protect_one_page) {
 // Nothing is mapped here: this must skip whole tables instead of walking 262144 pages.
 KTEST(PageMap, unmaps_a_sparse_gigabyte) {
   memory::vmm::PageMap& pm = memory::vmm::kernel_space()->pagemap();
-  KEXPECT(pm.unmap_range(VirtualAddress{0xFFFFD00000000000ull}, memory::PAGE_SIZE_1GB).has_value());
+  KEXPECT(pm.unmap_range(VirtualAddress{0xFFFFD00000000000ul}, memory::PAGE_SIZE_1GB).has_value());
 }
 }  // namespace kernel::testing

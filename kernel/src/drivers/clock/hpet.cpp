@@ -60,7 +60,7 @@ std::uint64_t SystemClock::initialize_hpet() noexcept {
   }
 
   // Older HPETs only have a 32-bit main counter, which wraps every few minutes.
-  s_hpet_mask = cap.get_counter_64bit_cap() ? ~0ull : 0xFFFF'FFFFull;
+  s_hpet_mask = cap.get_counter_64bit_cap() ? ~0ul : 0xFFFF'FFFFull;
 
   const auto cfg = hpet::GeneralConfig{s_hpet.read<std::uint64_t>(hpet::GENERAL_CONFIG_OFFSET)};
   if (!cfg.get_enable_cnf() || cfg.get_legacy_replacement_cnf()) {

@@ -19,7 +19,7 @@ PerCpu* cpu_area(const std::uint32_t cpu_id) noexcept {
 
 void install(PerCpu* cpu) noexcept {
   cpu->gdt_table.load();
-  write::wrgsbase(reinterpret_cast<std::uintptr_t>(cpu));
+  write::gs_base(reinterpret_cast<std::uintptr_t>(cpu));
 }
 
 void early_initialize() noexcept {

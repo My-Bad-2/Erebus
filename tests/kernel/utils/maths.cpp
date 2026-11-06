@@ -12,8 +12,8 @@ KTEST(Maths, alignment) {
   KEXPECT_EQ(maths::align_up(0x1234u, 0x1000u), 0x2000u);
   KEXPECT_EQ(maths::align_up(0x2000u, 0x1000u), 0x2000u);
   KEXPECT_EQ(maths::align_up(std::uint64_t{0}, 64u), 0u);
-  KEXPECT(maths::is_aligned(0x3000ull, 0x1000u));
-  KEXPECT(!(maths::is_aligned(0x3001ull, 0x1000u)));
+  KEXPECT(maths::is_aligned(0x3000ul, 0x1000u));
+  KEXPECT(!(maths::is_aligned(0x3001ul, 0x1000u)));
 }
 
 KTEST(Maths, rounding_division) {

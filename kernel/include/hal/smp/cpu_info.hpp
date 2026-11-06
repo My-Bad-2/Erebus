@@ -115,6 +115,7 @@ constexpr std::uint32_t map_leaf_to_index(const std::uint32_t leaf, const std::u
   if (leaf == 7 && subleaf == 1) return 2;
   if (leaf == 0x80000001 && subleaf == 0) return 3;
   if (leaf == 0x80000008 && subleaf == 0) return 4;
+  if (leaf == 0xD && subleaf == 1) return 5;
   return 0xFFFFFFFF;  // Leaf is not pre-cached
 }
 
@@ -198,6 +199,12 @@ enum class Feature : std::uint32_t {
   AMX_F = make_feat(7, 1, Reg::EDX, 21),
   LAM = make_feat(7, 1, Reg::EAX, 26),
 
+  // XSAVE features: Leaf 0xD, Subleaf 1
+  XSAVEOPT = make_feat(0xD, 1, Reg::EAX, 0),
+  XSAVEC = make_feat(0xD, 1, Reg::EAX, 1),
+  XSS = make_feat(0xD, 1, Reg::EAX, 3),
+  XFD = make_feat(0xD, 1, Reg::EAX, 4),
+
   // AMD/Intel Extended Features: Leaf 0x80000001
   SVM = make_feat(0x80000001, 0, Reg::ECX, 2),
   EXT_APIC = make_feat(0x80000001, 0, Reg::ECX, 3),
@@ -222,7 +229,7 @@ enum class Feature : std::uint32_t {
 class alignas(std::hardware_destructive_interference_size) CpuInfo {
   friend class CpuProfileManager;
 
-  alignas(64) std::array<std::array<std::uint32_t, 4>, 5> m_leaves{};
+  alignas(64) std::array<std::array<std::uint32_t, 4>, 6> m_leaves{};
 
   Vendor m_vendor = Vendor::Unknown;
   Hypervisor m_hypervisor = Hypervisor::None;

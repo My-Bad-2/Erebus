@@ -8,7 +8,8 @@ namespace {
 // so every AP has to match it before its first GS base write.
 bool g_fsgsbase = false;
 
-// The GS base in use right now. Its SWAPGS partner, IA32_KERNEL_GS_BASE, is 0xC0000102.
+// The FS and GS bases in use right now. GS's SWAPGS partner, IA32_KERNEL_GS_BASE, is 0xC0000102.
+constexpr std::uint32_t IA32_FS_BASE = 0xC0000100;
 constexpr std::uint32_t IA32_GS_BASE = 0xC0000101;
 
 void idle_generic(const volatile std::uint32_t* runqueue_count) noexcept {
@@ -57,7 +58,7 @@ void cpu_idle_loop(const volatile std::uint32_t* runqueue_count) noexcept {
 
 namespace read {
 namespace {
-std::uint64_t legacy() noexcept { return msr(IA32_GS_BASE); }
+std::uint64_t legacy_gs() noexcept { return msr(IA32_GS_BASE); }
 
 std::uint64_t rdgsbase() noexcept {
   std::uint64_t base;
@@ -67,26 +68,52 @@ std::uint64_t rdgsbase() noexcept {
                : /* No Clobber */);
   return base;
 }
+
+std::uint64_t legacy_fs() noexcept { return msr(IA32_FS_BASE); }
+
+std::uint64_t rdfsbase() noexcept {
+  std::uint64_t base;
+  asm volatile("rdfsbase %0"
+               : "=r"(base)
+               : /* No input */
+               : /* No Clobber */);
+  return base;
+}
 }  // namespace
 
-DEFINE_STATIC_CALL(gs_base, legacy);
-REGISTER_STATIC_CALL_ALT(gs_base, rdgsbase, Feature::FSGSBASE);
+DEFINE_STATIC_CALL(read_gs_base, legacy_gs);
+REGISTER_STATIC_CALL_ALT(read_gs_base, rdgsbase, Feature::FSGSBASE);
+
+DEFINE_STATIC_CALL(read_fs_base, legacy_fs);
+REGISTER_STATIC_CALL_ALT(read_fs_base, rdfsbase, Feature::FSGSBASE);
 }  // namespace read
 
 namespace write {
 namespace {
-void legacy(const std::uint64_t base) noexcept { msr(IA32_GS_BASE, base); }
+void legacy_gs(const std::uint64_t base) noexcept { msr(IA32_GS_BASE, base); }
 
-void _wrgsbase(const std::uint64_t base) noexcept {
+void wrgsbase(const std::uint64_t base) noexcept {
   asm volatile("wrgsbase %0"
+               : /* No Output */
+               : "r"(base)
+               : "memory");
+}
+
+void legacy_fs(const std::uint64_t base) noexcept { msr(IA32_FS_BASE, base); }
+
+void wrfsbase(const std::uint64_t base) noexcept {
+  asm volatile("wrfsbase %0"
                : /* No Output */
                : "r"(base)
                : "memory");
 }
 }  // namespace
 
-DEFINE_STATIC_CALL(wrgsbase, legacy);
-REGISTER_STATIC_CALL_ALT(wrgsbase, _wrgsbase, Feature::FSGSBASE);
+DEFINE_STATIC_CALL(gs_base, legacy_gs);
+REGISTER_STATIC_CALL_ALT(gs_base, wrgsbase, Feature::FSGSBASE);
+
+DEFINE_STATIC_CALL(fs_base, legacy_fs);
+REGISTER_STATIC_CALL_ALT(fs_base, wrfsbase, Feature::FSGSBASE);
 }  // namespace write
 
 void initialize() noexcept {

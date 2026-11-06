@@ -106,6 +106,6 @@ KTEST(Bitfield, make_mask) {
   static_assert(klib::bitfield::make_mask<0, std::uint8_t>() == 0);
   static_assert(klib::bitfield::make_mask<3, std::uint8_t>() == 0b111);
   static_assert(klib::bitfield::make_mask<8, std::uint8_t>() == 0xFF);
-  static_assert(klib::bitfield::make_mask<64, std::uint64_t>() == ~0ull);
+  static_assert(klib::bitfield::make_mask<64, std::uint64_t>() == ~0ul);
   KEXPECT(true);
 }

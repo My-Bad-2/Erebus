@@ -42,7 +42,7 @@ KTEST(BmiWord, acquire_specific) {
 
 KTEST(BmiWord, acquire_contiguous_finds_the_lowest_run) {
   // Free: bits 2-3, 10-14, 40-63.
-  klib::BmiWord word{0b11ull << 2 | 0b11111ull << 10 | (~0ull << 40)};
+  klib::BmiWord word{0b11ul << 2 | 0b11111ul << 10 | (~0ul << 40)};
 
   KEXPECT_EQ(word.acquire_contiguous(2), 2u);
   KEXPECT_EQ(word.acquire_contiguous(5), 10u);
@@ -66,7 +66,7 @@ KTEST(BmiWord, acquire_contiguous_skips_short_runs) {
   // Runs of 3 everywhere, separated by one taken slot.
   std::uint64_t mask = 0;
   for (int i = 0; i + 3 <= 64; i += 4) {
-    mask |= 0b111ull << i;
+    mask |= 0b111ul << i;
   }
 
   klib::BmiWord word{mask};
@@ -94,7 +94,7 @@ KTEST_ALL_CPUS(BmiWord, hands_each_slot_out_once_under_contention, cpu) {
     kernel::testing::sync_cpus();
 
     if (cpu == 0) {
-      KEXPECT_EQ(g_seen.load(), ~0ull);
+      KEXPECT_EQ(g_seen.load(), ~0ul);
     }
   }
 
