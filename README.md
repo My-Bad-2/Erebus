@@ -9,8 +9,8 @@
 Erebus is a hobby kernel for x86-64 PCs, written in freestanding C++ and booted by Limine.
 
 Right now it boots, takes over memory, wakes up every CPU, calibrates its clocks, says
-`Hello, World!` and then idles. Forever. There is no scheduler, no userspace and no filesystem.
-Not yet, anyway.
+`Hello, World!` and then idles. Forever. There is a scheduler, but nothing for it to run: no
+userspace and no filesystem. Not yet, anyway.
 
 The parts that do exist:
 
@@ -22,6 +22,10 @@ The parts that do exist:
   fault, stacks that grow by themselves, and copy-on-write (Mooooo!).
 - Every CPU online, on x2APIC or xAPIC, with an I/O APIC for device interrupts and cross-CPU
   function calls (IPIs).
+- A preemptive scheduler: EEVDF for ordinary threads, FIFO for real-time ones, one run queue per
+  CPU. Idle CPUs steal work, nearest NUMA node first, and queueing a thread never allocates.
+- Per-CPU timers with nanosecond deadlines, on the TSC-deadline timer or the APIC countdown,
+  whichever the CPU has. The ones that care start within a few dozen nanoseconds of their deadline.
 - ACPI through uACPI. A monotonic clock on the invariant TSC, measured against the HPET or the
   ACPI PM timer when the CPU won't say how fast it runs.
 - A random number generator: a BLAKE2b entropy pool feeding a ChaCha20 generator per CPU.
@@ -99,16 +103,17 @@ cmake --workflow --preset check                # configure, build and test in on
 A run looks like this:
 
 ```text
-ktest: running 250 tests on 4 CPUs
+ktest: running 385 tests on 4 CPUs
 ktest: pass Maths.alignment (0 ms)
 ...
-ktest: 246 passed, 0 failed, 4 skipped
+ktest: 381 passed, 0 failed, 4 skipped
 ktest: ALL PASSED
 ```
 
 Then there is the stress test, which boots the test kernel over and over: 1, 2, 4 and 8 CPUs,
-512 MiB and 2 GiB, one NUMA node or two, and CPU models with x2APIC, PCID/INVPCID/FSGSBASE, the
-hardware RNG, compacted XSAVE or XSAVE altogether taken away. Twice each. That's 168 boots.
+512 MiB and 2 GiB, one NUMA node or two, and CPU models with x2APIC, the TSC-deadline timer,
+PCID/INVPCID/FSGSBASE, the hardware RNG, compacted XSAVE or XSAVE altogether taken away. Twice
+each. That's 196 boots.
 
 ```sh
 cmake --preset release

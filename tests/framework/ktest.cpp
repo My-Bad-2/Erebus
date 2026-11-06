@@ -5,8 +5,10 @@
 #include "drivers/clock.hpp"
 #include "hal/hal.hpp"
 #include "hal/io.hpp"
+#include "hal/smp/ipi.hpp"
 #include "hal/smp/percpu.hpp"
 #include "hal/smp/smp.hpp"
+#include "sched/scheduler.hpp"
 #include "utils/lock.hpp"
 #include "utils/logger.hpp"
 
@@ -93,6 +95,7 @@ constinit Barrier g_barrier;
 
 // Bumped by the BSP to start a multi-CPU test on every AP.
 std::atomic<std::uint64_t> g_round{0};
+std::atomic<std::uint32_t> g_started_aps{0};
 std::atomic<std::uint32_t> g_finished_cpus{0};
 std::atomic<bool> g_run_over{false};
 
@@ -106,9 +109,23 @@ void run_on_all_cpus() noexcept {
   g_participants = hw::smp::online_cpus();
   g_barrier.reset(g_participants);
   g_finished_cpus.store(0, std::memory_order_relaxed);
+  g_started_aps.store(0, std::memory_order_relaxed);
   g_round.fetch_add(1, std::memory_order_release);
 
-  run_share(hw::percpu::id());
+  // The APs are asleep in their idle loops. An IPI can land just before an AP halts, after it took
+  // its last look at the round, so this keeps knocking until they have all answered.
+  const std::uint32_t me = hw::percpu::id();
+  while (g_started_aps.load(std::memory_order_acquire) != g_participants - 1) {
+    hw::smp::for_each_online([me](const std::uint32_t cpu) {
+      if (cpu != me) {
+        hw::ipi::send_reschedule(cpu);
+      }
+    });
+
+    drivers::SystemClock::spin_wait(klib::Duration::microseconds(50));
+  }
+
+  run_share(me);
 
   while (g_finished_cpus.load(std::memory_order_acquire) != g_participants) {
     hw::pause();
@@ -212,11 +229,14 @@ void run_on_ap() noexcept {
   while (!g_run_over.load(std::memory_order_acquire)) {
     const std::uint64_t round = g_round.load(std::memory_order_acquire);
     if (round == seen) {
-      hw::pause();
+      // Between tests, this is an ordinary idle CPU, asleep until something wakes it. Tests hand
+      // threads to the scheduler, and those have to get to run somewhere.
+      sched::Scheduler::idle_step();
       continue;
     }
 
     seen = round;
+    g_started_aps.fetch_add(1, std::memory_order_acq_rel);
     run_share(cpu);
   }
 }

@@ -4,6 +4,10 @@
 /// Every CPU has one PerCpu, and its GS base points at it, so `percpu::id()` and friends are a
 /// single GS-relative load. The BSP's area is static; the APs' are built by the BSP before it
 /// starts them (see smp.hpp), which is also where the dense CPU and NUMA IDs come from.
+///
+/// Data that belongs to a CPU lives here, and data that belongs to a NUMA node in its PerNumaNode,
+/// rather than in global tables indexed by ID. That keeps it on the right cache lines, in the
+/// right memory, and costs nothing for CPUs the machine does not have.
 
 #pragma once
 
@@ -15,8 +19,11 @@
 #include "gdt.hpp"
 #include "gs.hpp"
 #include "hal/apic/lapic.hpp"
+#include "hal/timer/timer.hpp"
 #include "memory/pmm/pcp_cache.hpp"
 #include "memory/vmm/pagemap/tlb.hpp"
+#include "sched/numa_domain.hpp"
+#include "sched/runqueue.hpp"
 #include "utils/locks/locks.hpp"
 
 namespace kernel::sched {
@@ -24,8 +31,10 @@ class Thread;
 }
 
 namespace kernel::hw {
+/// @brief What belongs to a NUMA node as a whole. Lives in memory of that node.
 struct alignas(std::hardware_destructive_interference_size) PerNumaNode {
-  std::uint32_t numa_id;
+  std::uint32_t numa_id{0};
+  sched::NumaDomain scheduler{};
 };
 
 class CpuTopology {
@@ -49,7 +58,7 @@ class CpuContext {
   constexpr explicit CpuContext(const std::uint64_t val = 0) : m_data(val) {}
   [[nodiscard]] std::uint64_t raw() const noexcept { return m_data; }
 
-  BF_RW(std::uint8_t, ast_flags, 0, 8)       // Asynchronous traps count
+  BF_RW(std::uint8_t, ast_flags, 0, 8)       // Work for the way out of an interrupt
   BF_RW(std::uint8_t, preempt_count, 8, 8)   // Preemption depth
   BF_RW(std::uint8_t, softirq_count, 16, 8)  // Deferred work
   BF_RW(std::uint8_t, hardirq_count, 24, 8)  // IRQ nesting
@@ -77,6 +86,9 @@ struct alignas(std::hardware_destructive_interference_size) PerCpu {
   apic::Lapic lapic;
   crypto::CpuRandomState random{};
 
+  timer::TimerQueue timers{};
+  sched::RunQueue runqueue{};
+
   constexpr explicit PerCpu() noexcept = default;
 };
 
@@ -96,6 +108,12 @@ namespace percpu {
 }
 [[nodiscard]] inline apic::Lapic& lapic() noexcept { return self()->lapic; }
 
+/// @brief The calling CPU's timers. Only stays the right one for as long as preemption is off.
+[[nodiscard]] inline timer::TimerQueue& timers() noexcept { return self()->timers; }
+
+/// @brief The calling CPU's run queue. Only stays the right one for as long as preemption is off.
+[[nodiscard]] inline sched::RunQueue& runqueue() noexcept { return self()->runqueue; }
+
 [[nodiscard]] inline sched::Thread* current_thread() noexcept { return READ_PCP(curr_thread); }
 inline void set_current_thread(sched::Thread* thread) noexcept { WRITE_PCP(curr_thread, thread); }
 
@@ -112,12 +130,28 @@ inline constexpr std::size_t HARDIRQ_BYTE = CTX_BASE + 3;
 inline constexpr std::size_t NMI_BYTE = CTX_BASE + 4;
 inline constexpr std::size_t MCE_BYTE = CTX_BASE + 5;
 
+// Bytes 1-5 of the context: the preemption count and every interrupt nesting count. Byte 0 holds
+// the AST flags and bytes 6-7 are unused.
+inline constexpr std::uint64_t CTX_BLOCKERS = 0x0000'FFFF'FFFF'FF00ull;
+
+/// @brief AST flag: the scheduler wants to look at what this CPU should be running.
+inline constexpr std::uint8_t AST_RESCHEDULE = 1u << 0;
+
 [[nodiscard, gnu::always_inline]] inline std::uint8_t ast_flags() noexcept {
   return gs::read<AST_BYTE, std::uint8_t>();
 }
 
 [[gnu::always_inline]] inline void set_ast(const std::uint8_t flags) noexcept {
   gs::write<AST_BYTE, std::uint8_t>(flags);
+}
+
+/// @brief Asks for the running thread to be looked at again as soon as it can lose the CPU.
+[[gnu::always_inline]] inline void request_reschedule() noexcept {
+  set_ast(ast_flags() | AST_RESCHEDULE);
+}
+
+[[gnu::always_inline]] inline void clear_reschedule() noexcept {
+  set_ast(ast_flags() & static_cast<std::uint8_t>(~AST_RESCHEDULE));
 }
 
 [[gnu::always_inline]] inline void preempt_disable() noexcept { gs::inc<PREEMPT_BYTE, 1>(); }
@@ -163,9 +197,15 @@ inline constexpr std::size_t MCE_BYTE = CTX_BASE + 5;
 
 /// @brief Whether the CPU may block: no preemption disabled and no interrupt in progress.
 [[nodiscard, gnu::always_inline]] inline bool can_sleep() noexcept {
-  // Bytes 1-5. Byte 0 holds the AST flags and bytes 6-7 are unused.
-  constexpr std::uint64_t BLOCKERS = 0x0000'FFFF'FFFF'FF00ull;
-  return (gs::read<CTX_BASE, std::uint64_t>() & BLOCKERS) == 0;
+  return (gs::read<CTX_BASE, std::uint64_t>() & CTX_BLOCKERS) == 0;
+}
+
+/// @brief Whether a reschedule is wanted, and nothing stands in the way of one.
+///
+/// Every interrupt looks at this on its way out, so it is one load, and a single test of it.
+[[nodiscard, gnu::always_inline]] inline bool preempt_pending() noexcept {
+  const std::uint64_t context = gs::read<CTX_BASE, std::uint64_t>();
+  return (context & AST_RESCHEDULE) != 0 && (context & CTX_BLOCKERS) == 0;
 }
 
 /// @brief Sets up the BSP's per-CPU area, GDT and GS base. The first thing the kernel does.

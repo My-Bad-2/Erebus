@@ -105,14 +105,21 @@ class SListIterator {
 ///
 /// The list does not own its items. push_front(), pop_front() and the `_after` operations are
 /// O(1); remove() has to find the predecessor and is O(n).
+///
+/// A list may be declared while @p T is still incomplete, as long as nothing is done with it
+/// until @p T is known. That is how a per-CPU run queue holds lists of threads without everything
+/// that includes the per-CPU area having to know what a thread is.
 template <typename T, typename Tag>
 class SList {
-  static_assert(std::derived_from<T, SListNode<T, Tag>>,
-                "SList type T must derive from SListNode<T>");
   using node_type = SListNode<T, Tag>;
 
   [[nodiscard]] static constexpr node_type* sentinel() noexcept {
     return &detail::slist_end<T, Tag>;
+  }
+
+  [[nodiscard]] static constexpr node_type* node_of(T& item) noexcept {
+    static_assert(std::derived_from<T, node_type>, "SList type T must derive from SListNode<T>");
+    return static_cast<node_type*>(&item);
   }
 
   node_type m_head{};
@@ -168,10 +175,13 @@ class SList {
     return *iterator_for<Self>(self.m_head.m_next);
   }
 
+  /// @brief An iterator at @p item, which must be on this list. O(1).
+  [[nodiscard]] constexpr iterator iterator_to(T& item) noexcept { return iterator(node_of(item)); }
+
   [[nodiscard]] constexpr bool empty() const noexcept { return m_head.m_next == sentinel(); }
 
   constexpr void push_front(T& item) noexcept {
-    node_type* node = static_cast<node_type*>(&item);
+    node_type* node = node_of(item);
     KASSERT(!node->is_linked());
 
     node->m_next = m_head.m_next;
@@ -192,7 +202,7 @@ class SList {
   /// @brief Links @p item right after @p pos, which may be before_begin().
   constexpr iterator insert_after(const_iterator pos, T& item) noexcept {
     node_type* pos_node = const_cast<node_type*>(pos.m_current);
-    node_type* new_node = static_cast<node_type*>(&item);
+    node_type* new_node = node_of(item);
     KASSERT(!new_node->is_linked() && pos_node != sentinel());
 
     new_node->m_next = pos_node->m_next;
@@ -217,7 +227,7 @@ class SList {
   /// @brief Unlinks @p item if it is on this list.
   /// @return false if it is not.
   constexpr bool remove(T& item) noexcept {
-    node_type* target = static_cast<node_type*>(&item);
+    node_type* target = node_of(item);
     if (!target->is_linked()) {
       return false;
     }

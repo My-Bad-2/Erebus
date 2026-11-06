@@ -2,6 +2,7 @@
 #include "hal/interrupts/interrupt_manager.hpp"
 #include "hal/smp/percpu.hpp"
 #include "hal/smp/smp.hpp"
+#include "sched/scheduler.hpp"
 #include "utils/lock.hpp"
 #include "utils/logger.hpp"
 
@@ -169,12 +170,18 @@ void InterruptManager::route_event(const Event& event) noexcept {
       // Spurious interrupt
     }
 
-    // Delegate to scheduler if a driver unblocked a high-prio thread
     if (yield) [[unlikely]] {
-      // yield
+      percpu::request_reschedule();
     }
 
     percpu::hardirq_exit();
+
+    // This thread's stack carries the interrupt frame, so it can simply be left here and come back
+    // to it later. The interrupt is over as far as the APIC is concerned.
+    if (percpu::preempt_pending()) [[unlikely]] {
+      sched::Scheduler::preempt_from_interrupt();
+    }
+
     return;
   }
 

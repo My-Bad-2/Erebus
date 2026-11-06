@@ -3,24 +3,6 @@
 #include "hal/smp/cpu_info.hpp"
 
 namespace kernel::hw::apic {
-std::pair<std::uint32_t, TimerDivide> Lapic::compute_timer_count_and_div(
-    std::uint64_t ns) const noexcept {
-  static constexpr std::array kDivTable = {
-      TimerDivide::Div1,  TimerDivide::Div2,  TimerDivide::Div4,  TimerDivide::Div8,
-      TimerDivide::Div16, TimerDivide::Div32, TimerDivide::Div64, TimerDivide::Div128,
-  };
-
-  const std::uint64_t base_ticks = std::max(1ul, m_bus_scaler.ns_to_ticks(ns));
-  const int excess_bits = std::max(0, std::bit_width(base_ticks) - 32);
-
-  if (excess_bits > 7) [[unlikely]] {
-    return {std::numeric_limits<std::uint32_t>::max(), TimerDivide::Div128};
-  }
-
-  const auto scaled = static_cast<std::uint32_t>(std::max(1ul, base_ticks >> excess_bits));
-  return {scaled, kDivTable[excess_bits]};
-}
-
 std::uint64_t Lapic::calibrate_bus_frequency() const noexcept {
   const std::uint64_t cached = s_calibrated_bus_hz.load(std::memory_order_acquire);
   if (cached != 0) return cached;

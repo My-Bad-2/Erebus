@@ -9,6 +9,7 @@
 #include "memory/memory.hpp"
 #include "memory/vmm/vma/vma.hpp"
 #include "patch/static_call.hpp"
+#include "sched/scheduler.hpp"
 #include "utils/logger.hpp"
 
 #ifdef EREBUS_KERNEL_TESTS
@@ -16,10 +17,6 @@
 #endif
 
 namespace kernel {
-namespace {
-std::uint32_t runqueue_count = 0;
-}  // namespace
-
 [[noreturn]] void kmain(void* stack) {
   const memory::VirtualAddress bsp_stack{stack};
 
@@ -35,7 +32,7 @@ std::uint32_t runqueue_count = 0;
   testing::run_all();
 #endif
 
-  hw::cpu_idle_loop(&runqueue_count);
+  sched::Scheduler::enter_idle_loop();
 }
 
 extern "C" void _start() noexcept {

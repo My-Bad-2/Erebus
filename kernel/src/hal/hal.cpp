@@ -12,20 +12,20 @@ bool g_fsgsbase = false;
 constexpr std::uint32_t IA32_FS_BASE = 0xC0000100;
 constexpr std::uint32_t IA32_GS_BASE = 0xC0000101;
 
-void idle_generic(const volatile std::uint32_t* runqueue_count) noexcept {
+void idle_generic(const std::atomic<std::uint32_t>* work) noexcept {
   irq::disable();
-  if (*runqueue_count == 0) wait_for_interrupt();
+  if (work->load(std::memory_order_acquire) == 0) wait_for_interrupt();
   irq::enable();
 }
 
-void idle_mwait(const volatile std::uint32_t* runqueue_count) noexcept {
+void idle_mwait(const std::atomic<std::uint32_t>* work) noexcept {
   irq::disable();
 
   // Address in RAX; no extensions (ECX) or hints (EDX).
-  asm volatile("monitor" : : "a"(runqueue_count), "c"(0), "d"(0) : "memory");
+  asm volatile("monitor" : : "a"(work), "c"(0), "d"(0) : "memory");
 
   // Re-check once the monitor is armed: a store that landed before it would not wake us.
-  if (*runqueue_count == 0) {
+  if (work->load(std::memory_order_acquire) == 0) {
     // C1 (EAX = 0). ECX bit 0 lets a masked interrupt end the wait; it is taken right after the
     // STI below.
     asm volatile("mwait" : : "a"(0), "c"(1) : "memory");
@@ -48,13 +48,6 @@ REGISTER_STATIC_CALL_ALT(cpu_relax_impl, tpause, Feature::WAITPKG);
 
 DEFINE_STATIC_CALL(cpu_idle, idle_generic);
 REGISTER_STATIC_CALL_ALT(cpu_idle, idle_mwait, Feature::MONITOR, !Feature::HYPERVISOR);
-
-void cpu_idle_loop(const volatile std::uint32_t* runqueue_count) noexcept {
-  while (true) {
-    cpu_idle(runqueue_count);
-    // Nothing to switch to until there is a scheduler.
-  }
-}
 
 namespace read {
 namespace {

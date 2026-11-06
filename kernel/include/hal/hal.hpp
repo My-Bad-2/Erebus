@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <bitfield.hpp>
 #include <cstdint>
 
@@ -113,14 +114,11 @@ inline constexpr std::uint64_t RFLAGS_IF = 1ull << 9;
   }
 }
 
-/// @brief Idles until `*runqueue_count` is non-zero or an interrupt has been handled.
+/// @brief Idles until `*work` is non-zero or an interrupt has been handled.
 ///
 /// Uses MONITOR/MWAIT on bare metal, so a store to the counter wakes the CPU without an IPI, and
 /// HLT everywhere else. Returns with interrupts enabled.
-DECLARE_STATIC_CALL(void, cpu_idle, const volatile std::uint32_t*);
-
-/// @brief The idle loop of a CPU with nothing to run.
-[[noreturn]] void cpu_idle_loop(const volatile std::uint32_t* runqueue_count) noexcept;
+DECLARE_STATIC_CALL(void, cpu_idle, const std::atomic<std::uint32_t>*);
 
 /// @brief Stops every other CPU and halts this one, for good. Where panics end up.
 [[noreturn]] void panic_halt() noexcept;

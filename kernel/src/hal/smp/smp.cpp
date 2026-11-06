@@ -15,10 +15,13 @@
 #include "hal/interrupts/interrupts.hpp"
 #include "hal/smp/ipi.hpp"
 #include "hal/smp/percpu.hpp"
+#include "hal/timer/timer.hpp"
 #include "memory/heap.hpp"
 #include "memory/memory.hpp"
+#include "memory/pmm.hpp"
 #include "memory/pmm/bootstrap.hpp"
 #include "memory/vmm/vma/vma.hpp"
+#include "sched/scheduler.hpp"
 #include "sched/thread.hpp"
 #include "utils/logger.hpp"
 #include "utils/maths.hpp"
@@ -29,6 +32,8 @@ CpuEntry* g_cpus = nullptr;
 std::atomic<std::uint64_t>* g_online_mask = nullptr;
 std::uint32_t g_mask_words = 0;
 std::atomic<std::uint32_t> g_online_count{0};
+PerNumaNode** g_nodes = nullptr;
+std::uint32_t g_node_count = 1;
 }  // namespace detail
 
 namespace {
@@ -52,9 +57,6 @@ bool g_cluster_dest = false;
 
 memory::VirtualAddress g_lapic_mmio{};
 std::uint64_t g_kernel_cr3 = 0;
-
-// Placeholder until there is a scheduler: nobody ever has anything to run.
-std::uint32_t g_runqueue = 0;
 
 // What the APs run once online, instead of going straight to the idle loop.
 void (*g_ap_main)() noexcept = nullptr;
@@ -139,6 +141,33 @@ void build_registry(const limine_mp_response* resp) noexcept {
   g_online_mask = mask;
   detail::g_mask_words = words;
   g_cpus = cpus;
+}
+
+// One PerNumaNode per node, each in memory of its own node.
+void build_numa_nodes() noexcept {
+  const std::uint32_t nodes = std::max(memory::pmm::g_topology.active_nodes(), 1u);
+  const auto order = static_cast<std::uint8_t>(std::bit_width(
+      (utils::maths::align_up(sizeof(PerNumaNode), memory::PAGE_SIZE) >> memory::PAGE_SHIFT_4KB) -
+      1));
+
+  auto* table = static_cast<PerNumaNode**>(memory::heap::kmalloc(sizeof(PerNumaNode*) * nodes));
+  if (!table) {
+    utils::logger::fatal("SMP: out of memory for the table of {} NUMA nodes\n", nodes);
+  }
+
+  for (std::uint32_t node = 0; node < nodes; ++node) {
+    const auto block =
+        memory::pmm::alloc_pages_on_node(node, memory::pmm::PageMobility::Unmovable, order);
+    if (!block) {
+      utils::logger::fatal("SMP: out of memory for NUMA node {}\n", node);
+    }
+
+    table[node] = new (memory::DirectMap::phys_to_virt(*block).as<PerNumaNode>()) PerNumaNode();
+    table[node]->numa_id = node;
+  }
+
+  detail::g_nodes = table;
+  detail::g_node_count = nodes;
 }
 
 struct ApicAffinity {
@@ -376,6 +405,7 @@ void bring_up_local(PerCpu* cpu) noexcept {
   e.apic_id = cpu->lapic.id();
   e.logical_dest = cpu->lapic.logical_id();
 
+  timer::initialize_cpu();
   fpu::initialize();
 }
 
@@ -433,6 +463,7 @@ void adopt_boot_stack(const PerCpu* cpu) noexcept {
 
   bring_up_local(cpu);
   adopt_boot_stack(cpu);
+  sched::Scheduler::initialize_cpu();
 
   const std::uint32_t id = percpu::id();
   if (!go_online(id, CpuState::Booting)) {
@@ -450,7 +481,7 @@ void adopt_boot_stack(const PerCpu* cpu) noexcept {
     g_ap_main();
   }
 
-  cpu_idle_loop(&g_runqueue);
+  sched::Scheduler::enter_idle_loop();
 }
 
 // Where Limine sends each AP: still on the boot loader's page tables and stack, interrupts off.
@@ -482,6 +513,7 @@ std::uint32_t start_aps(const limine_mp_response* resp) noexcept {
     CpuEntry& e = g_cpus[id];
     PerCpu* cpu = new (area->as<PerCpu>()) PerCpu();
     cpu->topology = CpuTopology{}.with_cpu_id(id).with_numa_node(e.numa_node);
+    cpu->numa_node = node_area(e.numa_node);
     cpu->stack_top = alloc_stack(AP_STACK_SIZE, id);
     prepare_stacks(cpu, id);
 
@@ -535,9 +567,11 @@ void initialize(const memory::VirtualAddress bsp_stack_top) noexcept {
   build_registry(resp);
   assign_numa_nodes();
   assign_nmi_sources();
+  build_numa_nodes();
 
   PerCpu* bsp = percpu::self();
   WRITE_PCP(topology, CpuTopology{}.with_cpu_id(0).with_numa_node(g_cpus[0].numa_node));
+  bsp->numa_node = node_area(g_cpus[0].numa_node);
   bsp->stack_top = bsp_stack_top;
   prepare_stacks(bsp, 0);
 
@@ -554,9 +588,11 @@ void initialize(const memory::VirtualAddress bsp_stack_top) noexcept {
 
   apic::io_apic_manager.initialize();
   bring_up_local(bsp);
+  timer::initialize();
 
   sched::Thread::initialize_subsystem();
   adopt_boot_stack(bsp);
+  sched::Scheduler::initialize();
 
   g_cluster_dest =
       bsp->lapic.mode() == apic::ApicMode::x2APIC && !fadt_forces_physical_destinations();

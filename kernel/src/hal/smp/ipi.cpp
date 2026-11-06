@@ -9,6 +9,7 @@
 #include "hal/smp/percpu.hpp"
 #include "hal/smp/smp.hpp"
 #include "memory/heap.hpp"
+#include "sched/scheduler.hpp"
 #include "utils/lock.hpp"
 #include "utils/logger.hpp"
 
@@ -273,8 +274,9 @@ interrupts::InterruptStatus on_call(const interrupts::Event&, void*) noexcept {
   return interrupts::InterruptStatus::Handled;
 }
 
-// Only there to wake the CPU up; a scheduler will hook in here.
+// Waking the CPU up is most of the point. If it was busy, the scheduler takes it from there.
 interrupts::InterruptStatus on_reschedule(const interrupts::Event&, void*) noexcept {
+  sched::Scheduler::tick();
   return interrupts::InterruptStatus::Handled;
 }
 

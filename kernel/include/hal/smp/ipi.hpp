@@ -80,7 +80,8 @@ void call_all(Function fn, void* arg, Wait wait = Wait::Yes) noexcept;
 
 /// @brief Interrupts CPU @p cpu so that it reconsiders what to run.
 ///
-/// The interrupt does nothing by itself; it exists to wake a CPU out of its idle loop.
+/// Wakes it out of its idle loop if that is where it is. Otherwise the scheduler gets to look at
+/// what the CPU is doing on the way out of the interrupt.
 void send_reschedule(std::uint32_t cpu) noexcept;
 
 /// @brief Runs whatever is waiting in this CPU's inbox.

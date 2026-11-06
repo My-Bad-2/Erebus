@@ -213,8 +213,6 @@ class Lapic {
   static constexpr std::uint32_t LAPIC_BASE_MSR = 0x800;
 
   std::uint64_t calibrate_bus_frequency() const noexcept;
-  std::pair<std::uint32_t, TimerDivide> compute_timer_count_and_div(
-      std::uint64_t ns) const noexcept;
 
   /// Sends an IPI. In xAPIC mode @p icr carries the destination in its low 8 bits, like in
   /// x2APIC mode; the shift into ICR[63:56] happens here.
@@ -247,6 +245,7 @@ class Lapic {
   }
 
   static constexpr std::uint32_t TSC_DEADLINE_MSR = 0x6E0;
+  static constexpr std::uint64_t MAX_TIMER_COUNT = 0xFFFF'FFFF;
 
  public:
   Lapic() = default;
@@ -311,77 +310,73 @@ class Lapic {
     // In x2APIC, LDR is hardwired based on CPU Topology. DFR doesn't exist.
   }
 
+  /// @brief Puts the timer into the mode set_timer() uses, raising @p vector when it expires.
+  ///        That only takes the once, which saves every set_timer() from doing it again.
+  void configure_timer(const std::uint8_t vector) const noexcept {
+    if (m_use_tsc_deadline) {
+      write(Reg::LvtTimer, LvtSchema{}.with_vector(vector).with_timer_mode(TimerMode::TscDeadline));
+
+      // The LVT write and the deadline MSR are not ordered against each other in either APIC
+      // mode. Without the fence the first deadline can be armed under the old timer mode (Intel
+      // SDM, "TSC-Deadline Mode").
+      asm volatile("mfence" ::: "memory");
+      return;
+    }
+
+    write(Reg::TimerDivide, Raw32Schema{std::to_underlying(TimerDivide::Div1)});
+    write(Reg::LvtTimer, LvtSchema{}.with_vector(vector).with_timer_mode(TimerMode::OneShot));
+  }
+
+  /// @brief Makes the timer go off @p delay_ns from the moment `SystemClock::raw_ticks()` said
+  ///        @p now_raw, replacing whatever it was set to. Never early, by rounding up.
+  ///
+  /// Neither mode can be told to fire "now". Zero stops them, which the rounding keeps this from
+  /// ever writing, and a TSC deadline already in the past fires straight away.
+  /// @pre configure_timer() ran, and @p delay_ns is at most max_timer_delay_ns().
+  [[gnu::always_inline]] void set_timer(const std::uint64_t now_raw,
+                                        const std::uint64_t delay_ns) const noexcept {
+    if (m_use_tsc_deadline) [[likely]] {
+      write::msr(TSC_DEADLINE_MSR,
+                 now_raw + drivers::SystemClock::scaler().ns_to_ticks(delay_ns) + 1);
+      return;
+    }
+
+    const std::uint64_t count = m_bus_scaler.ns_to_ticks(delay_ns) + 1;
+    write(Reg::TimerInitCnt,
+          Raw32Schema{static_cast<std::uint32_t>(std::min<std::uint64_t>(count, MAX_TIMER_COUNT))});
+  }
+
+  /// @brief Stops the timer for good, until the next configure_timer().
+  ///
+  /// The mask alone should do, but AMD erratum 411, and Intel parts as well, say otherwise. Hence
+  /// both: masked, and with nothing left to expire.
   void disarm_timer() const noexcept {
     write(Reg::LvtTimer, read<LvtSchema>(Reg::LvtTimer).with_masked());
-    write(Reg::TimerInitCnt, Raw32Schema{0});
-  }
 
-  void arm_periodic(const std::uint8_t vector, const std::uint32_t count,
-                    const TimerDivide div) const noexcept {
-    const auto lvt = LvtSchema{}.with_vector(vector).with_timer_mode(TimerMode::Periodic);
-
-    write(Reg::TimerDivide, Raw32Schema{std::to_underlying(div)});
-    write(Reg::LvtTimer, lvt);
-    write(Reg::TimerInitCnt, Raw32Schema{count});
-  }
-
-  void arm_oneshot(const std::uint8_t vector, const std::uint32_t count,
-                   const TimerDivide div) const noexcept {
-    const auto lvt = LvtSchema{}.with_vector(vector).with_timer_mode(TimerMode::OneShot);
-
-    write(Reg::TimerDivide, Raw32Schema{std::to_underlying(div)});
-    write(Reg::LvtTimer, lvt);
-    write(Reg::TimerInitCnt, Raw32Schema{count});
-  }
-
-  [[gnu::always_inline]] void arm_tsc_deadline(std::uint8_t vector,
-                                               std::uint64_t target_tsc) const noexcept {
-    const auto lvt = LvtSchema{}.with_vector(vector).with_timer_mode(TimerMode::TscDeadline);
-    write(Reg::LvtTimer, lvt);
-
-    // The LVT write and the deadline MSR are not ordered against each other in either APIC mode;
-    // without the fence the deadline can be armed under the old timer mode (Intel SDM,
-    // "TSC-Deadline Mode").
-    asm volatile("mfence" ::: "memory");
-
-    write::msr(TSC_DEADLINE_MSR, std::max(1ul, target_tsc));
+    if (m_use_tsc_deadline) {
+      write::msr(TSC_DEADLINE_MSR, 0ul);
+    } else {
+      write(Reg::TimerInitCnt, Raw32Schema{0});
+    }
   }
 
   [[nodiscard, gnu::always_inline]] std::uint32_t get_timer_current_count() const noexcept {
     return read<Raw32Schema>(Reg::TimerCurrCnt).get_value();
   }
 
-  // Arm a one-shot interrupt at an exact SystemClock::TimePoint
-  void arm_at(const std::uint8_t vector, const klib::TimePoint deadline) const noexcept {
-    if (m_use_tsc_deadline) [[likely]] {
-      arm_tsc_deadline(vector, drivers::SystemClock::to_raw_ticks(deadline));
-      return;
+  /// @brief Whether set_timer() works with absolute TSC values, or else the APIC's countdown.
+  [[nodiscard]] bool uses_tsc_deadline() const noexcept { return m_use_tsc_deadline; }
+
+  /// @brief What the APIC's countdown runs at. 0 if nothing could measure it.
+  [[nodiscard]] std::uint64_t timer_hz() const noexcept { return m_bus_scaler.freq_hz; }
+
+  /// @brief The longest delay set_timer() can do. 0 if there is no usable timer at all.
+  [[nodiscard]] std::uint64_t max_timer_delay_ns() const noexcept {
+    if (m_use_tsc_deadline) {
+      return ~std::uint64_t{0} / 2;
     }
 
-    arm_after(vector, deadline - drivers::SystemClock::now());
-  }
-
-  // Arm a one-shot interrupt relative to now
-  void arm_after(const std::uint8_t vector, const klib::Duration delay) const noexcept {
-    const auto ns = static_cast<std::uint64_t>(std::max(1l, delay.to_ns()));
-    if (m_use_tsc_deadline) [[likely]] {
-      const std::uint64_t delta_tsc = drivers::SystemClock::scaler().ns_to_ticks(ns);
-      arm_tsc_deadline(vector, drivers::SystemClock::raw_ticks() + delta_tsc);
-      return;
-    }
-
-    const auto [count, div] = compute_timer_count_and_div(ns);
-    arm_oneshot(vector, count, div);
-  }
-
-  // Arm a repeating periodic interrupt
-  void arm_every(const std::uint8_t vector, const klib::Duration period) const noexcept {
-    // Clear any pending TSC deadline before switching LvtTimer to Periodic mode
-    if (m_use_tsc_deadline) write::msr(TSC_DEADLINE_MSR, 0ul);
-
-    const auto ns = static_cast<std::uint64_t>(std::max(1l, period.to_ns()));
-    const auto [count, div] = compute_timer_count_and_div(ns);
-    arm_periodic(vector, count, div);
+    return m_bus_scaler.freq_hz != 0 ? m_bus_scaler.ticks_to_ns(MAX_TIMER_COUNT) : 0;
   }
 
   /// @brief Routes the LINT pin @p lint_reg to the CPU as an NMI. NMIs are always edge-triggered.

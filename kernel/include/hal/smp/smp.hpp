@@ -21,7 +21,8 @@
 
 namespace kernel::hw {
 struct PerCpu;
-}
+struct PerNumaNode;
+}  // namespace kernel::hw
 
 namespace kernel::hw::smp {
 /// @brief Most logical CPUs the kernel will run on.
@@ -58,6 +59,7 @@ struct CpuEntry {
   std::uint32_t logical_dest{0};   ///< x2APIC logical ID, `cluster << 16 | bit`. 0 in xAPIC mode.
   std::uint32_t acpi_uid{0};       ///< ACPI processor UID, as found in the MADT.
   std::uint32_t numa_node{0};      ///< Dense node ID, as used by the PMM.
+  std::uint32_t node_slot{0};      ///< Position among the CPUs of the node, see sched::NumaDomain.
   std::uint8_t nmi_lints{0};       ///< Bit n set: the MADT wires LINTn to NMI on this CPU.
   std::uint8_t nmi_active_low{0};  ///< Bit n set: that NMI line is active low.
   std::atomic<CpuState> state{CpuState::Offline};
@@ -68,6 +70,8 @@ extern CpuEntry* g_cpus;
 extern std::atomic<std::uint64_t>* g_online_mask;
 extern std::uint32_t g_mask_words;
 extern std::atomic<std::uint32_t> g_online_count;
+extern PerNumaNode** g_nodes;
+extern std::uint32_t g_node_count;
 }  // namespace detail
 
 /// @brief Number of CPUs the kernel will use, online or not.
@@ -93,6 +97,15 @@ extern std::atomic<std::uint32_t> g_online_count;
 /// @pre `cpu < possible_cpus()` and initialize() has run.
 [[nodiscard]] inline CpuEntry& entry(const std::uint32_t cpu) noexcept {
   return detail::g_cpus[cpu];
+}
+
+/// @brief Number of NUMA nodes. Their dense IDs are the ones the PMM uses.
+[[nodiscard]] inline std::uint32_t node_count() noexcept { return detail::g_node_count; }
+
+/// @brief The per-node area of NUMA node @p node, in memory of that node.
+/// @pre `node < node_count()`.
+[[nodiscard]] inline PerNumaNode* node_area(const std::uint32_t node) noexcept {
+  return detail::g_nodes[node];
 }
 
 /// @brief Whether CPU @p cpu takes interrupts and IPIs right now.
@@ -132,9 +145,8 @@ void for_each_online(Fn&& fn) noexcept {
 ///        loop: @p main runs on every AP, in thread context with interrupts enabled, and the AP
 ///        goes idle when it returns.
 ///
-/// For code that wants the other CPUs at its disposal before there is a scheduler, such as the
-/// multi-CPU tests of the test kernel. Takes effect for APs started after the call, so set it
-/// before initialize().
+/// For code that wants the other CPUs at its disposal, such as the multi-CPU tests of the test
+/// kernel. Takes effect for APs started after the call, so set it before initialize().
 void set_ap_main(void (*main)() noexcept) noexcept;
 
 /// @brief Brings up the BSP's interrupt hardware and starts every AP.

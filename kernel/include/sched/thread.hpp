@@ -2,14 +2,18 @@
 /// @brief Kernel threads, and switching between them.
 ///
 /// A Thread is a kernel stack plus whatever else the CPU needs to carry on where it left off.
-/// There is no scheduler yet, so this file is only the mechanism: switch_to() moves a CPU from
-/// one thread to another, and deciding when is up to the caller.
+/// This file is the mechanism: switch_to() moves a CPU from one thread to another. Deciding when,
+/// and to which one, is up to sched::Scheduler (see sched/scheduler.hpp).
 ///
 /// Every CPU gets a Thread around the stack it booted on before it goes online, so current()
-/// is never null from then on. Everything else comes from create_kernel(), starts out `Ready`,
-/// and first runs when something switches to it. When its entry function returns it turns
-/// `Dead` and calls its exit hook, which is the place to switch away for good. Nothing can leave
-/// the CPU otherwise, since there is nobody to hand it to yet.
+/// is never null from then on. That thread is the CPU's idle thread. Everything else comes from
+/// create_kernel(), starts out `Ready`, and first runs when the scheduler is told about it. When
+/// its entry function returns it turns `Dead`, calls its exit hook if it has one, and leaves the
+/// CPU for good; the scheduler then destroys it.
+///
+/// Code that wants to drive switch_to() by hand can: a thread nobody gave to the scheduler is left
+/// alone by it. Such a thread stays the business of whoever switches to it, and has to be switched
+/// away from in its exit hook and destroyed by hand. Just do not mix the two on one thread.
 ///
 /// FPU state is opt-in. The kernel itself stays off those registers (see hal/fpu.hpp), so a
 /// thread needs a save area only if it uses the FPU in a utils::FpuGuard or asks for one, and
@@ -31,6 +35,7 @@
 #include "hal/fpu.hpp"
 #include "hal/hal.hpp"
 #include "memory/address.hpp"
+#include "sched/eevdf.hpp"
 #include "utils/linked_list.hpp"
 
 namespace kernel::proc {
@@ -44,6 +49,14 @@ inline constexpr ThreadId INVALID_THREAD_ID{0};
 inline constexpr std::size_t DEFAULT_KSTACK_SIZE = 32 * 1024;  // 32 KiB
 inline constexpr std::size_t MIN_KSTACK_SIZE = 16 * 1024;      // 16 KiB
 inline constexpr std::size_t STACK_ALIGNMENT = 16;
+
+/// @brief For ThreadCreateOptions: the scheduler can choose.
+inline constexpr std::uint32_t NO_PREFERENCE = ~0u;
+
+/// @brief Which list a Thread's SListNode base is for.
+struct RunQueueTag {};
+struct WaitQueueTag {};
+struct ReapQueueTag {};
 
 /// @brief Thread execution lifecycle states.
 enum class ThreadState : std::uint8_t {
@@ -65,6 +78,26 @@ enum class PriorityClass : std::uint8_t {
   TestRunner = 5,  ///< Pinned in-kernel ktest runner threads
 };
 
+/// @brief Returns the canonical EEVDF scheduling weight corresponding to @p prio.
+[[nodiscard]] constexpr std::uint32_t priority_to_weight(const PriorityClass prio) noexcept {
+  switch (prio) {
+    case PriorityClass::Idle:
+      return 1;
+    case PriorityClass::Background:
+      return 256;
+    case PriorityClass::Normal:
+      return 1024;
+    case PriorityClass::High:
+      return 4096;
+    case PriorityClass::RealTime:
+      return 32768;
+    case PriorityClass::TestRunner:
+      return 65536;
+  }
+
+  return 1024;
+}
+
 /// @brief Thread flags.
 ///
 /// Bit Layout:
@@ -75,12 +108,13 @@ enum class PriorityClass : std::uint8_t {
 ///   [10]      : is_pinned (1 = bound to a specific CPU core)
 ///   [11]      : uses_fpu (1 = thread has a save area for its FPU/SSE/AVX state)
 ///   [12]      : fpu_dirty (1 = the CPU registers hold FPU state the save area does not have)
-///   [13]      : on_runqueue (1 = queued on a scheduler runqueue)
+///   [13]      : on_runqueue (1 = waiting on a scheduler runqueue, so not the running one)
 ///   [14]      : stack_borrowed (1 = uses pre-allocated boot stack; do not vmm->free on exit)
 ///   [15]      : exit_requested (1 = cooperative cancellation / stop signal pending)
 ///   [16..23]  : nice_bias (signed 8-bit nice offset encoded as biased [0..39])
 ///   [24]      : uses_amx (1 = thread explicitly opted into 8 KiB of Intel AMX tile data)
 ///   [25]      : in_kernel_fpu (1 = thread is currently inside a Ring-0 FPU guard scope)
+///   [26]      : scheduled (1 = handed to the scheduler, which owns it from then on)
 class ThreadFlags {
   std::uint32_t m_data{0};
 
@@ -103,6 +137,7 @@ class ThreadFlags {
   BF_RW(std::uint8_t, nice_bias, 16, 8)
   BF_BIT_RW(uses_amx, 24)
   BF_BIT_RW(in_kernel_fpu, 25)
+  BF_BIT_RW(scheduled, 26)
 };
 
 static_assert(sizeof(ThreadFlags) == sizeof(std::uint32_t));
@@ -166,12 +201,20 @@ struct ThreadCreateOptions {
   std::size_t stack_size{DEFAULT_KSTACK_SIZE};  ///< A multiple of STACK_ALIGNMENT; rounded up to
                                                 ///< whole pages.
   PriorityClass priority{PriorityClass::Normal};
-  std::uint32_t preferred_cpu{0};
-  std::uint32_t preferred_numa_node{0};
-  bool pinned{false};
+  std::uint32_t preferred_cpu{NO_PREFERENCE};  ///< Starts here; the creator's CPU if none.
+  std::uint32_t preferred_numa_node{
+      NO_PREFERENCE};                        ///< Stays near here; near its last CPU if none.
+  std::uint64_t slice_ns{DEFAULT_SLICE_NS};  ///< Requested EEVDF time slice.
+  bool pinned{false};        ///< Only ever runs on `preferred_cpu`, which has to be set then.
   bool allocate_fpu{false};  ///< Gives the thread a save area from the start
   bool allocate_amx{false};  ///< The same with room for Intel AMX tile data; fails without AMX
   std::uint64_t initial_fs_base{0};
+};
+
+/// @brief Why a thread is leaving its CPU, for the statistics.
+enum class SwitchReason : std::uint8_t {
+  Voluntary,  ///< It asked to: it blocked, yielded or finished.
+  Preempted,  ///< An interrupt took the CPU away.
 };
 
 /// @brief What Thread::begin_kernel_fpu() did, for Thread::end_kernel_fpu() to undo.
@@ -207,11 +250,17 @@ class Thread;
 /// better stopped here than wherever its stack happens to send it.
 ///
 /// @pre @p prev is the calling thread and outside any FpuGuard. @p next is not running anywhere.
-void switch_to(Thread* prev, Thread* next) noexcept;
+void switch_to(Thread* prev, Thread* next, SwitchReason reason = SwitchReason::Voluntary) noexcept;
 
-/// @brief A kernel thread. See the file comment. The list link is for run and wait queues.
+/// @brief A kernel thread. See the file comment.
+///
+/// The Entity base is what the scheduler's fair tier knows of it. The list links are for the
+/// real-time run queues, for wait queues, and for waiting to be destroyed.
 class alignas(std::hardware_destructive_interference_size) Thread
-    : public utils::SListNode<Thread> {
+    : public Entity,
+      public utils::SListNode<Thread, RunQueueTag>,
+      public utils::SListNode<Thread, WaitQueueTag>,
+      public utils::SListNode<Thread, ReapQueueTag> {
  public:
   using RawEntryFn = void (*)(void* arg) noexcept;
   using ExitHookFn = void (*)(Thread* self, void* cookie) noexcept;
@@ -227,7 +276,7 @@ class alignas(std::hardware_destructive_interference_size) Thread
   std::uint64_t m_expected_canary{0};
   ThreadId m_tid{INVALID_THREAD_ID};
   std::atomic<std::uint32_t> m_flags{0};
-  std::uint32_t m_cpu_id{0};
+  std::atomic<std::uint32_t> m_cpu_id{0};  ///< Where it runs or last ran. See Scheduler::wake().
   ArchitecturalState m_arch{};
 
   RawEntryFn m_entry{nullptr};
@@ -236,17 +285,12 @@ class alignas(std::hardware_destructive_interference_size) Thread
   ExitHookFn m_on_exit{nullptr};
   void* m_exit_cookie{nullptr};
   proc::Process* m_process{nullptr};
-  std::uint32_t m_preferred_numa_node{0};
-
-  // For the scheduler, once there is one.
-  [[maybe_unused]] std::uint32_t m_weight{1024};
-  [[maybe_unused]] std::uint64_t m_vruntime{0};
-  [[maybe_unused]] std::uint64_t m_vdeadline{0};
+  std::uint32_t m_preferred_numa_node{NO_PREFERENCE};
 
   ThreadStats m_stats{};
   std::array<char, MAX_NAME_LEN> m_name{};
 
-  friend void switch_to(Thread* prev, Thread* next) noexcept;
+  friend void switch_to(Thread* prev, Thread* next, SwitchReason reason) noexcept;
 
   template <typename Mutator>
     requires std::invocable<Mutator, ThreadFlags>
@@ -296,6 +340,7 @@ class alignas(std::hardware_destructive_interference_size) Thread
   ///         MIN_KSTACK_SIZE, Error::InvalidAlignment for a stack size that is not a multiple of
   ///         STACK_ALIGNMENT, Error::OutOfMemory, or Error::NotImplemented for
   ///         `opts.allocate_amx` without AMX.
+  /// @note The thread does not run until it goes to Scheduler::enqueue().
   [[nodiscard]] static auto create_kernel(std::string_view name, RawEntryFn entry,
                                           void* arg = nullptr,
                                           const ThreadCreateOptions& opts = {}) noexcept
@@ -348,8 +393,8 @@ class alignas(std::hardware_destructive_interference_size) Thread
   /// `Dead` alone does not mean that a thread has left its stack: it is still on it while its exit
   /// hook runs. Whoever calls this has to know it is gone.
   ///
-  /// @return Error::InvalidArgument for null, Error::InvalidState for the calling thread or one
-  ///         that started and has not finished.
+  /// @return Error::InvalidArgument for null, Error::InvalidState for the calling thread, one that
+  ///         started and has not finished, or one the scheduler has and that is not dead yet.
   [[nodiscard]] static auto destroy(Thread* thread) noexcept -> std::expected<void, Error>;
 
   /// @brief Gives this thread a save area in the initial FPU state, if it has none yet.
@@ -391,8 +436,12 @@ class alignas(std::hardware_destructive_interference_size) Thread
   [[nodiscard]] PriorityClass priority_class() const noexcept {
     return flags().get_priority_class();
   }
+
+  /// @brief Moves the thread to another priority class, and to the weight that goes with it.
+  /// @pre The thread is neither running nor on a run queue.
   void set_priority_class(PriorityClass prio) noexcept {
     update_flags([prio](ThreadFlags f) { return f.with_priority_class(prio); });
+    set_weight(priority_to_weight(prio));
   }
 
   [[nodiscard]] bool is_kthread() const noexcept { return flags().get_is_kthread(); }
@@ -401,7 +450,39 @@ class alignas(std::hardware_destructive_interference_size) Thread
   [[nodiscard]] bool uses_fpu() const noexcept { return flags().get_uses_fpu(); }
   [[nodiscard]] bool uses_amx() const noexcept { return flags().get_uses_amx(); }
   [[nodiscard]] bool in_kernel_fpu() const noexcept { return flags().get_in_kernel_fpu(); }
+  [[nodiscard]] bool on_runqueue() const noexcept { return flags().get_on_runqueue(); }
   [[nodiscard]] bool exit_requested() const noexcept { return flags().get_exit_requested(); }
+
+  void set_on_runqueue(bool on_rq) noexcept {
+    update_flags([on_rq](ThreadFlags f) { return f.with_on_runqueue(on_rq); });
+  }
+
+  /// @brief Records that the thread is waiting on a run queue, in one atomic step.
+  void mark_queued() noexcept {
+    update_flags([](ThreadFlags f) { return f.with_on_runqueue().with_state(ThreadState::Ready); });
+  }
+
+  /// @brief Hands the thread to the scheduler, which only works once.
+  ///
+  /// A flag of its own, because nothing else can tell: a thread another CPU just picked is on no
+  /// queue, and not running yet either, for as long as it takes that CPU to get to switch_to().
+  /// @return false if something else got there first.
+  [[nodiscard]] bool try_hand_to_scheduler() noexcept {
+    std::uint32_t cur = m_flags.load(std::memory_order_relaxed);
+    do {
+      if (ThreadFlags{cur}.get_scheduled()) {
+        return false;
+      }
+    } while (!m_flags.compare_exchange_weak(cur, ThreadFlags{cur}.with_scheduled().raw(),
+                                            std::memory_order_acq_rel, std::memory_order_relaxed));
+
+    return true;
+  }
+
+  /// @brief Takes back try_hand_to_scheduler(), for a thread the scheduler had to turn down.
+  void revoke_from_scheduler() noexcept {
+    update_flags([](ThreadFlags f) { return f.without_scheduled(); });
+  }
 
   void request_exit() noexcept {
     update_flags([](ThreadFlags f) { return f.with_exit_requested(); });
@@ -422,8 +503,13 @@ class alignas(std::hardware_destructive_interference_size) Thread
   [[nodiscard]] constexpr memory::VirtualAddress stack_top() const noexcept { return m_stack_top; }
   [[nodiscard]] constexpr std::size_t stack_size() const noexcept { return m_stack_size; }
 
-  [[nodiscard]] constexpr std::uint32_t cpu_id() const noexcept { return m_cpu_id; }
-  constexpr void set_cpu_id(std::uint32_t cpu) noexcept { m_cpu_id = cpu; }
+  [[nodiscard]] std::uint32_t cpu_id() const noexcept {
+    return m_cpu_id.load(std::memory_order_acquire);
+  }
+
+  void set_cpu_id(const std::uint32_t cpu) noexcept {
+    m_cpu_id.store(cpu, std::memory_order_release);
+  }
 
   [[nodiscard]] constexpr std::uint32_t preferred_numa_node() const noexcept {
     return m_preferred_numa_node;

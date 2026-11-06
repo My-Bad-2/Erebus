@@ -92,16 +92,16 @@ class SystemClock {
 
   [[nodiscard]] static std::uint64_t raw_ticks_slow() noexcept;
 
-  /// @brief Time since boot.
-  [[nodiscard]] static klib::TimePoint now() noexcept {
+  /// @brief What a reading of raw_ticks() means, in nanoseconds since boot.
+  [[nodiscard]] static std::uint64_t raw_to_ns(const std::uint64_t ticks) noexcept {
     // A CPU whose TSC trails the BSP's by a few ticks must not see time before boot.
-    const auto elapsed = static_cast<std::int64_t>(raw_ticks() - s_boot_ticks);
-    return klib::TimePoint{
-        s_scaler.ticks_to_ns(elapsed > 0 ? static_cast<std::uint64_t>(elapsed) : 0)};
+    const auto elapsed = static_cast<std::int64_t>(ticks - s_boot_ticks);
+    return s_scaler.ticks_to_ns(elapsed > 0 ? static_cast<std::uint64_t>(elapsed) : 0);
   }
 
-  [[nodiscard]] static std::uint64_t to_raw_ticks(klib::TimePoint tp) noexcept {
-    return s_boot_ticks + s_scaler.ns_to_ticks(tp.raw_ns());
+  /// @brief Time since boot.
+  [[nodiscard]] static klib::TimePoint now() noexcept {
+    return klib::TimePoint{raw_to_ns(raw_ticks())};
   }
 
   [[nodiscard, gnu::always_inline]] static std::uint64_t cached_apic_bus_hz() noexcept {

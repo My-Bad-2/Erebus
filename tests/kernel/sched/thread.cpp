@@ -648,15 +648,17 @@ KTEST(Thread, threads_go_on_intrusive_lists) {
   KREQUIRE(first.has_value());
   KREQUIRE(second.has_value());
 
-  utils::SList<Thread> queue;
+  using Link = utils::SListNode<Thread, sched::WaitQueueTag>;
+
+  utils::SList<Thread, sched::WaitQueueTag> queue;
   queue.push_front(**first);
   queue.push_front(**second);
 
-  KEXPECT((*first)->is_linked());
+  KEXPECT(static_cast<Link*>(*first)->is_linked());
   KEXPECT(queue.pop_front() == *second);
   KEXPECT(queue.pop_front() == *first);
   KEXPECT(queue.empty());
-  KEXPECT(!(*first)->is_linked());
+  KEXPECT(!static_cast<Link*>(*first)->is_linked());
 
   KEXPECT(Thread::destroy(*first).has_value());
   KEXPECT(Thread::destroy(*second).has_value());
@@ -961,6 +963,7 @@ KTEST(FpuGuard, nested_sections_are_one_section) {
   Thread* self = sched::current();
   const RegisterFile outer = make_pattern(21);
   RegisterFile found{};
+  const std::uint8_t preempt_count = hw::percpu::preempt_count();
 
   {
     utils::FpuGuard guard{lock};
@@ -979,6 +982,7 @@ KTEST(FpuGuard, nested_sections_are_one_section) {
   KEXPECT(found == outer);
   KEXPECT(!self->in_kernel_fpu());
   KEXPECT(self->flags().get_fpu_dirty());
+  KEXPECT_EQ(hw::percpu::preempt_count(), preempt_count);
 }
 
 KTEST(FpuGuard, what_a_section_leaves_is_there_for_the_next) {

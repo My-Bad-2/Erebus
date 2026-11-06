@@ -10,6 +10,7 @@
 #include "memory/heap.hpp"
 #include "memory/memory.hpp"
 #include "memory/vmm/vma/vma.hpp"
+#include "sched/scheduler.hpp"
 #include "utils/assert.hpp"
 #include "utils/lock.hpp"
 #include "utils/logger.hpp"
@@ -201,8 +202,10 @@ auto Thread::create_kernel(std::string_view name, RawEntryFn entry, void* arg,
   thread->m_tid = g_next_tid.fetch_add(1, std::memory_order_relaxed);
   thread->m_entry = entry;
   thread->m_arg = arg;
-  thread->m_cpu_id = opts.preferred_cpu;
+  thread->set_cpu_id(opts.preferred_cpu != NO_PREFERENCE ? opts.preferred_cpu : hw::percpu::id());
   thread->m_preferred_numa_node = opts.preferred_numa_node;
+  thread->set_weight(priority_to_weight(opts.priority));
+  thread->set_slice_ns(opts.slice_ns);
   thread->m_arch.fs_base = opts.initial_fs_base;
   thread->m_stats.creation_time_ns = drivers::SystemClock::now().raw_ns();
 
@@ -252,7 +255,8 @@ auto Thread::adopt_boot_thread(const std::uint32_t cpu_id, const memory::Virtual
   thread->m_stack_base = stack_base;
   thread->m_stack_top = stack_base + static_cast<memory::VirtualAddress::OffsetType>(stack_size);
   thread->m_stack_size = stack_size;
-  thread->m_cpu_id = cpu_id;
+  thread->set_cpu_id(cpu_id);
+  thread->set_weight(priority_to_weight(PriorityClass::Idle));
   thread->m_preferred_numa_node = hw::percpu::numa_node_id();
   thread->m_arch.fs_base = hw::read::fs_base();
 
@@ -288,7 +292,9 @@ auto Thread::destroy(Thread* thread) noexcept -> std::expected<void, Error> {
   const ThreadState state = thread->state();
   const bool never_ran = state == ThreadState::Created ||
                          (state == ThreadState::Ready && thread->m_stats.switch_count == 0);
-  if (thread == current() || (state != ThreadState::Dead && !never_ran)) {
+  const ThreadFlags flags = thread->flags();
+  const bool scheduler_has_it = flags.get_on_runqueue() || flags.get_scheduled();
+  if (thread == current() || (state != ThreadState::Dead && (!never_ran || scheduler_has_it))) {
     return std::unexpected(Error::InvalidState);
   }
 
@@ -378,6 +384,8 @@ KernelFpuSection Thread::begin_kernel_fpu() noexcept {
     return KernelFpuSection::Nested;
   }
 
+  hw::percpu::preempt_disable();
+
   const bool save = before.get_uses_fpu() && !before.get_is_kthread();
   if (save) {
     hw::fpu::saves(m_arch.fpu_storage, m_arch.xsave_mask);
@@ -400,6 +408,8 @@ void Thread::end_kernel_fpu(const KernelFpuSection section) noexcept {
   if (section == KernelFpuSection::Saved) {
     hw::fpu::restores(m_arch.fpu_storage, m_arch.xsave_mask);
   }
+
+  hw::percpu::preempt_enable();
 }
 
 void Thread::prepare_initial_stack() noexcept {
@@ -429,7 +439,9 @@ void Thread::set_name(std::string_view name) noexcept {
 }
 
 [[noreturn]] void Thread::entry_launchpad(Thread* self) noexcept {
-  // switch_to() disabled both of these for a return that a new thread does not make.
+  // switch_to() disabled both of these for a return that a new thread does not make, and so did
+  // the scheduler if it is the one that got here, along with leaving the run queue locked.
+  Scheduler::finish_switch();
   hw::percpu::preempt_enable();
   hw::irq::enable();
 
@@ -441,14 +453,12 @@ void Thread::set_name(std::string_view name) noexcept {
     self->m_on_exit(self, self->m_exit_cookie);
   }
 
-  while (true) {
-    asm volatile("hlt");
-  }
+  Scheduler::exit_current();
 }
 
 Thread* current() noexcept { return hw::percpu::current_thread(); }
 
-void switch_to(Thread* prev, Thread* next) noexcept {
+void switch_to(Thread* prev, Thread* next, const SwitchReason reason) noexcept {
   KASSERT(prev && next);
   if (prev == next) {
     return;
@@ -478,9 +488,13 @@ void switch_to(Thread* prev, Thread* next) noexcept {
 
   next_stats.last_switch_in_ns = now;
   next_stats.switch_count += 1;
-  prev_stats.voluntary_switches += 1;
+  if (reason == SwitchReason::Voluntary) {
+    prev_stats.voluntary_switches += 1;
+  } else {
+    prev_stats.involuntary_switches += 1;
+  }
 
-  ArchitecturalState& prev_arch = prev->arch_state();
+  const ArchitecturalState& prev_arch = prev->arch_state();
   const ArchitecturalState& next_arch = next->arch_state();
 
   // In this order: XSAVE takes a component disabled in IA32_XFD to be in its initial state, and
