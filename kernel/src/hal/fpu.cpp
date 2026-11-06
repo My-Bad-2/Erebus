@@ -58,6 +58,16 @@ constinit bool g_compacted = false;
 
   return size;
 }
+
+// Whether IA32_XFD can keep tile data away from the threads that did not ask for it. Without that
+// it would be enabled for everyone and saved for no one.
+[[nodiscard]] bool can_fence_tile_data(const CpuInfo* cpu) noexcept {
+  constexpr std::uint32_t TILE_DATA_COMPONENT = 18;
+  constexpr std::uint32_t SUPPORTS_XFD = 1u << 2;
+
+  return cpu->has<Feature::AMX_TILE>() && cpu->has<Feature::XFD>() &&
+         (CpuInfo::query(0xD, TILE_DATA_COMPONENT).ecx & SUPPORTS_XFD) != 0;
+}
 }  // namespace
 
 namespace detail {
@@ -182,8 +192,7 @@ void initialize() noexcept {
   XCR0 wanted = XCR0{}.with_x87().with_sse().with_avx().with_opmask().with_zmm_hi256();
   wanted.set_hi16_zmm();
 
-  // Tile state without IA32_XFD to fence it off would be on for everyone.
-  const bool amx = cpu->has<Feature::AMX_TILE>() && cpu->has<Feature::XFD>();
+  const bool amx = can_fence_tile_data(cpu);
   wanted.set_xtilecfg(amx);
   wanted.set_xtiledata(amx);
 

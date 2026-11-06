@@ -21,6 +21,13 @@ using hw::Feature;
 constexpr std::size_t TAIL_BYTES = 256;
 constexpr std::uint8_t TAIL_PATTERN = 0x5A;
 
+// Checked here because a mistake cannot get as far as a test: every CPU writes this to IA32_XFD on
+// its way up, and on a CPU with AMX the bit of a component XFD does not cover is a #GP.
+static_assert(fpu::XFD_NO_AMX.raw() == hw::XCR0::XTILEDATA);
+
+// And what it cannot disable, every thread has to save.
+static_assert((hw::XCR0::STANDARD_MASK & hw::XCR0::XTILECFG) != 0);
+
 [[nodiscard]] const CpuInfo& cpu_info() noexcept { return *hw::percpu::self()->info; }
 
 [[nodiscard]] bool uses_compacted_format() noexcept {
@@ -131,21 +138,38 @@ KTEST(Fpu, pkru_is_left_to_the_thread_switch) {
   KEXPECT_EQ(fpu::state_mask(true) & hw::XCR0{}.with_pkru().raw(), 0u);
 }
 
-KTEST(Fpu, amx_only_comes_when_asked_for) {
+// The static_assert above against the CPU itself, which only a CPU with AMX can answer.
+KTEST(Fpu, xfd_disables_every_tile_component_it_can) {
+  if (!fpu::amx_available()) {
+    KTEST_SKIP("the CPU has no AMX");
+  }
+
+  constexpr std::uint32_t SUPPORTS_XFD = 1u << 2;
+
+  for (const std::uint32_t component : {17u, 18u}) {
+    const bool can_disable = (CpuInfo::query(0xD, component).ecx & SUPPORTS_XFD) != 0;
+    const bool disabled = ((fpu::XFD_NO_AMX.raw() >> component) & 1) != 0;
+    KEXPECT(disabled == can_disable);
+  }
+}
+
+KTEST(Fpu, tile_data_only_comes_when_asked_for) {
   constexpr std::uint64_t TILES = hw::XCR0::XTILECFG | hw::XCR0::XTILEDATA;
-  KEXPECT_EQ(fpu::state_mask() & TILES, 0u);
 
   if (fpu::amx_available()) {
+    KEXPECT_EQ(fpu::state_mask() & TILES, hw::XCR0::XTILECFG);
     KEXPECT_EQ(fpu::state_mask(true) & TILES, TILES);
     KEXPECT_GT(fpu::area_size(true), fpu::area_size() + 8000);
   } else {
+    KEXPECT_EQ(fpu::state_mask() & TILES, 0u);
     KEXPECT_EQ(fpu::state_mask(true), fpu::state_mask());
     KEXPECT_EQ(fpu::area_size(true), fpu::area_size());
   }
 }
 
-// The compacted size can only be compared when nothing else is in it: CPUID counts AMX and
-// whatever is in IA32_XSS, and the areas leave those out.
+// CPUID sizes everything in XCR0, tile state included, which is what area_size(true) holds. The
+// compacted size can only be compared when nothing else is in it: CPUID also counts whatever is
+// in IA32_XSS, and the areas leave that out.
 KTEST(Fpu, area_size_agrees_with_cpuid) {
   if (!cpu_info().has<Feature::XSAVE>()) {
     KEXPECT_EQ(fpu::state_mask(), 0u);
@@ -153,21 +177,19 @@ KTEST(Fpu, area_size_agrees_with_cpuid) {
     return;
   }
 
-  if (fpu::amx_available()) {
-    KTEST_SKIP("CPUID sizes include the tile state here");
-  }
+  const std::size_t size = fpu::area_size(true);
 
   if (!uses_compacted_format()) {
-    KEXPECT_EQ(fpu::area_size(), CpuInfo::query(0xD, 0).ebx);
+    KEXPECT_EQ(size, CpuInfo::query(0xD, 0).ebx);
     return;
   }
 
   const bool has_supervisor_state =
       cpu_info().has<Feature::XSS>() && read::msr(fpu::MSR_IA32_XSS) != 0;
   if (has_supervisor_state) {
-    KEXPECT_LE(fpu::area_size(), CpuInfo::query(0xD, 1).ebx);
+    KEXPECT_LE(size, CpuInfo::query(0xD, 1).ebx);
   } else {
-    KEXPECT_EQ(fpu::area_size(), CpuInfo::query(0xD, 1).ebx);
+    KEXPECT_EQ(size, CpuInfo::query(0xD, 1).ebx);
   }
 }
 

@@ -15,8 +15,9 @@
 /// on the BSP, and area_size() and init_area() are how the rest of the kernel gets at them.
 ///
 /// AMX is the exception to everything: its 8 KiB of tile data would make every area huge for
-/// the sake of very few threads, so its components are saved only for threads that asked for
-/// them. Everyone else runs with them disabled through IA32_XFD.
+/// the sake of very few threads, so it is saved only for threads that asked for it, and everyone
+/// else runs with it disabled through IA32_XFD. Tile configuration cannot be disabled that way:
+/// LDTILECFG keeps working, so those 64 bytes are saved for everyone like any other state.
 #pragma once
 
 #include <array>
@@ -38,6 +39,11 @@ inline constexpr std::uint32_t DEFAULT_MXCSR = 0x1F80;
 /// @brief Alignment every save area needs: 64 for the XSAVE family, 16 for FXSAVE.
 inline constexpr std::size_t AREA_ALIGNMENT = 64;
 
+/// @brief IA32_XFD: the state components whose use raises #NM.
+///
+/// CPUID.(0xD, i).ECX[2] says which components can be disabled like this, and the bit of any other
+/// is reserved, so setting it is a #GP. Of AMX's two components only tile data qualifies, which
+/// is why this has no `xtilecfg` when XCR0 does. The same goes for Ia32XfdErr.
 class Ia32Xfd {
   std::uint64_t m_data{};
 
@@ -45,12 +51,11 @@ class Ia32Xfd {
   constexpr explicit Ia32Xfd(const std::uint64_t raw = 0) noexcept : m_data(raw) {}
   [[nodiscard]] constexpr std::uint64_t raw() const noexcept { return m_data; }
 
-  BF_BIT_RW(xtilecfg, 17)
   BF_BIT_RW(xtiledata, 18)
 };
 
 /// @brief IA32_XFD of a thread without AMX: touching the tile registers raises #NM.
-inline constexpr Ia32Xfd XFD_NO_AMX = Ia32Xfd{}.with_xtilecfg().with_xtiledata();
+inline constexpr Ia32Xfd XFD_NO_AMX = Ia32Xfd{}.with_xtiledata();
 
 class Ia32XfdErr {
   std::uint64_t m_data{};
@@ -60,7 +65,6 @@ class Ia32XfdErr {
 
   [[nodiscard]] constexpr std::uint64_t raw() const noexcept { return m_data; }
 
-  BF_BIT_RW(xtilecfg, 17)
   BF_BIT_RW(xtiledata, 18)
 };
 
@@ -106,13 +110,14 @@ void initialize() noexcept;
 
 /// @brief The state components of a thread, for the `mask` of the save calls. Only what is
 ///        enabled in XCR0: 0 on a CPU without XSAVE.
-/// @param amx Whether the thread uses AMX. Without AMX the answer is the same either way.
+/// @param amx Whether to add tile data, for a thread using AMX. On a CPU without it the answer is
+///            the same either way.
 [[nodiscard]] std::uint64_t state_mask(bool amx = false) noexcept;
 
 /// @brief Size of a save area for state_mask(@p amx).
 [[nodiscard]] std::size_t area_size(bool amx = false) noexcept;
 
-/// @brief Whether the CPU has AMX and it is enabled, with IA32_XFD to keep it out of the way.
+/// @brief Whether the CPU has AMX and it is enabled, with IA32_XFD able to disable tile data.
 [[nodiscard]] bool amx_available() noexcept;
 
 /// @brief Turns zeroed memory into a save area holding the initial state of @p mask, ready to be
@@ -123,7 +128,7 @@ void init_area(void* area, std::uint64_t mask) noexcept;
 /// @brief Makes the area at @p area describe @p mask instead of the components it was built for.
 ///
 /// For extending an area into a larger buffer. The components already in it stay where they are,
-/// which holds as long as the new ones number higher, as AMX's do.
+/// which holds as long as the new ones number higher, as tile data does.
 void set_area_mask(void* area, std::uint64_t mask) noexcept;
 
 /// @brief Saves the components in @p mask to @p buffer, as far as they are user state.

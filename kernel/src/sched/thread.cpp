@@ -342,8 +342,8 @@ auto Thread::request_amx_context() noexcept -> std::expected<void, Error> {
     // A switch to this thread, or away from it, must see all of this or none of it.
     utils::IrqDisableGuard irq_guard{};
 
-    // AMX is numbered above everything else, so what is already saved keeps its place in the area
-    // and the new components, not being in XSTATE_BV yet, start out in their initial state.
+    // Tile data is numbered above everything else, so what is already saved keeps its place in
+    // the area, and tile data, not being in XSTATE_BV yet, starts out in its initial state.
     old_area = m_arch.fpu_storage;
     if (old_area) {
       klib::memcpy(*area, old_area, m_arch.fpu_buffer_size);

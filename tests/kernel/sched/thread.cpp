@@ -1,6 +1,7 @@
 #include "sched/thread.hpp"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 
 #include "../hal/fpu_registers.hpp"
@@ -147,6 +148,61 @@ void fpu_worker(void* arg) noexcept {
       ++me->mismatches;
     }
   }
+}
+
+// Palette 1, with tile 0 at 16 rows of 64 bytes and the rest of the tiles left out.
+using TileConfig = std::array<std::uint8_t, 64>;
+
+constexpr TileConfig TILE_CONFIG = [] {
+  TileConfig config{};
+  config[0] = 1;    // Palette.
+  config[16] = 64;  // Bytes per row of tile 0, the low half of a 16-bit field.
+  config[48] = 16;  // Rows of tile 0.
+  return config;
+}();
+
+void load_tile_config(const TileConfig& config) noexcept {
+  asm volatile("ldtilecfg %0" : /* No Output */ : "m"(config) : "memory");
+}
+
+struct TileWorker {
+  Thread* parent{nullptr};
+  Thread* self{nullptr};
+  bool loads_config{false};
+};
+
+// Takes two turns. Each ends with a section, so that the switch after it saves the registers.
+void tile_worker(void* arg) noexcept {
+  auto* me = static_cast<TileWorker*>(arg);
+  utils::NullLock lock;
+
+  {
+    utils::FpuGuard guard{lock};
+    if (me->loads_config) {
+      load_tile_config(TILE_CONFIG);
+    }
+  }
+
+  sched::switch_to(me->self, me->parent);
+
+  {
+    utils::FpuGuard guard{lock};
+  }
+
+  sched::switch_to(me->self, me->parent);
+}
+
+// Whether the last save for @p thread has TILE_CONFIG in it. Being the highest component a thread
+// without AMX has, it comes last in the area in either format.
+[[nodiscard]] bool has_saved_tile_config(Thread* thread) noexcept {
+  const auto* area = static_cast<const std::byte*>(thread->arch_state().fpu_storage);
+  const auto* header = reinterpret_cast<const fpu::XSaveHeader*>(area + fpu::XSAVE_HEADER_OFFSET);
+  if ((header->xstate_bv & hw::XCR0::XTILECFG) == 0) {
+    return false;
+  }
+
+  return klib::memcmp(area + fpu::area_size() - sizeof(TILE_CONFIG), TILE_CONFIG.data(),
+                      sizeof(TILE_CONFIG)) == 0;
 }
 
 // Runs two FpuWorkers against each other on this CPU, and returns how often one of them found
@@ -797,6 +853,45 @@ KTEST(ThreadFpu, amx_extends_the_context_and_keeps_what_was_in_it) {
   KEXPECT_EQ(legacy->mxcsr, fpu::DEFAULT_MXCSR | (1u << 13));
 
   KEXPECT(Thread::destroy(thread).has_value());
+}
+
+// LDTILECFG works with tile data disabled, so a thread can have a tile configuration without ever
+// asking for AMX. Goes by the save areas, as they are what a switch has to get right.
+KTEST(ThreadFpu, tile_configuration_stays_with_the_thread_that_loaded_it) {
+  if (!fpu::amx_available()) {
+    KTEST_SKIP("the CPU has no AMX");
+  }
+
+  Thread* self = sched::current();
+  TileWorker loader{.parent = self, .loads_config = true};
+  TileWorker bystander{.parent = self};
+
+  const auto first =
+      Thread::create_kernel("tile-loader", &tile_worker, &loader, {.allocate_fpu = true});
+  const auto second =
+      Thread::create_kernel("tile-bystander", &tile_worker, &bystander, {.allocate_fpu = true});
+  KREQUIRE(first.has_value());
+  KREQUIRE(second.has_value());
+  loader.self = *first;
+  bystander.self = *second;
+
+  // Saved on the way out, and gone for the next thread to run...
+  sched::switch_to(self, loader.self);
+  KEXPECT(has_saved_tile_config(loader.self));
+
+  sched::switch_to(self, bystander.self);
+  KEXPECT(!has_saved_tile_config(bystander.self));
+
+  // ...so only a restore can have brought it back for this save to find...
+  sched::switch_to(self, loader.self);
+  KEXPECT(has_saved_tile_config(loader.self));
+
+  // ...and it goes again for the bystander, however recently it was in the registers.
+  sched::switch_to(self, bystander.self);
+  KEXPECT(!has_saved_tile_config(bystander.self));
+
+  run_to_completion(loader.self);
+  run_to_completion(bystander.self);
 }
 
 KTEST(ThreadFpu, xfd_follows_the_amx_thread) {

@@ -279,10 +279,11 @@ class XCR0 {
   static constexpr std::uint64_t XTILECFG = 1ull << 17;
   static constexpr std::uint64_t XTILEDATA = 1ull << 18;
 
-  /// x87, SSE, AVX, AVX-512 and PKRU: everything a thread may have live without asking.
-  static constexpr std::uint64_t STANDARD_MASK = 0x2e7;
-  /// The same, plus the AMX tile state.
-  static constexpr std::uint64_t STANDARD_AMX_MASK = STANDARD_MASK | XTILECFG | XTILEDATA;
+  /// x87, SSE, AVX, AVX-512, PKRU and tile configuration: everything a thread may have live
+  /// without asking. LDTILECFG is out of IA32_XFD's reach, so that last one is on this side.
+  static constexpr std::uint64_t STANDARD_MASK = 0x2e7 | XTILECFG;
+  /// The same, plus tile data.
+  static constexpr std::uint64_t STANDARD_AMX_MASK = STANDARD_MASK | XTILEDATA;
 
   BF_BIT_RW(x87, 0)
   BF_BIT_RW(sse, 1)

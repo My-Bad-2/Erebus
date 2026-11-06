@@ -79,7 +79,7 @@ enum class PriorityClass : std::uint8_t {
 ///   [14]      : stack_borrowed (1 = uses pre-allocated boot stack; do not vmm->free on exit)
 ///   [15]      : exit_requested (1 = cooperative cancellation / stop signal pending)
 ///   [16..23]  : nice_bias (signed 8-bit nice offset encoded as biased [0..39])
-///   [24]      : uses_amx (1 = thread explicitly opted into 8 KiB Intel AMX tile state)
+///   [24]      : uses_amx (1 = thread explicitly opted into 8 KiB of Intel AMX tile data)
 ///   [25]      : in_kernel_fpu (1 = thread is currently inside a Ring-0 FPU guard scope)
 class ThreadFlags {
   std::uint32_t m_data{0};
@@ -170,7 +170,7 @@ struct ThreadCreateOptions {
   std::uint32_t preferred_numa_node{0};
   bool pinned{false};
   bool allocate_fpu{false};  ///< Gives the thread a save area from the start
-  bool allocate_amx{false};  ///< The same with room for Intel AMX tile state; fails without AMX
+  bool allocate_amx{false};  ///< The same with room for Intel AMX tile data; fails without AMX
   std::uint64_t initial_fs_base{0};
 };
 
@@ -355,7 +355,7 @@ class alignas(std::hardware_destructive_interference_size) Thread
   /// @brief Gives this thread a save area in the initial FPU state, if it has none yet.
   [[nodiscard]] auto enable_fpu_context() noexcept -> std::expected<void, Error>;
 
-  /// @brief Makes this thread an AMX user: a save area with room for the tile state, keeping what
+  /// @brief Makes this thread an AMX user: a save area with room for tile data, keeping what
   ///        it has so far, and the tile registers enabled whenever it runs.
   /// @return Error::NotImplemented if the CPU has no AMX, or Error::OutOfMemory.
   [[nodiscard]] auto request_amx_context() noexcept -> std::expected<void, Error>;
