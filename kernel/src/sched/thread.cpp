@@ -7,9 +7,13 @@
 #include "drivers/clock.hpp"
 #include "hal/interrupts/interrupts.hpp"
 #include "hal/smp/percpu.hpp"
+#include "hal/user.hpp"
 #include "memory/heap.hpp"
 #include "memory/memory.hpp"
+#include "memory/pmm.hpp"
+#include "memory/shrinker.hpp"
 #include "memory/vmm/vma/vma.hpp"
+#include "proc/process.hpp"
 #include "sched/scheduler.hpp"
 #include "utils/assert.hpp"
 #include "utils/lock.hpp"
@@ -22,7 +26,105 @@ std::atomic<ThreadId> g_next_tid{1};
 
 memory::heap::KmemCache* g_thread_cache{nullptr};
 memory::heap::KmemCache* g_fpu_cache{nullptr};
-memory::heap::KmemCache* g_amx_fpu_cache{nullptr};  // null without AMX
+memory::heap::KmemCache* g_amx_fpu_cache{nullptr};
+
+class StackCache {
+ public:
+  static constexpr std::uint32_t CAPACITY = Thread::STACK_CACHE_SIZE;
+  static constexpr std::size_t STACK_PAGES = DEFAULT_KSTACK_SIZE / memory::PAGE_SIZE;
+
+  /// @return false if it is full, in which case the stack is still the caller's.
+  [[nodiscard]] bool put(const memory::VirtualAddress base) noexcept {
+    const std::uint32_t node = node_of(base);
+
+    utils::IrqSaveGuard guard{m_lock};
+    if (m_count == CAPACITY) {
+      return false;
+    }
+
+    m_entries[m_count++] = {.base = base, .node = node};
+    return true;
+  }
+
+  /// @return A stack, from the caller's node if there is one, or null.
+  [[nodiscard]] memory::VirtualAddress take() noexcept {
+    utils::IrqSaveGuard guard{m_lock};
+    if (m_count == 0) {
+      return {};
+    }
+
+    std::uint32_t pick = m_count - 1;
+    const std::uint32_t home = hw::percpu::numa_node_id();
+    for (std::uint32_t i = m_count; i-- > 0;) {
+      if (m_entries[i].node == home) {
+        pick = i;
+        break;
+      }
+    }
+
+    const memory::VirtualAddress base = m_entries[pick].base;
+    m_entries[pick] = m_entries[--m_count];
+    m_reused.fetch_add(1, std::memory_order_relaxed);
+    return base;
+  }
+
+  /// @brief Gives the stacks of @p node back to the VMM. @return How many pages that was.
+  std::size_t release(const std::uint32_t node) noexcept {
+    std::array<memory::VirtualAddress, CAPACITY> going{};
+    std::uint32_t count = 0;
+    {
+      utils::IrqSaveGuard guard{m_lock};
+      for (std::uint32_t i = 0; i < m_count;) {
+        if (m_entries[i].node == node) {
+          going[count++] = m_entries[i].base;
+          m_entries[i] = m_entries[--m_count];
+        } else {
+          ++i;
+        }
+      }
+    }
+
+    // Unmapping waits for the other CPUs, which is not for under a spinlock.
+    for (std::uint32_t i = 0; i < count; ++i) {
+      if (const auto freed = memory::vmm::kernel_space()->free(going[i]); !freed) [[unlikely]] {
+        utils::logger::warn("sched: leaking a cached stack: {:#x}\n",
+                            std::to_underlying(freed.error()));
+      }
+    }
+
+    return count * STACK_PAGES;
+  }
+
+  [[nodiscard]] StackCacheStats stats() noexcept {
+    utils::IrqSaveGuard guard{m_lock};
+    return {.cached = m_count, .reused = m_reused.load(std::memory_order_relaxed)};
+  }
+
+ private:
+  struct Entry {
+    memory::VirtualAddress base;
+    std::uint32_t node;
+  };
+
+  // Where the memory of a stack came from, for a shrink of that node to find it.
+  [[nodiscard]] static std::uint32_t node_of(const memory::VirtualAddress base) noexcept {
+    const auto found = memory::vmm::kernel_space()->pagemap().translate(base);
+    return found ? memory::pmm::phys_to_page(found->phys_address)->get_numa_node() : 0;
+  }
+
+  utils::QSpinlock m_lock{};
+  std::array<Entry, CAPACITY> m_entries{};
+  std::uint32_t m_count{0};
+  std::atomic<std::uint64_t> m_reused{0};
+};
+
+constinit StackCache g_stacks{};
+
+std::size_t shrink_stacks(const std::uint32_t node_id, void*) noexcept {
+  return g_stacks.release(node_id);
+}
+
+constinit memory::Shrinker g_stack_shrinker{&shrink_stacks, nullptr};
 
 [[nodiscard]] memory::heap::KmemCache* create_cache(const std::size_t size,
                                                     const std::size_t alignment) noexcept {
@@ -109,6 +211,42 @@ DECLARE_STATIC_CALL(void, switch_pkru, std::uint32_t);
 DEFINE_STATIC_CALL_NOP(switch_pkru);
 REGISTER_STATIC_CALL_ALT(switch_pkru, details::switch_pkru, hw::Feature::PKU);
 
+namespace {
+// User code changes some of its state without the kernel hearing of it, so until a switch reads
+// it back, what the CPU holds is the only copy.
+void save_user_state(ArchitecturalState& arch) noexcept {
+  if (hw::user::can_change_bases()) {
+    arch.fs_base = hw::read::fs_base();
+    arch.user_gs_base = hw::user::read_gs_base();
+    hw::percpu::self()->user_gs_base = arch.user_gs_base;
+  }
+
+  arch.pkru = hw::user::read_pkru();
+}
+
+// What only a user thread needs from the CPU. Kernel threads run on the kernel half of whatever
+// address space was loaded before them and never come in from ring 3, so a CPU that goes from a
+// user thread to a kernel thread and back to the same user thread changes none of this.
+void load_user_context(const Thread& next) noexcept {
+  hw::PerCpu* cpu = hw::percpu::self();
+
+  if (cpu->gdt_table.kernel_stack() != next.stack_top()) {
+    update_ring0_stack(next.stack_top());
+  }
+
+  memory::vmm::PageMap* map = &next.process()->address_space()->pagemap();
+  if (cpu->pcid_manager.active() != map) {
+    cpu->pcid_manager.load(map);
+  }
+
+  const std::uint64_t gs_base = next.arch_state().user_gs_base;
+  if (cpu->user_gs_base != gs_base) {
+    hw::user::write_gs_base(gs_base);
+    cpu->user_gs_base = gs_base;
+  }
+}
+}  // namespace
+
 void switch_context(std::uint64_t* prev_rsp, std::uint64_t next_rsp) noexcept {
   asm volatile(
       // Push callee-saved registers in reverse field order so `r15` sits at 0(%rsp)
@@ -148,7 +286,11 @@ void Thread::initialize_subsystem() noexcept {
   if (hw::fpu::amx_available()) {
     g_amx_fpu_cache = create_cache(hw::fpu::area_size(true), hw::fpu::AREA_ALIGNMENT);
   }
+
+  memory::register_shrinker(g_stack_shrinker);
 }
+
+StackCacheStats Thread::stack_cache_stats() noexcept { return g_stacks.stats(); }
 
 void Thread::release_fpu_storage() noexcept {
   memory::heap::kfree(m_arch.fpu_storage);
@@ -156,10 +298,32 @@ void Thread::release_fpu_storage() noexcept {
   m_arch.fpu_buffer_size = 0;
 }
 
+void Thread::release_user_stack() noexcept {
+  if (m_user_stack_top.is_null() || m_process == nullptr) {
+    return;
+  }
+
+  // By its top, which stays where it is when the stack grows down.
+  memory::vmm::AddressSpace* space = m_process->address_space();
+  if (space != nullptr) {
+    if (const auto res = space->free_containing(m_user_stack_top - 1); !res) [[unlikely]] {
+      utils::logger::warn("sched: leaking the user stack of thread {}: {:#x}\n", m_tid,
+                          std::to_underlying(res.error()));
+    }
+  }
+
+  m_user_stack_base = {};
+  m_user_stack_top = {};
+}
+
 Thread::~Thread() noexcept {
   release_fpu_storage();
 
   if (!m_stack_base.is_null() && !flags().get_stack_borrowed()) {
+    if (m_stack_size == DEFAULT_KSTACK_SIZE && g_stacks.put(m_stack_base)) {
+      return;
+    }
+
     if (const auto res = memory::vmm::kernel_space()->free(m_stack_base); !res) [[unlikely]] {
       utils::logger::warn("sched: leaking the stack of thread {}: {:#x}\n", m_tid,
                           std::to_underlying(res.error()));
@@ -186,17 +350,23 @@ auto Thread::create_kernel(std::string_view name, RawEntryFn entry, void* arg,
   // The VMM would round the size up all the same. This way, the top of the stack is at the top.
   const std::size_t stack_size = utils::maths::align_up(opts.stack_size, memory::PAGE_SIZE);
 
-  using memory::vmm::AccessFlags;
-  const auto stack_res = memory::vmm::kernel_space()->alloc(
-      stack_size,
-      AccessFlags::Read | AccessFlags::Write | AccessFlags::Stack | AccessFlags::Populate);
-  if (!stack_res) {
-    free_thread(thread);
-    return std::unexpected(stack_res.error());
+  memory::VirtualAddress stack_base =
+      stack_size == DEFAULT_KSTACK_SIZE ? g_stacks.take() : memory::VirtualAddress{};
+  if (stack_base.is_null()) {
+    using memory::vmm::AccessFlags;
+    const auto stack_res = memory::vmm::kernel_space()->alloc(
+        stack_size,
+        AccessFlags::Read | AccessFlags::Write | AccessFlags::Stack | AccessFlags::Populate);
+    if (!stack_res) {
+      free_thread(thread);
+      return std::unexpected(stack_res.error());
+    }
+
+    stack_base = *stack_res;
   }
 
-  thread->m_stack_base = *stack_res;
-  thread->m_stack_top = *stack_res + static_cast<memory::VirtualAddress::OffsetType>(stack_size);
+  thread->m_stack_base = stack_base;
+  thread->m_stack_top = stack_base + static_cast<memory::VirtualAddress::OffsetType>(stack_size);
   thread->m_stack_size = stack_size;
 
   thread->m_tid = g_next_tid.fetch_add(1, std::memory_order_relaxed);
@@ -204,6 +374,8 @@ auto Thread::create_kernel(std::string_view name, RawEntryFn entry, void* arg,
   thread->m_arg = arg;
   thread->set_cpu_id(opts.preferred_cpu != NO_PREFERENCE ? opts.preferred_cpu : hw::percpu::id());
   thread->m_preferred_numa_node = opts.preferred_numa_node;
+  thread->m_base_priority = Priority::of(opts.priority);
+  thread->m_effective_priority = thread->m_base_priority;
   thread->set_weight(priority_to_weight(opts.priority));
   thread->set_slice_ns(opts.slice_ns);
   thread->m_arch.fs_base = opts.initial_fs_base;
@@ -233,6 +405,69 @@ auto Thread::create_kernel(std::string_view name, RawEntryFn entry, void* arg,
   return thread;
 }
 
+auto Thread::create_user(const std::string_view name, proc::Process* process,
+                         const memory::VirtualAddress entry, const std::uint64_t arg,
+                         const UserThreadCreateOptions& opts) noexcept
+    -> std::expected<Thread*, Error> {
+  if (process == nullptr || process->address_space() == nullptr ||
+      !hw::user::is_user_address(entry) || opts.user_stack_size == 0) {
+    return std::unexpected(Error::InvalidArgument);
+  }
+
+  // The kernel half first: a kernel thread whose entry goes to ring 3 and does not come back.
+  const ThreadCreateOptions kernel_opts{
+      .stack_size = opts.kernel_stack_size,
+      .priority = opts.priority,
+      .preferred_cpu = opts.preferred_cpu,
+      .preferred_numa_node = opts.preferred_numa_node,
+      .slice_ns = opts.slice_ns,
+      .pinned = opts.pinned,
+      .allocate_fpu = true,
+      .allocate_amx = opts.allocate_amx,
+      .initial_fs_base = opts.initial_fs_base,
+  };
+
+  const auto created = create_kernel(name, &user_thread_start, nullptr, kernel_opts);
+  if (!created) {
+    return created;
+  }
+
+  Thread* thread = *created;
+  const std::size_t stack_size = utils::maths::align_up(opts.user_stack_size, memory::PAGE_SIZE);
+
+  using memory::vmm::AccessFlags;
+  const auto stack = process->address_space()->alloc(
+      stack_size, AccessFlags::Read | AccessFlags::Write | AccessFlags::User | AccessFlags::Stack);
+  if (!stack) {
+    (void)destroy(thread);
+    return std::unexpected(stack.error());
+  }
+
+  thread->m_arg = thread;
+  thread->m_process = process;
+  thread->m_user_entry = entry;
+  thread->m_user_arg = arg;
+  thread->m_user_stack_base = *stack;
+  thread->m_user_stack_top = *stack + static_cast<memory::VirtualAddress::OffsetType>(stack_size);
+  thread->m_arch.user_gs_base = opts.initial_gs_base;
+  thread->update_flags([](ThreadFlags f) { return f.without_is_kthread(); });
+
+  return thread;
+}
+
+void Thread::user_thread_start(void* self) noexcept {
+  const auto* thread = static_cast<const Thread*>(self);
+
+  // Exiting or being preempted cannot wait until the first interrupt from ring 3.
+  hw::irq::disable();
+  Scheduler::return_to_user();
+
+  hw::user::enter(thread->m_user_entry,
+                  thread->m_user_stack_top -
+                      static_cast<memory::VirtualAddress::OffsetType>(sizeof(std::uint64_t)),
+                  thread->m_user_arg);
+}
+
 auto Thread::adopt_boot_thread(const std::uint32_t cpu_id, const memory::VirtualAddress stack_base,
                                const std::size_t stack_size, const std::string_view name) noexcept
     -> std::expected<Thread*, Error> {
@@ -256,6 +491,8 @@ auto Thread::adopt_boot_thread(const std::uint32_t cpu_id, const memory::Virtual
   thread->m_stack_top = stack_base + static_cast<memory::VirtualAddress::OffsetType>(stack_size);
   thread->m_stack_size = stack_size;
   thread->set_cpu_id(cpu_id);
+  thread->m_base_priority = Priority::of(PriorityClass::Idle);
+  thread->m_effective_priority = thread->m_base_priority;
   thread->set_weight(priority_to_weight(PriorityClass::Idle));
   thread->m_preferred_numa_node = hw::percpu::numa_node_id();
   thread->m_arch.fs_base = hw::read::fs_base();
@@ -296,6 +533,18 @@ auto Thread::destroy(Thread* thread) noexcept -> std::expected<void, Error> {
   const bool scheduler_has_it = flags.get_on_runqueue() || flags.get_scheduled();
   if (thread == current() || (state != ThreadState::Dead && (!never_ran || scheduler_has_it))) {
     return std::unexpected(Error::InvalidState);
+  }
+
+  // Someone who found it just before it finished may not have got round to letting go yet.
+  while (thread->m_retained.load(std::memory_order_acquire) != 0) {
+    hw::cpu_relax();
+  }
+
+  // Before the hook: a process may let go of its address space there, when its last thread goes.
+  thread->release_user_stack();
+
+  if (thread->m_on_destroy != nullptr) {
+    thread->m_on_destroy(thread, thread->m_destroy_cookie);
   }
 
   free_thread(thread);
@@ -442,8 +691,8 @@ void Thread::set_name(std::string_view name) noexcept {
   // switch_to() disabled both of these for a return that a new thread does not make, and so did
   // the scheduler if it is the one that got here, along with leaving the run queue locked.
   Scheduler::finish_switch();
-  hw::percpu::preempt_enable();
   hw::irq::enable();
+  hw::percpu::preempt_enable();
 
   self->m_entry(self->m_arg);
 
@@ -494,12 +743,17 @@ void switch_to(Thread* prev, Thread* next, const SwitchReason reason) noexcept {
     prev_stats.involuntary_switches += 1;
   }
 
-  const ArchitecturalState& prev_arch = prev->arch_state();
+  ArchitecturalState& prev_arch = prev->arch_state();
   const ArchitecturalState& next_arch = next->arch_state();
+  const ThreadFlags prev_flags = prev->flags();
+
+  if (!prev_flags.get_is_kthread()) {
+    save_user_state(prev_arch);
+  }
 
   // In this order: XSAVE takes a component disabled in IA32_XFD to be in its initial state, and
   // XRSTOR faults on one. Each side has to do its part under its own XFD.
-  if (has_unsaved_fpu_state(prev->flags())) {
+  if (has_unsaved_fpu_state(prev_flags)) {
     hw::fpu::saves(prev_arch.fpu_storage, prev_arch.xsave_mask);
   }
 
@@ -511,7 +765,9 @@ void switch_to(Thread* prev, Thread* next, const SwitchReason reason) noexcept {
     hw::fpu::restores(next_arch.fpu_storage, next_arch.xsave_mask);
   }
 
-  update_ring0_stack(next->stack_top());
+  if (next->is_user()) {
+    load_user_context(*next);
+  }
 
   if (prev_arch.fs_base != next_arch.fs_base) {
     hw::write::fs_base(next_arch.fs_base);

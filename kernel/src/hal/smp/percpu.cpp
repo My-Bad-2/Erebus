@@ -5,7 +5,6 @@
 
 namespace kernel::hw::percpu {
 namespace {
-// The BSP's area lives in .bss: it is needed long before there is an allocator.
 constinit PerCpu bsp{};
 }  // namespace
 

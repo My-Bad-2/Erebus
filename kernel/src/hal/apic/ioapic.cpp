@@ -10,13 +10,10 @@
 
 namespace kernel::hw::apic {
 namespace {
-// Reinitialises both 8259s with their vectors moved out of the exception range, then masks every
-// line. They stay masked forever, but a spurious IRQ 7/15 can still slip out of a masked 8259,
-// and with the power-on mapping it would show up as an exception.
 void disable_legacy_pic() noexcept {
   constexpr IoResource master{IoType::PMIO, 0x20};
   constexpr IoResource slave{IoType::PMIO, 0xA0};
-  constexpr IoResource delay{IoType::PMIO, 0x80};  // writing the POST port takes ~1 us
+  constexpr IoResource delay{IoType::PMIO, 0x80};
 
   constexpr std::uint8_t ICW1_INIT_WITH_ICW4 = 0x11;
   constexpr std::uint8_t ICW4_8086 = 0x01;
@@ -40,7 +37,6 @@ void disable_legacy_pic() noexcept {
 }
 }  // namespace
 
-// Lives for as long as the machine runs; no_destroy keeps its destructor from being registered.
 [[clang::no_destroy]] constinit IoApicManager io_apic_manager;
 
 IoApicController::~IoApicController() { memory::heap::kfree(m_shadow_table); }
@@ -78,7 +74,9 @@ void IoApicController::set_mask(const std::uint32_t gsi, const bool mask) const 
   auto entry = ShadowEntry::unpack(m_shadow_table[pin].load(std::memory_order_relaxed));
   RedirectionEntryLow low{entry.low()};
 
-  if (low.get_mask() == mask) return;
+  if (low.get_mask() == mask) {
+    return;
+  }
 
   low.set_mask(mask);
   entry.set_low(low.raw());
@@ -94,7 +92,9 @@ std::expected<void, Error> IoApicController::initialize(const memory::VirtualAdd
   m_gsi_base = gsi_base;
 
   const auto ver = read_indirect<IoApicVer>(VersionReg);
-  if (ver.raw() == 0xFFFFFFFF) return std::unexpected(Error::HardwareError);
+  if (ver.raw() == std::numeric_limits<std::uint32_t>::max()) {
+    return std::unexpected(Error::HardwareError);
+  }
 
   m_version = ver.get_version();
   m_max_entries = ver.get_max_redirection_entries() + 1u;
@@ -107,7 +107,11 @@ std::expected<void, Error> IoApicController::initialize(const memory::VirtualAdd
 
   m_shadow_table = static_cast<std::atomic<std::uint64_t>*>(
       memory::heap::kmalloc(sizeof(std::atomic<std::uint64_t>) * m_max_entries));
-  if (!m_shadow_table) return std::unexpected(Error::OutOfMemory);
+
+  if (!m_shadow_table) {
+    return std::unexpected(Error::OutOfMemory);
+  }
+
   std::uninitialized_default_construct_n(m_shadow_table, m_max_entries);
 
   for (std::uint32_t pin = 0; pin < m_max_entries; ++pin) {
@@ -126,11 +130,13 @@ std::expected<void, Error> IoApicController::initialize(const memory::VirtualAdd
   if (isa_irq < m_overrides.size() && m_overrides[isa_irq].active) {
     const std::uint16_t flags = m_overrides[isa_irq].flags;
 
-    if ((flags & ACPI_MADT_POLARITY_MASK) == ACPI_MADT_POLARITY_ACTIVE_LOW)
+    if ((flags & ACPI_MADT_POLARITY_MASK) == ACPI_MADT_POLARITY_ACTIVE_LOW) {
       polarity = PinPolarity::Low;
+    }
 
-    if ((flags & ACPI_MADT_TRIGGERING_MASK) == ACPI_MADT_TRIGGERING_LEVEL)
+    if ((flags & ACPI_MADT_TRIGGERING_MASK) == ACPI_MADT_TRIGGERING_LEVEL) {
       trigger = TriggerMode::Level;
+    }
   }
 
   return {polarity, trigger};
@@ -145,20 +151,27 @@ std::expected<void, Error> IoApicController::initialize(const memory::VirtualAdd
 }
 
 IoApicController* IoApicManager::find_controller(const std::uint32_t gsi) noexcept {
-  for (auto& controller : m_controllers)
-    if (controller.handles_gsi(gsi)) return &controller;
+  for (auto& controller : m_controllers) {
+    if (controller.handles_gsi(gsi)) {
+      return &controller;
+    }
+  }
 
   return nullptr;
 }
 
-std::expected<void, Error> IoApicManager::register_controller(
-    const memory::VirtualAddress mmio_base, const std::uint32_t gsi_base) noexcept {
+std::expected<void, Error> IoApicManager::register_controller(memory::VirtualAddress mmio_base,
+                                                              std::uint32_t gsi_base) noexcept {
   IoApicController controller;
   auto controller_res = controller.initialize(mmio_base, gsi_base);
-  if (!controller_res) return controller_res;
+  if (!controller_res) {
+    return controller_res;
+  }
 
   const auto res = m_controllers.push_back(std::move(controller));
-  if (!res) return std::unexpected(Error::OutOfMemory);
+  if (!res) {
+    return std::unexpected(Error::OutOfMemory);
+  }
 
   return {};
 }
@@ -192,7 +205,9 @@ std::expected<void, Error> IoApicManager::route_direct_gsi(
     const std::uint32_t gsi, const std::uint8_t vector, const std::uint8_t apic_id,
     const PinPolarity polarity, const TriggerMode trigger, const bool masked) noexcept {
   IoApicController* controller = find_controller(gsi);
-  if (!controller) return std::unexpected(Error::UnmappedGSI);
+  if (!controller) {
+    return std::unexpected(Error::UnmappedGSI);
+  }
 
   const auto low = RedirectionEntryLow{}
                        .with_vector(vector)
@@ -213,7 +228,9 @@ std::expected<void, Error> IoApicManager::route_remapped_gsi(std::uint32_t gsi,
                                                              std::uint16_t iommu_irt_index,
                                                              bool masked) noexcept {
   const IoApicController* controller = find_controller(gsi);
-  if (!controller) return std::unexpected(Error::UnmappedGSI);
+  if (!controller) {
+    return std::unexpected(Error::UnmappedGSI);
+  }
 
   const auto entry_low =
       RedirectionEntryLow{}.with_interrupt_index_15((iommu_irt_index >> 15) & 1).with_mask(masked);
@@ -225,7 +242,9 @@ std::expected<void, Error> IoApicManager::route_remapped_gsi(std::uint32_t gsi,
 
 std::expected<void, Error> IoApicManager::mask_gsi(std::uint32_t gsi) noexcept {
   const IoApicController* controller = find_controller(gsi);
-  if (!controller) return std::unexpected(Error::UnmappedGSI);
+  if (!controller) {
+    return std::unexpected(Error::UnmappedGSI);
+  }
 
   controller->set_mask(gsi, true);
   return {};
@@ -233,7 +252,9 @@ std::expected<void, Error> IoApicManager::mask_gsi(std::uint32_t gsi) noexcept {
 
 std::expected<void, Error> IoApicManager::unmask_gsi(std::uint32_t gsi) noexcept {
   const IoApicController* controller = find_controller(gsi);
-  if (!controller) return std::unexpected(Error::UnmappedGSI);
+  if (!controller) {
+    return std::unexpected(Error::UnmappedGSI);
+  }
 
   controller->set_mask(gsi, false);
   return {};
@@ -254,7 +275,7 @@ void IoApicManager::initialize() noexcept {
     utils::logger::fatal("MADT invalid: {}\n", payload_res.error());
   }
 
-  // The register window is two 32-bit registers, IOREGSEL and IOWIN, 16 bytes apart; the EOI
+  // The register window is two 32-bit registers, IOREGSEL and IOWIN, 16 bytes apart. The EOI
   // register of newer IOAPICs sits at 0x40.
   constexpr std::size_t IOAPIC_REGISTER_BYTES = 0x44;
 

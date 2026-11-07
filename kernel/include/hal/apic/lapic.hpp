@@ -266,8 +266,9 @@ class Lapic {
   template <typename Schema>
   [[nodiscard]] Schema read(const Reg reg) const noexcept {
     const std::uint32_t offset = std::to_underlying(reg);
-    if (m_mode == ApicMode::x2APIC) [[likely]]
+    if (m_mode == ApicMode::x2APIC) [[likely]] {
       return Schema(static_cast<std::uint32_t>(read::msr(LAPIC_BASE_MSR + (offset >> 4))));
+    }
 
     return Schema(m_mmio.read<std::uint32_t>(offset));
   }
@@ -275,17 +276,19 @@ class Lapic {
   template <typename Schema>
   void write(const Reg reg, const Schema val) const noexcept {
     const std::uint32_t offset = std::to_underlying(reg);
-    if (m_mode == ApicMode::x2APIC) [[likely]]
+    if (m_mode == ApicMode::x2APIC) [[likely]] {
       write::msr(LAPIC_BASE_MSR + (offset >> 4), val.raw());
-    else
+    } else {
       m_mmio.write<std::uint32_t>(offset, val.raw());
+    }
   }
 
   [[gnu::always_inline]] void eoi() const noexcept { write(Reg::Eoi, Raw32Schema{0}); }
 
   void enable_directed_eoi(const bool enable) const noexcept {
-    if (m_caps.has_directed_eoi)
+    if (m_caps.has_directed_eoi) {
       write(Reg::Svr, read<SvrSchema>(Reg::Svr).with_eoi_suppress(enable));
+    }
   }
 
   void set_tpr(const std::uint8_t priority) const noexcept {
@@ -346,18 +349,22 @@ class Lapic {
           Raw32Schema{static_cast<std::uint32_t>(std::min<std::uint64_t>(count, MAX_TIMER_COUNT))});
   }
 
+  /// @brief Takes back what set_timer() started. The next set_timer() works as usual.
+  void stop_timer() const noexcept {
+    if (m_use_tsc_deadline) {
+      write::msr(TSC_DEADLINE_MSR, 0ul);
+    } else {
+      write(Reg::TimerInitCnt, Raw32Schema{0});
+    }
+  }
+
   /// @brief Stops the timer for good, until the next configure_timer().
   ///
   /// The mask alone should do, but AMD erratum 411, and Intel parts as well, say otherwise. Hence
   /// both: masked, and with nothing left to expire.
   void disarm_timer() const noexcept {
     write(Reg::LvtTimer, read<LvtSchema>(Reg::LvtTimer).with_masked());
-
-    if (m_use_tsc_deadline) {
-      write::msr(TSC_DEADLINE_MSR, 0ul);
-    } else {
-      write(Reg::TimerInitCnt, Raw32Schema{0});
-    }
+    stop_timer();
   }
 
   [[nodiscard, gnu::always_inline]] std::uint32_t get_timer_current_count() const noexcept {
@@ -373,7 +380,7 @@ class Lapic {
   /// @brief The longest delay set_timer() can do. 0 if there is no usable timer at all.
   [[nodiscard]] std::uint64_t max_timer_delay_ns() const noexcept {
     if (m_use_tsc_deadline) {
-      return ~std::uint64_t{0} / 2;
+      return ~0ul / 2;
     }
 
     return m_bus_scaler.freq_hz != 0 ? m_bus_scaler.ticks_to_ns(MAX_TIMER_COUNT) : 0;

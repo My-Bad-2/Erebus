@@ -104,8 +104,6 @@ std::expected<void, Error> PageMap::remap(const VirtualAddress virt, const Physi
 }
 
 namespace {
-// One page worth of original entries, so a failed multi-page update can be put back. The
-// entries of a node are consecutive slots of one table, starting at base_virt.
 constexpr std::size_t MAX_LOG_PTES = 508;
 
 struct UndoLogNode {
@@ -119,7 +117,7 @@ struct UndoLogNode {
 static_assert(sizeof(UndoLogNode) <= PAGE_SIZE);
 }  // namespace
 
-// Owns the undo log of a range operation. On failure it restores every logged entry, newest
+// Owns the undo log of a range operation. On failure, it restores every logged entry, newest
 // first; either way it frees the log. This assumes nobody else modifies the range meanwhile,
 // which the VMA layer guarantees by holding its lock.
 struct RollbackGuard {

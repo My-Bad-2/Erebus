@@ -13,8 +13,8 @@ namespace {
 }
 }  // namespace
 
-std::expected<VMArea*, Error> AddressSpace::expand_stack_locked(
-    const VirtualAddress fault_addr) noexcept {
+auto AddressSpace::expand_stack_locked(VirtualAddress fault_addr) noexcept
+    -> std::expected<VMArea*, Error> {
   // Someone may have grown it while we were waiting for the exclusive lock.
   if (VMArea* vma = find_vma(fault_addr)) {
     return vma;
@@ -78,7 +78,7 @@ std::expected<void, Error> AddressSpace::resolve_vma_fault_locked(
   const bool is_cow = has_flag(vma_access, AccessFlags::CopyOnWrite);
   const auto present = m_pagemap.translate(page_addr);
 
-  std::atomic_ref{vma->fault_count}.fetch_add(1, std::memory_order_relaxed);
+  auto _ = std::atomic_ref{vma->fault_count}.fetch_add(1, std::memory_order_relaxed);
 
   if (is_write && is_cow && (!present || !has_flag(present->flags, AccessFlags::Write))) {
     const auto private_page = obj->resolve_cow_fault(page_idx);

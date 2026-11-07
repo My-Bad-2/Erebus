@@ -4,7 +4,7 @@
 /// Physical and virtual addresses are both just integers to the CPU, which makes them very easy
 /// to mix up. The two wrappers here are deliberately not convertible into each other: the only
 /// sanctioned bridge is DirectMap, which translates between a physical address and its alias in
-/// the HHDM (the linear mapping of all RAM that Limine sets up and the VMM later rebuilds).
+/// the HHDM.
 
 #pragma once
 

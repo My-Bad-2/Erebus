@@ -1,6 +1,8 @@
 #include "hal/hal.hpp"
 #include "hal/interrupts/interrupt_manager.hpp"
 #include "hal/interrupts/interrupts.hpp"
+#include "hal/user.hpp"
+#include "sched/scheduler.hpp"
 #include "utils/logger.hpp"
 
 #define ASM_PUSH_ALL_REGISTERS \
@@ -38,43 +40,83 @@
   "popq %%rax\n\t"
 
 namespace kernel::hw::interrupts {
-// The ABI wants the direction flag clear on function entry; the interrupted code may have had it
-// set, so clear it after saving the registers. IRETQ restores the old RFLAGS.
+namespace {
+constexpr std::size_t SAVED_REGISTERS_BYTES = sizeof(RegisterContext);
+constexpr std::size_t VECTOR_AND_ERROR_BYTES = 2 * sizeof(std::uint64_t);
+constexpr std::size_t CS_BEFORE_PUSHES = VECTOR_AND_ERROR_BYTES + sizeof(std::uint64_t);
+constexpr std::size_t HARDWARE_FRAME_BYTES = 5 * sizeof(std::uint64_t);
+constexpr std::size_t NMI_PERCPU_SLOT =
+    SAVED_REGISTERS_BYTES + VECTOR_AND_ERROR_BYTES + HARDWARE_FRAME_BYTES;
+static_assert(SAVED_REGISTERS_BYTES == 15 * sizeof(std::uint64_t));
+
+constexpr std::uint32_t IA32_GS_BASE = 0xC0000101;
+}  // namespace
+
 [[gnu::naked, gnu::used]] void legacy_isr_common() noexcept {
-  asm volatile(ASM_PUSH_ALL_REGISTERS
+  asm volatile(
+      "testb $3, %c[cs](%%rsp)\n\t"
+      "jz 1f\n\t"
+      "swapgs\n\t"
+      "1:\n\t"
 
-               "cld\n\t"
-               "movq %%rsp, %%rdi\n\t"
-               "call %P0\n\t"
+      ASM_PUSH_ALL_REGISTERS
 
-               ASM_POP_ALL_REGISTERS
+      "cld\n\t"
+      "movq %%rsp, %%rdi\n\t"
+      "call %P[dispatch]\n\t"
 
-               "addq $16, %%rsp\n\t"
-               "iretq\n\t"
-               : /* No Output */
-               : "s"(&dispatch_legacy)
-               : "memory");
+      ASM_POP_ALL_REGISTERS
+
+      "testb $3, %c[cs](%%rsp)\n\t"
+      "jz 2f\n\t"
+      "swapgs\n\t"
+      "2:\n\t"
+      "addq $16, %%rsp\n\t"
+      "iretq\n\t"
+      : /* No Output */
+      : [dispatch] "s"(&dispatch_legacy), [cs] "i"(CS_BEFORE_PUSHES)
+      : "memory");
 }
 
 [[gnu::naked, gnu::used]] void legacy_nmi_common() noexcept {
   asm volatile(ASM_PUSH_ALL_REGISTERS
 
                "cld\n\t"
+               "movl %[gs_msr], %%ecx\n\t"
+               "rdmsr\n\t"
+               "shlq $32, %%rdx\n\t"
+               "orq %%rax, %%rdx\n\t"
+               "movq %%rdx, %%r12\n\t"
+               "movq %c[slot](%%rsp), %%rax\n\t"
+               "cmpq %%rax, %%r12\n\t"
+               "je 1f\n\t"
+               "movq %%rax, %%rdx\n\t"
+               "shrq $32, %%rdx\n\t"
+               "wrmsr\n\t"
+               "1:\n\t"
+
                "movq %%rsp, %%rdi\n\t"
-               "call %P0\n\t"
+               "call %P[dispatch]\n\t"
+
+               "cmpq %c[slot](%%rsp), %%r12\n\t"
+               "je 2f\n\t"
+               "movl %[gs_msr], %%ecx\n\t"
+               "movl %%r12d, %%eax\n\t"
+               "movq %%r12, %%rdx\n\t"
+               "shrq $32, %%rdx\n\t"
+               "wrmsr\n\t"
+               "2:\n\t"
 
                ASM_POP_ALL_REGISTERS
 
                "addq $16, %%rsp\n\t"
                "iretq\n\t"
                : /* No Output */
-               : "s"(&dispatch_legacy_nmi)
+               : [dispatch] "s"(&dispatch_legacy_nmi), [slot] "i"(NMI_PERCPU_SLOT),
+                 [gs_msr] "i"(IA32_GS_BASE)
                : "memory");
 }
 
-// FRED enters at the configured base for events from ring 3 and 256 bytes past it for events
-// from ring 0 (FRED spec 6.1), so the entry is page aligned and has both doors. The hardware
-// switches GS on the way in from ring 3 and back in ERETU, so both paths share the same body.
 [[gnu::section(".text.fred"), gnu::aligned(4096)]] void fred_entrypoint() noexcept {
   asm volatile(
       "0:\n\t"
@@ -215,18 +257,43 @@ consteval auto generate_legacy_stubs(std::index_sequence<Is...>) {
 std::array<StubPtr, IDT_SIZE> legacy_idt_stubs =
     generate_legacy_stubs(std::make_index_sequence<IDT_SIZE>{});
 
+// From ring 3, the kernel first takes back what user code may have changed under it, and on the
+// way back makes sure the thread that returns is still meant to.
 void dispatch_legacy(LegacyFrame* frame) noexcept {
   const auto event = translate_event(frame);
+  const bool from_user = event.cpl == EventCpl::Ring3;
+  if (from_user) {
+    user::clear_ac();
+  }
+
   InterruptManager::route_event(event);
+
+  if (from_user) {
+    sched::Scheduler::return_to_user();
+  }
 }
 
+// An NMI can arrive anywhere, ring 3 included, and must never switch threads.
 void dispatch_legacy_nmi(LegacyFrame* frame) noexcept {
   const auto event = translate_event(frame);
+  if (event.cpl == EventCpl::Ring3) {
+    user::clear_ac();
+  }
+
   InterruptManager::route_event(event);
 }
 
 void dispatch_fred(FredFrame* frame) noexcept {
   const auto event = translate_event(frame);
+  const bool from_user = event.cpl == EventCpl::Ring3;
+  if (from_user) {
+    user::clear_ac();
+  }
+
   InterruptManager::route_event(event);
+
+  if (from_user && event.category != EventClass::NMI) {
+    sched::Scheduler::return_to_user();
+  }
 }
 }  // namespace kernel::hw::interrupts

@@ -33,7 +33,7 @@ struct TranslationResult {
 /// **Concurrency.** Entries are only changed with atomic CAS, and every operation re-reads an
 /// entry after losing a race instead of assuming its old value. Intermediate tables are never
 /// freed while the map is alive, so a concurrent walker can never step into a freed table. The
-/// VMA layer is still expected to serialise conflicting operations on the same range.
+/// VMA layer is still expected to serialize conflicting operations on the same range.
 ///
 /// **TLB.** Every operation that removes or downgrades a translation invalidates the TLBs before
 /// it returns, through tlb::ShootdownCoordinator.
@@ -50,6 +50,7 @@ class PageMap {
   std::uint8_t m_lvls{0};
 
   static inline PhysicalAddress s_kernel_root{};
+  static inline PageMap* s_kernel_map{nullptr};
   static inline std::atomic<std::uint64_t> s_next_generation{1};
 
   static constexpr std::uint32_t MAX_PAGE_ENTRIES = 512;
@@ -107,9 +108,16 @@ class PageMap {
 
   [[nodiscard]] bool is_kernel() const noexcept { return m_root_phys == s_kernel_root; }
 
+  /// @brief The kernel map, which every CPU can go back to whatever it ran before.
+  [[nodiscard]] static PageMap* kernel() noexcept { return s_kernel_map; }
+
   explicit PageMap() noexcept;
 
   /// @brief Frees the private (lower half) page tables. The frames they map are not touched.
+  ///
+  /// CPUs that still have the map loaded are moved to the kernel's first, which is an IPI to
+  /// every CPU that ever loaded it (see tlb::ShootdownCoordinator::retire()).
+  /// @pre The calling thread can wait for other CPUs.
   ~PageMap() noexcept;
 
   PageMap(const PageMap&) = delete;

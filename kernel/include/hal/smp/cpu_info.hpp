@@ -86,6 +86,7 @@ struct CacheInfo {
   std::uint32_t ways;
   std::uint32_t line_size;
   std::uint32_t sets;
+  std::uint32_t threads_sharing;  ///< Room for this many SMT threads, not what is really there.
 };
 
 struct TlbInfo {
@@ -251,6 +252,8 @@ class alignas(std::hardware_destructive_interference_size) CpuInfo {
   std::uint32_t m_model{0};
   std::uint32_t m_processor_type{0};
 
+  CoreType m_core_type{CoreType::Unknown};
+
   std::uint32_t m_base_mhz{0};
   std::uint32_t m_max_mhz{0};
   std::uint32_t m_bus_mhz{0};
@@ -307,6 +310,9 @@ class alignas(std::hardware_destructive_interference_size) CpuInfo {
   [[nodiscard]] std::uint32_t model() const noexcept { return m_model; }
   [[nodiscard]] std::uint32_t stepping() const noexcept { return m_stepping; }
   [[nodiscard]] std::uint32_t processor_type() const noexcept { return m_processor_type; }
+
+  /// @brief Which kind of core this is, on a hybrid machine. Unknown everywhere else.
+  [[nodiscard]] CoreType core_type() const noexcept { return m_core_type; }
 
   [[nodiscard]] std::uint32_t base_mhz() const noexcept { return m_base_mhz; }
   [[nodiscard]] std::uint32_t max_mhz() const noexcept { return m_max_mhz; }

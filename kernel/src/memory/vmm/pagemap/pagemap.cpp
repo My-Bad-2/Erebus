@@ -139,12 +139,17 @@ PageMap::PageMap() noexcept
   }
 
   s_kernel_root = m_root_phys;
+  s_kernel_map = this;
 }
 
 PageMap::~PageMap() noexcept {
   if (is_kernel()) [[unlikely]] {
     utils::logger::fatal("Attempted to destroy the kernel page map!\n");
   }
+
+  // A CPU that went on to a kernel thread still runs on these tables, and the root goes back to
+  // the PMM below, kernel half and all.
+  tlb::ShootdownCoordinator::retire(this);
 
   // The upper half belongs to the kernel and is shared by everyone; only free our own half.
   free_table_recursive(m_root_phys, m_lvls, 0, KERNEL_HALF_START);

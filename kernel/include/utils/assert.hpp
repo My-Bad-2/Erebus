@@ -1,11 +1,5 @@
 /// @file assert.hpp
 /// @brief Debug-build assertions.
-///
-/// `KASSERT(cond)` panics with the condition and its location when @p cond is false. Release
-/// builds (`NDEBUG`) compile it out entirely, condition included, so the condition must not have
-/// side effects. It is meant for preconditions the caller is responsible for, such as linking
-/// an intrusive node twice or indexing past the end of a container: cheap to check during
-/// development, too hot to check in production.
 
 #pragma once
 

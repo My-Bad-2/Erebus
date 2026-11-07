@@ -47,7 +47,8 @@ set(EREBUS_QEMU_STRESS_JOBS "1" CACHE STRING
 set(EREBUS_QEMU_STRESS_TIMEOUT "120" CACHE STRING "Seconds a boot may take")
 set(EREBUS_QEMU_STRESS_ACCELERATORS "" CACHE STRING
     "Accelerators to test (empty: the one EREBUS_QEMU_ACCEL picks); tcg is slow but strict")
-set(EREBUS_QEMU_STRESS_SMP "1;2;4;8" CACHE STRING "Guest CPU counts")
+set(EREBUS_QEMU_STRESS_SMP "1;2;4;8;8,sockets=2,cores=2,threads=2" CACHE STRING
+    "Guest CPU counts. The last one has caches and cores to tell apart")
 set(EREBUS_QEMU_STRESS_MEMORY "512M;2G" CACHE STRING "Guest memory sizes")
 set(EREBUS_QEMU_STRESS_NUMA_NODES "1;2" CACHE STRING
     "NUMA node counts; memory and CPUs are split evenly between the nodes")

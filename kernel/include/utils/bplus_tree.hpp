@@ -277,6 +277,10 @@ class BPlusTree {
 
     if (node->is_leaf) {
       const std::size_t idx = search_lower_bound(node->keys, node->count, key);
+
+      // Never full on the way in: an insert that fills the last slot splits the node before it
+      // returns. The search stays within the node, so the shift below has room for one more.
+      KASSERT(idx <= node->count && node->count < MAX_PHYSICAL_KEYS);
       if (idx < node->count && node->keys[idx] == key) {
         node->values[idx] = val;
         return false;
@@ -293,6 +297,7 @@ class BPlusTree {
       ++node->count;
     } else {
       const std::size_t idx = search_upper_bound(node->keys, node->count, key);
+      KASSERT(idx <= node->count && node->count < MAX_PHYSICAL_KEYS);
 
       K child_split_key;
       Node* child_right_sib = nullptr;

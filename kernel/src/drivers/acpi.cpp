@@ -9,17 +9,12 @@
 
 namespace kernel::drivers::acpi {
 namespace {
-// uACPI keeps its table list here until the heap exists; 8 KiB holds well over a hundred
-// tables. It stores pointers in it, hence the alignment.
 alignas(16) std::byte early_buf[8192];
 
-// SPCR interface types that are programmed like a 16550 (ACPI DBG2 table, "Serial Port
-// Subtypes"): full 16550, the 16450 subset, and 16550 with GAS-described register access.
 [[nodiscard]] constexpr bool is_16550_compatible(const std::uint8_t interface_type) noexcept {
   return interface_type == 0x00 || interface_type == 0x01 || interface_type == 0x12;
 }
 
-// SPCR baud rate codes. 0 means "leave it as the firmware set it up".
 [[nodiscard]] constexpr std::uint32_t decode_baud(const std::uint8_t code) noexcept {
   switch (code) {
     case 3:
@@ -35,7 +30,6 @@ alignas(16) std::byte early_buf[8192];
   }
 }
 
-// Moves the console to the UART the firmware says to use, if it is one we can drive this early.
 void setup_spcr() noexcept {
   auto spcr_res = Table::find<"SPCR">();
   if (!spcr_res) [[unlikely]] {
@@ -43,7 +37,6 @@ void setup_spcr() noexcept {
     return;
   }
 
-  // Revision 1 and 2 tables stop right before the UART clock field of later revisions.
   const Table spcr_table = std::move(*spcr_res);
   const auto spcr_ptr = spcr_table.as<acpi_spcr>(offsetof(acpi_spcr, uart_clock_frequency));
   if (!spcr_ptr) [[unlikely]] {
@@ -58,7 +51,6 @@ void setup_spcr() noexcept {
     return;
   }
 
-  // Memory-mapped UARTs would need the VMM, which does not exist yet at this point.
   const acpi_gas& gas = spcr->base_address;
   if (gas.address_space_id != UACPI_ADDRESS_SPACE_SYSTEM_IO || gas.address == 0 ||
       gas.address > 0xFFFF) {
@@ -94,7 +86,6 @@ void setup_spcr() noexcept {
 void early_initialize() noexcept {
   if (const auto st = uacpi_setup_early_table_access(early_buf, sizeof(early_buf));
       st != UACPI_STATUS_OK) [[unlikely]] {
-    // Everything that needs a table reports it missing from here on; say why once.
     utils::logger::error("ACPI tables unavailable: {}\n", uacpi_status_to_string(st));
     return;
   }

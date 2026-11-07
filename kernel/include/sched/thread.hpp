@@ -7,9 +7,15 @@
 ///
 /// Every CPU gets a Thread around the stack it booted on before it goes online, so current()
 /// is never null from then on. That thread is the CPU's idle thread. Everything else comes from
-/// create_kernel(), starts out `Ready`, and first runs when the scheduler is told about it. When
-/// its entry function returns it turns `Dead`, calls its exit hook if it has one, and leaves the
-/// CPU for good; the scheduler then destroys it.
+/// create_kernel() or create_user(), starts out `Ready`, and first runs when the scheduler is
+/// told about it. When its entry function returns it turns `Dead`, calls its exit hook if it has
+/// one, and leaves the CPU for good; `kreaperd` then destroys it (see sched/reaper.hpp).
+///
+/// A user thread is a kernel thread whose entry function never returns: it goes to ring 3 and
+/// only comes back on interrupts. It belongs to a proc::Process, runs in that process's address
+/// space, and has a stack there as well as its kernel stack. It can only be stopped from the
+/// outside, with request_exit(), which it acts on the next time it is about to go back to user
+/// mode (see Scheduler::return_to_user()).
 ///
 /// Code that wants to drive switch_to() by hand can: a thread nobody gave to the scheduler is left
 /// alone by it. Such a thread stays the business of whoever switches to it, and has to be switched
@@ -36,7 +42,9 @@
 #include "hal/hal.hpp"
 #include "memory/address.hpp"
 #include "sched/eevdf.hpp"
+#include "sched/priority.hpp"
 #include "utils/linked_list.hpp"
+#include "utils/locks/locks.hpp"
 
 namespace kernel::proc {
 class Process;
@@ -55,8 +63,11 @@ inline constexpr std::uint32_t NO_PREFERENCE = ~0u;
 
 /// @brief Which list a Thread's SListNode base is for.
 struct RunQueueTag {};
-struct WaitQueueTag {};
 struct ReapQueueTag {};
+struct ProcessThreadTag {};  ///< The threads of a proc::Process.
+
+/// @brief The link a Mutex has on the list of its owner, see Thread::m_contended_mutexes.
+struct HeldMutexTag {};
 
 /// @brief Thread execution lifecycle states.
 enum class ThreadState : std::uint8_t {
@@ -67,36 +78,6 @@ enum class ThreadState : std::uint8_t {
   Sleeping = 4,  ///< Waiting for a monotonic timer deadline
   Dead = 5,      ///< Finished execution. Awaiting stack/TCB reclamation
 };
-
-/// @brief Scheduling priority classes used to parameterize thread weight and latency targets
-enum class PriorityClass : std::uint8_t {
-  Idle = 0,        ///< Per-CPU idle thread
-  Background = 1,  ///< Low-Priority background maintenance / compaction daemons
-  Normal = 2,      ///< Standard Kernel and User Threads (EEVDF baseline weight = 1024)
-  High = 3,        ///< Latency-sensitive kernel worker / bottom-half threads
-  RealTime = 4,    ///< Fixed-priority / immediate preemption threads
-  TestRunner = 5,  ///< Pinned in-kernel ktest runner threads
-};
-
-/// @brief Returns the canonical EEVDF scheduling weight corresponding to @p prio.
-[[nodiscard]] constexpr std::uint32_t priority_to_weight(const PriorityClass prio) noexcept {
-  switch (prio) {
-    case PriorityClass::Idle:
-      return 1;
-    case PriorityClass::Background:
-      return 256;
-    case PriorityClass::Normal:
-      return 1024;
-    case PriorityClass::High:
-      return 4096;
-    case PriorityClass::RealTime:
-      return 32768;
-    case PriorityClass::TestRunner:
-      return 65536;
-  }
-
-  return 1024;
-}
 
 /// @brief Thread flags.
 ///
@@ -115,6 +96,8 @@ enum class PriorityClass : std::uint8_t {
 ///   [24]      : uses_amx (1 = thread explicitly opted into 8 KiB of Intel AMX tile data)
 ///   [25]      : in_kernel_fpu (1 = thread is currently inside a Ring-0 FPU guard scope)
 ///   [26]      : scheduled (1 = handed to the scheduler, which owns it from then on)
+///   [27]      : migrating (1 = between two run queues, so on neither of them for a moment)
+///   [28]      : sleep_cancelled (1 = cancel_sleep() came by, for the next sleep to pick up)
 class ThreadFlags {
   std::uint32_t m_data{0};
 
@@ -138,6 +121,8 @@ class ThreadFlags {
   BF_BIT_RW(uses_amx, 24)
   BF_BIT_RW(in_kernel_fpu, 25)
   BF_BIT_RW(scheduled, 26)
+  BF_BIT_RW(migrating, 27)
+  BF_BIT_RW(sleep_cancelled, 28)
 };
 
 static_assert(sizeof(ThreadFlags) == sizeof(std::uint32_t));
@@ -211,6 +196,29 @@ struct ThreadCreateOptions {
   std::uint64_t initial_fs_base{0};
 };
 
+/// @brief Configuration options when creating a user thread.
+///
+/// A user thread always has a save area: its registers are the user's, and have to survive
+/// whatever the kernel does in between.
+struct UserThreadCreateOptions {
+  std::size_t kernel_stack_size{DEFAULT_KSTACK_SIZE};  ///< As ThreadCreateOptions::stack_size.
+  std::size_t user_stack_size{2 * 1024 * 1024};        ///< Demand paged, and it can grow.
+  PriorityClass priority{PriorityClass::Normal};
+  std::uint32_t preferred_cpu{NO_PREFERENCE};
+  std::uint32_t preferred_numa_node{NO_PREFERENCE};
+  std::uint64_t slice_ns{DEFAULT_SLICE_NS};
+  bool pinned{false};
+  bool allocate_amx{false};
+  std::uint64_t initial_fs_base{0};
+  std::uint64_t initial_gs_base{0};
+};
+
+/// @brief What Thread::stack_cache_stats() says.
+struct StackCacheStats {
+  std::uint32_t cached;  ///< Stacks kept for the next threads.
+  std::uint64_t reused;  ///< Threads that got one, so far.
+};
+
 /// @brief Why a thread is leaving its CPU, for the statistics.
 enum class SwitchReason : std::uint8_t {
   Voluntary,  ///< It asked to: it blocked, yielded or finished.
@@ -231,6 +239,9 @@ concept StatelessThreadLambda = std::is_empty_v<std::decay_t<Callable>> &&
                                 std::is_nothrow_invocable_r_v<void, std::decay_t<Callable>>;
 
 class Thread;
+class Mutex;
+class WakeList;
+struct MutexWaiter;
 
 /// @brief Returns the Thread* currently executing on the calling CPU core.
 [[nodiscard]] Thread* current() noexcept;
@@ -240,11 +251,15 @@ class Thread;
 ///
 ///         1) Validates @p prev and @p next stack canaries and stack pointer bounds.
 ///         2) Updates ns execution accounting.
-///         3) Saves/restores FPU/SSE/AVX state and switches IA32_XFD in between.
-///         4) Updates Ring-0 privilege stack.
-///         5) Switches TLS `%fs` base and PKRU.
-///         6) Updates per-cpu current thread pointer and transitions states.
-///         7) Invokes `switch_context(&prev->m_rsp, next->m_rsp)`.
+///         3) Reads back what user code may have changed by itself, if @p prev is a user thread:
+///            the FS and GS bases (with CR4.FSGSBASE) and PKRU.
+///         4) Saves/restores FPU/SSE/AVX state and switches IA32_XFD in between.
+///         5) For a user @p next: its ring-0 stack, its address space and its GS base, each only
+///            if the CPU does not have it already. A kernel @p next keeps the address space it
+///            finds (lazy TLB), as it only ever uses the kernel half.
+///         6) Switches TLS `%fs` base and PKRU.
+///         7) Updates per-cpu current thread pointer and transitions states.
+///         8) Invokes `switch_context(&prev->m_rsp, next->m_rsp)`.
 ///
 /// The stack checks stay on in release builds. They cost two loads, and a corrupted thread is
 /// better stopped here than wherever its stack happens to send it.
@@ -252,19 +267,23 @@ class Thread;
 /// @pre @p prev is the calling thread and outside any FpuGuard. @p next is not running anywhere.
 void switch_to(Thread* prev, Thread* next, SwitchReason reason = SwitchReason::Voluntary) noexcept;
 
-/// @brief A kernel thread. See the file comment.
+/// @brief A kernel thread, or a user thread. See the file comment.
 ///
 /// The Entity base is what the scheduler's fair tier knows of it. The list links are for the
-/// real-time run queues, for wait queues, and for waiting to be destroyed.
+/// real-time run queues, for waiting to be destroyed, and for the threads of a process.
 class alignas(std::hardware_destructive_interference_size) Thread
     : public Entity,
       public utils::SListNode<Thread, RunQueueTag>,
-      public utils::SListNode<Thread, WaitQueueTag>,
-      public utils::SListNode<Thread, ReapQueueTag> {
+      public utils::SListNode<Thread, ReapQueueTag>,
+      public utils::SListNode<Thread, ProcessThreadTag> {
  public:
   using RawEntryFn = void (*)(void* arg) noexcept;
   using ExitHookFn = void (*)(Thread* self, void* cookie) noexcept;
+  using DestroyHookFn = void (*)(Thread* thread, void* cookie) noexcept;
   static constexpr std::size_t MAX_NAME_LEN{24};
+
+  /// @brief How many kernel stacks are kept for new threads at most. See stack_cache_stats().
+  static constexpr std::uint32_t STACK_CACHE_SIZE{32};
 
  private:
   using ErasedEntryFn = void (*)() noexcept;
@@ -284,13 +303,33 @@ class alignas(std::hardware_destructive_interference_size) Thread
   void* m_arg{nullptr};
   ExitHookFn m_on_exit{nullptr};
   void* m_exit_cookie{nullptr};
+  DestroyHookFn m_on_destroy{nullptr};
+  void* m_destroy_cookie{nullptr};
   proc::Process* m_process{nullptr};
   std::uint32_t m_preferred_numa_node{NO_PREFERENCE};
+
+  // Where a user thread starts in ring 3, and its stack there, in its process's address space.
+  memory::VirtualAddress m_user_entry{};
+  std::uint64_t m_user_arg{0};
+  memory::VirtualAddress m_user_stack_base{};
+  memory::VirtualAddress m_user_stack_top{};
 
   ThreadStats m_stats{};
   std::array<char, MAX_NAME_LEN> m_name{};
 
+  std::atomic<std::uint32_t> m_retained{0};   ///< See retain().
+  std::atomic<Thread*> m_wake_next{nullptr};  ///< Next on a WakeList; null if on none.
+
+  // Priority inheritance, all of it under m_pi_lock. See mutex.hpp for how that fits in.
+  utils::QSpinlock m_pi_lock{};
+  Priority m_base_priority{};          ///< What the thread is by itself.
+  Priority m_effective_priority{};     ///< That, or what it inherited if that is more.
+  MutexWaiter* m_blocked_on{nullptr};  ///< Its place in line for a Mutex, if it is in one.
+  utils::SList<Mutex, HeldMutexTag> m_contended_mutexes{};  ///< Held, and someone is in line.
+
   friend void switch_to(Thread* prev, Thread* next, SwitchReason reason) noexcept;
+  friend class Mutex;
+  friend class WakeList;
 
   template <typename Mutator>
     requires std::invocable<Mutator, ThreadFlags>
@@ -315,7 +354,10 @@ class alignas(std::hardware_destructive_interference_size) Thread
 
   void prepare_initial_stack() noexcept;
   void release_fpu_storage() noexcept;
+  void release_user_stack() noexcept;
   void set_name(std::string_view name) noexcept;
+
+  [[noreturn]] static void user_thread_start(void* self) noexcept;
 
  public:
   Thread() noexcept = default;
@@ -373,6 +415,31 @@ class alignas(std::hardware_destructive_interference_size) Thread
     return create_kernel(name, [](void*) noexcept { Decayed{}(); }, nullptr, opts);
   }
 
+  /// @brief Creates a user thread of @p process, which starts at @p entry in ring 3 with @p arg
+  ///        in RDI and a fresh stack in the process's address space.
+  ///
+  /// The stack pointer starts eight bytes below the top of that stack, where a call would have
+  /// left a return address, so @p entry can be an ordinary function. That return address is
+  /// zero: a function that returns ends up at address zero, and its process with it.
+  ///
+  /// This only makes the thread. A process links it into its own list and hands it to the
+  /// scheduler (see proc::Process::spawn_thread()).
+  /// @return The thread, or Error::InvalidArgument for a process without an address space or an
+  ///         @p entry user code cannot have, Error::OutOfMemory, and whatever create_kernel()
+  ///         says about the kernel side.
+  [[nodiscard]] static auto create_user(std::string_view name, proc::Process* process,
+                                        memory::VirtualAddress entry, std::uint64_t arg = 0,
+                                        const UserThreadCreateOptions& opts = {}) noexcept
+      -> std::expected<Thread*, Error>;
+
+  /// @brief How many kernel stacks are kept for new threads, and how often one was taken.
+  ///
+  /// Stacks of the default size do not go back to the VMM when their thread is destroyed, as long
+  /// as there is room: the next thread takes one that is mapped already, and nothing has to be
+  /// unmapped or shot down from the TLBs. Under memory pressure they go back after all (see
+  /// memory/shrinker.hpp).
+  [[nodiscard]] static StackCacheStats stack_cache_stats() noexcept;
+
   /// @brief Wraps the calling CPU's boot stack into a live `Running` idle thread, and makes it the
   ///        CPU's current one.
   /// @param cpu_id     The calling CPU.
@@ -388,10 +455,11 @@ class alignas(std::hardware_destructive_interference_size) Thread
       -> std::expected<Thread*, Error>;
 
   /// @brief Destroys a `Dead` or never-started thread, releasing its kernel stack (if not
-  ///        borrowed), FPU save area, and TCB slab object.
+  ///        borrowed), its user stack, FPU save area, and TCB slab object.
   ///
   /// `Dead` alone does not mean that a thread has left its stack: it is still on it while its exit
-  /// hook runs. Whoever calls this has to know it is gone.
+  /// hook runs. Whoever calls this has to know it is gone. The destroy hook runs last, with the
+  /// thread still there to look at but no longer able to run.
   ///
   /// @return Error::InvalidArgument for null, Error::InvalidState for the calling thread, one that
   ///         started and has not finished, or one the scheduler has and that is not dead yet.
@@ -433,15 +501,33 @@ class alignas(std::hardware_destructive_interference_size) Thread
     update_flags([new_state](ThreadFlags f) { return f.with_state(new_state); });
   }
 
+  /// @brief The class the thread competes in, which may be one it inherited.
   [[nodiscard]] PriorityClass priority_class() const noexcept {
     return flags().get_priority_class();
   }
 
+  /// @brief What the thread is by itself, whatever it may have inherited.
+  [[nodiscard]] constexpr Priority base_priority() const noexcept { return m_base_priority; }
+
   /// @brief Moves the thread to another priority class, and to the weight that goes with it.
-  /// @pre The thread is neither running nor on a run queue.
+  /// @pre The thread is neither running nor on a run queue, and nobody waits for a Mutex it holds.
   void set_priority_class(PriorityClass prio) noexcept {
+    m_base_priority = Priority::of(prio);
+    m_effective_priority = m_base_priority;
+    adopt_priority(m_base_priority);
+  }
+
+  /// @brief Competes with @p priority from now on. RunQueue::set_priority_locked() does this for a
+  ///        thread that is on a queue.
+  /// @pre The thread is on no queue. It goes by the lock of the queue it last ran on.
+  void adopt_priority(const Priority priority) noexcept {
+    adopt_priority_class(priority.priority_class);
+    set_weight(priority.weight);
+  }
+
+  /// @brief Just the class, for a thread whose weight is being taken care of.
+  void adopt_priority_class(const PriorityClass prio) noexcept {
     update_flags([prio](ThreadFlags f) { return f.with_priority_class(prio); });
-    set_weight(priority_to_weight(prio));
   }
 
   [[nodiscard]] bool is_kthread() const noexcept { return flags().get_is_kthread(); }
@@ -452,6 +538,10 @@ class alignas(std::hardware_destructive_interference_size) Thread
   [[nodiscard]] bool in_kernel_fpu() const noexcept { return flags().get_in_kernel_fpu(); }
   [[nodiscard]] bool on_runqueue() const noexcept { return flags().get_on_runqueue(); }
   [[nodiscard]] bool exit_requested() const noexcept { return flags().get_exit_requested(); }
+  [[nodiscard]] bool migrating() const noexcept { return flags().get_migrating(); }
+
+  /// @brief Whether someone is in line for a Mutex this thread holds. A rough look for assertions.
+  [[nodiscard]] bool holds_contended_mutex() const noexcept { return !m_contended_mutexes.empty(); }
 
   void set_on_runqueue(bool on_rq) noexcept {
     update_flags([on_rq](ThreadFlags f) { return f.with_on_runqueue(on_rq); });
@@ -459,8 +549,72 @@ class alignas(std::hardware_destructive_interference_size) Thread
 
   /// @brief Records that the thread is waiting on a run queue, in one atomic step.
   void mark_queued() noexcept {
-    update_flags([](ThreadFlags f) { return f.with_on_runqueue().with_state(ThreadState::Ready); });
+    update_flags([](ThreadFlags f) {
+      return f.with_on_runqueue().without_migrating().with_state(ThreadState::Ready);
+    });
   }
+
+  /// @brief Records that the thread is runnable and on its way to a run queue.
+  ///
+  /// With only one queue locked at a time, there is a moment when it is on none. Nobody may touch
+  /// what a queue relies on until it arrives, which is what Scheduler::apply_priority() waits for.
+  void mark_migrating() noexcept {
+    update_flags([](ThreadFlags f) {
+      return f.with_migrating().without_on_runqueue().with_state(ThreadState::Ready);
+    });
+  }
+
+  /// @brief Ends a block or a sleep, as one step, and only if the thread is still in one.
+  ///
+  /// A thread that is running changes its own state without asking anyone. Looking first and
+  /// writing afterwards would let it get on with things in between, all the way to being `Dead`,
+  /// and then bring it back to life.
+  /// @param next Running, for a thread that never left its CPU. Ready and on its way to a queue,
+  ///             with Thread::mark_migrating(), for one that did.
+  /// @return false if it was neither blocked nor asleep.
+  [[nodiscard]] bool try_unblock(const ThreadState next) noexcept {
+    std::uint32_t cur = m_flags.load(std::memory_order_relaxed);
+
+    while (true) {
+      const ThreadFlags flags{cur};
+      const ThreadState state = flags.get_state();
+      if (state != ThreadState::Blocked && state != ThreadState::Sleeping) {
+        return false;
+      }
+
+      const ThreadFlags wanted =
+          next == ThreadState::Running
+              ? flags.with_state(ThreadState::Running)
+              : flags.with_migrating().without_on_runqueue().with_state(ThreadState::Ready);
+
+      if (m_flags.compare_exchange_weak(cur, wanted.raw(), std::memory_order_acq_rel,
+                                        std::memory_order_relaxed)) {
+        return true;
+      }
+    }
+  }
+
+  /// @brief Leaves a mark for the thread to find in its next sleep, which may be the current one.
+  void request_sleep_cancel() noexcept {
+    update_flags([](ThreadFlags f) { return f.with_sleep_cancelled(); });
+  }
+
+  /// @brief Takes the mark request_sleep_cancel() left.
+  /// @return Whether there was one.
+  [[nodiscard]] bool take_sleep_cancel() noexcept {
+    const std::uint32_t mask = ThreadFlags{}.with_sleep_cancelled().raw();
+    return (m_flags.fetch_and(~mask, std::memory_order_acq_rel) & mask) != 0;
+  }
+
+  /// @brief Keeps the thread's memory around until release().
+  ///
+  /// Whoever found a thread under a lock can go on using it without the lock this way. A wakeup
+  /// needs that: once off the queue, the thread can finish waiting for another reason and be
+  /// destroyed before the wakeup gets to it. Thread::destroy() waits for this to end, so it is only
+  /// for code that cannot be preempted in the meantime.
+  void retain() noexcept { m_retained.fetch_add(1, std::memory_order_relaxed); }
+
+  void release() noexcept { m_retained.fetch_sub(1, std::memory_order_release); }
 
   /// @brief Hands the thread to the scheduler, which only works once.
   ///
@@ -494,6 +648,15 @@ class alignas(std::hardware_destructive_interference_size) Thread
     m_exit_cookie = cookie;
   }
 
+  /// @brief Sets what runs when the thread is destroyed, on whatever destroys it.
+  ///
+  /// The thread is gone from every CPU by then and its stacks are released, so this is the place
+  /// for whoever keeps track of it to let go. A process counts its threads this way.
+  void set_destroy_hook(DestroyHookFn hook, void* cookie = nullptr) noexcept {
+    m_on_destroy = hook;
+    m_destroy_cookie = cookie;
+  }
+
   [[nodiscard]] constexpr memory::VirtualAddress saved_rsp() const noexcept { return m_rsp; }
   [[nodiscard]] constexpr memory::VirtualAddress* saved_rsp_ptr() noexcept { return &m_rsp; }
   [[nodiscard]] constexpr memory::VirtualAddress stack_base() const noexcept {
@@ -507,6 +670,12 @@ class alignas(std::hardware_destructive_interference_size) Thread
     return m_cpu_id.load(std::memory_order_acquire);
   }
 
+  /// @brief Says which run queue the thread belongs to from now on.
+  ///
+  /// Only under the lock of the queue it belongs to so far, or before the scheduler has it. That
+  /// is the rule that makes "lock the queue cpu_id() names, then look again" mean anything: as long
+  /// as the lock is held, the thread cannot be anywhere else, and nothing can take it away. Waking
+  /// a thread or stealing it decides where it goes next before letting go of that lock.
   void set_cpu_id(const std::uint32_t cpu) noexcept {
     m_cpu_id.store(cpu, std::memory_order_release);
   }
@@ -521,6 +690,22 @@ class alignas(std::hardware_destructive_interference_size) Thread
 
   [[nodiscard]] constexpr proc::Process* process() const noexcept { return m_process; }
   constexpr void set_process(proc::Process* proc) noexcept { m_process = proc; }
+
+  /// @brief Whether the thread runs user code: one of a process, which goes to ring 3.
+  [[nodiscard]] bool is_user() const noexcept { return !is_kthread(); }
+
+  [[nodiscard]] constexpr memory::VirtualAddress user_entry() const noexcept {
+    return m_user_entry;
+  }
+
+  /// @brief The lowest address of the user stack, as it was made: it can grow below this.
+  [[nodiscard]] constexpr memory::VirtualAddress user_stack_base() const noexcept {
+    return m_user_stack_base;
+  }
+
+  [[nodiscard]] constexpr memory::VirtualAddress user_stack_top() const noexcept {
+    return m_user_stack_top;
+  }
 
   [[nodiscard]] constexpr ArchitecturalState& arch_state() noexcept { return m_arch; }
   [[nodiscard]] constexpr const ArchitecturalState& arch_state() const noexcept { return m_arch; }

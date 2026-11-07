@@ -1,8 +1,8 @@
 /// @file avl_tree.hpp
 /// @brief Intrusive height-balanced search tree.
 ///
-/// Items derive from AvlNode and carry their own links, so the tree never allocates, and a thing
-/// that goes into one can never fail to. That is what keeps it usable from an interrupt handler
+/// Items carry their own links in an AvlNode, so the tree never allocates, and a thing that goes
+/// into one can never fail to. That is what keeps it usable from an interrupt handler
 /// or with a spinlock held, where the BPlusTree next door is not.
 ///
 /// Every operation walks at most the height of the tree, which an AVL tree keeps to about 1.44
@@ -52,20 +52,47 @@ concept AvlTraits = requires(const T& a, const T& b, T& item) {
   { Traits::update(item) } noexcept -> std::same_as<void>;
 };
 
-/// @brief Intrusive search tree of @p T, which must derive from AvlNode.
+/// @brief Traits that say where an item keeps its links, for items that hold an AvlNode rather
+///        than derive from one.
+template <typename Traits, typename T>
+concept AvlMemberNode = requires(const T& item, const AvlNode* node) {
+  { Traits::node(item) } noexcept -> std::same_as<const AvlNode&>;
+  { Traits::item(node) } noexcept -> std::same_as<const T*>;
+};
+
+/// @brief Intrusive search tree of @p T.
 ///
 /// @tparam Traits `static bool less(const T&, const T&)` gives the order, which must not change
 ///                while an item is in the tree. `static void update(T&)` recomputes whatever the
 ///                item keeps about its subtree; it can use left() and right(), whose updates are
 ///                done by then, and can be empty.
 ///
+/// An item either derives from AvlNode, or holds one and @p Traits says where (AvlMemberNode).
+/// The second keeps the item a standard-layout type if the AvlNode is its only base: a class whose
+/// base and itself both have data members is not one, and neither is anything that contains it,
+/// which rules out offsetof() for whatever holds such an item.
+///
 /// Items that compare equal stay in the order they went in. The tree does not own its items.
 template <typename T, typename Traits>
 class AvlTree {
   AvlNode* m_root{nullptr};
 
-  [[nodiscard]] static constexpr T* item_of(AvlNode* node) noexcept {
-    return static_cast<T*>(node);
+  // The links of an item, and the item of some links. The tree only ever changes the links, so
+  // casting away the const of an item it is handed only makes the links writable.
+  [[nodiscard]] static constexpr AvlNode* node_of(const T& item) noexcept {
+    if constexpr (AvlMemberNode<Traits, T>) {
+      return const_cast<AvlNode*>(&Traits::node(item));
+    } else {
+      return const_cast<AvlNode*>(static_cast<const AvlNode*>(&item));
+    }
+  }
+
+  [[nodiscard]] static constexpr T* item_of(const AvlNode* node) noexcept {
+    if constexpr (AvlMemberNode<Traits, T>) {
+      return node != nullptr ? const_cast<T*>(Traits::item(node)) : nullptr;
+    } else {
+      return const_cast<T*>(static_cast<const T*>(node));
+    }
   }
 
   [[nodiscard]] static constexpr int height(const AvlNode* node) noexcept {
@@ -161,10 +188,8 @@ class AvlTree {
 
     const bool links_hold = (left == nullptr || left->m_parent == node) &&
                             (right == nullptr || right->m_parent == node);
-    const bool order_holds = (left == nullptr || !Traits::less(*static_cast<const T*>(node),
-                                                               *static_cast<const T*>(left))) &&
-                             (right == nullptr || !Traits::less(*static_cast<const T*>(right),
-                                                                *static_cast<const T*>(node)));
+    const bool order_holds = (left == nullptr || !Traits::less(*item_of(node), *item_of(left))) &&
+                             (right == nullptr || !Traits::less(*item_of(right), *item_of(node)));
 
     const int balance = height(left) - height(right);
     const bool balance_holds = balance >= -1 && balance <= 1 &&
@@ -186,16 +211,16 @@ class AvlTree {
   [[nodiscard]] constexpr T* root() const noexcept { return item_of(m_root); }
 
   [[nodiscard]] static constexpr T* left(const T& item) noexcept {
-    return item_of(static_cast<const AvlNode&>(item).m_left);
+    return item_of(node_of(item)->m_left);
   }
 
   [[nodiscard]] static constexpr T* right(const T& item) noexcept {
-    return item_of(static_cast<const AvlNode&>(item).m_right);
+    return item_of(node_of(item)->m_right);
   }
 
   /// @brief Puts @p item in the tree, behind any it compares equal to.
   void insert(T& item) noexcept {
-    AvlNode* node = &item;
+    AvlNode* node = node_of(item);
     AvlNode* parent = nullptr;
     AvlNode** link = &m_root;
 
@@ -214,7 +239,7 @@ class AvlTree {
 
   /// @brief Takes @p item out of the tree.
   void erase(T& item) noexcept {
-    AvlNode* node = &item;
+    AvlNode* node = node_of(item);
     AvlNode* retrace_from = nullptr;
 
     if (node->m_left != nullptr && node->m_right != nullptr) {
@@ -281,7 +306,7 @@ class AvlTree {
 
   /// @brief The item right after @p item, or null.
   [[nodiscard]] static T* next(const T& item) noexcept {
-    const AvlNode* node = &item;
+    const AvlNode* node = node_of(item);
 
     if (node->m_right != nullptr) {
       AvlNode* lowest = node->m_right;
@@ -303,7 +328,7 @@ class AvlTree {
 
   /// @brief The item right before @p item, or null.
   [[nodiscard]] static T* prev(const T& item) noexcept {
-    const AvlNode* node = &item;
+    const AvlNode* node = node_of(item);
 
     if (node->m_left != nullptr) {
       AvlNode* highest = node->m_left;

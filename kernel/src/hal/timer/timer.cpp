@@ -57,8 +57,7 @@ bool Timer::cancel() noexcept {
 
     utils::IrqSaveGuard guard{*queue};
 
-    // It can have moved in the meantime. This queue's lock only means something if it is still
-    // here.
+    // It can have moved in the meantime. This queue's lock is only effective if it is still here.
     if (m_queue.load(std::memory_order_acquire) == queue) {
       queue->unlink_locked(*this);
       m_queue.store(nullptr, std::memory_order_release);
@@ -159,8 +158,8 @@ void TimerQueue::reprogram_locked() noexcept {
     return;
   }
 
-  // One reading of the clock, so that the two sides of the conversion agree. How far off it can
-  // be depends on how far ahead the timer is, however long the machine has been running.
+  // One reading of the clock, so that the two sides of the conversion agree. How far off it can be
+  // depends on how far ahead the timer is, however long the machine has been running.
   const std::uint64_t raw = drivers::SystemClock::raw_ticks();
   const std::uint64_t now = drivers::SystemClock::raw_to_ns(raw);
   const std::uint64_t delay = std::min(target_ns > now ? target_ns - now : 0, m_hardware_limit_ns);
@@ -173,6 +172,22 @@ void TimerQueue::reprogram_locked() noexcept {
 void TimerQueue::reprogram() noexcept {
   utils::IrqSaveGuard guard{*this};
   reprogram_locked();
+}
+
+void TimerQueue::prepare_for_idle() noexcept {
+  utils::IrqSaveGuard guard{*this};
+
+  if (!m_has_hardware || m_armed_ns == NOT_ARMED) {
+    return;
+  }
+
+  if (m_first == nullptr) {
+    m_armed_ns = NOT_ARMED;
+    percpu::lapic().stop_timer();
+  } else if (m_first->m_fire_ns > m_armed_ns) {
+    m_armed_ns = NOT_ARMED;
+    reprogram_locked();
+  }
 }
 
 bool TimerQueue::add(Timer& timer, const klib::TimePoint deadline,
@@ -221,8 +236,7 @@ bool TimerQueue::add(Timer& timer, const klib::TimePoint deadline,
 void TimerQueue::run(Timer& timer, std::uint64_t& now_ns) noexcept {
   if (m_has_hardware) {
     if (timer.m_precision == TimerPrecision::Exact) {
-      // Bounded by the advance it went off with, which has an upper limit. No PAUSE in here: it
-      // can take longer than the rest of the loop, and every cycle is a part of the error.
+      // Bounded by the advance it went off with, which has an upper limit.
       while (now_ns < timer.m_deadline_ns) {
         now_ns = clock_ns();
       }
@@ -261,8 +275,12 @@ std::uint32_t TimerQueue::expire(std::uint64_t now_ns) noexcept {
     }
 
     unlink_locked(*timer);
-    timer->m_queue.store(nullptr, std::memory_order_release);
+
+    // In this order. Between the two a timer must not look like it is neither waiting nor running,
+    // or cancel_sync() on another CPU would take that for nothing being left, and whoever owns the
+    // timer would free it right before the callback gets to it.
     timer->m_running_on.store(this, std::memory_order_release);
+    timer->m_queue.store(nullptr, std::memory_order_release);
     unlock();
 
     run(*timer, now_ns);

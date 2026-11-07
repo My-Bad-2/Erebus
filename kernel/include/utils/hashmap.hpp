@@ -32,7 +32,7 @@ inline constexpr std::uint64_t MSB = 0x8080808080808080ul;
 
 /// @brief One 64x64->128 bit multiply, folded. Every output bit depends on every input bit, so
 ///        keys that only differ in a few low bits (page numbers, aligned addresses) spread out.
-[[nodiscard, gnu::always_inline]] constexpr std::uint64_t hash(const std::uint64_t key) noexcept {
+[[nodiscard, gnu::always_inline]] constexpr std::uint64_t hash(std::uint64_t key) noexcept {
   const __uint128_t product =
       static_cast<__uint128_t>(key ^ 0x9E3779B97F4A7C15ul) * 0xBF58476D1CE4E5B9ul;
   return static_cast<std::uint64_t>(product) ^ static_cast<std::uint64_t>(product >> 64);
@@ -43,22 +43,21 @@ inline constexpr std::uint64_t MSB = 0x8080808080808080ul;
 /// The usual "has zero byte" trick. It can flag a byte right above a real match as well, which
 /// for signatures only costs an extra key comparison. For CTRL_EMPTY it is exact: a false hit
 /// would need a 0x81 control byte, which never exists.
-[[nodiscard, gnu::always_inline]] constexpr std::uint64_t match(const std::uint64_t group,
-                                                                const std::uint8_t ctrl) noexcept {
+[[nodiscard, gnu::always_inline]] constexpr std::uint64_t match(std::uint64_t group,
+                                                                std::uint8_t ctrl) noexcept {
   const std::uint64_t x = group ^ (LSB * ctrl);
   return (x - LSB) & ~x & MSB;
 }
 
 /// @brief High bit of every free (empty or deleted) byte of @p group.
-[[nodiscard, gnu::always_inline]] constexpr std::uint64_t match_free(
-    const std::uint64_t group) noexcept {
+[[nodiscard, gnu::always_inline]] constexpr std::uint64_t match_free(std::uint64_t group) noexcept {
   return group & MSB;
 }
 
 [[nodiscard, gnu::always_inline]] inline std::uint64_t load_group(
     const std::uint8_t* ctrl) noexcept {
   std::uint64_t group;
-  __builtin_memcpy(&group, ctrl, sizeof(group));
+  klib::memcpy(&group, ctrl, sizeof(group));
   return group;
 }
 }  // namespace detail::swiss
@@ -114,23 +113,21 @@ class FastHashMap {
 
   [[nodiscard]] Hashed locate(const K key) noexcept {
     const std::uint64_t hash = detail::swiss::hash(key);
-    const auto shard = static_cast<std::size_t>((hash >> (57 - SHARD_BITS)) & (NumShards - 1));
+    const auto shard = (hash >> (57 - SHARD_BITS)) & (NumShards - 1);
     return {hash, static_cast<std::uint8_t>(hash >> 57), &m_shards[shard]};
   }
 
-  [[nodiscard]] static std::uint32_t first_group(const Table* tbl,
-                                                 const std::uint64_t hash) noexcept {
+  [[nodiscard]] static std::uint32_t first_group(const Table* tbl, std::uint64_t hash) noexcept {
     return static_cast<std::uint32_t>(hash) & tbl->mask & ~(GROUP - 1);
   }
 
-  [[nodiscard]] static std::uint32_t next_group(const Table* tbl,
-                                                const std::uint32_t idx) noexcept {
+  [[nodiscard]] static std::uint32_t next_group(const Table* tbl, std::uint32_t idx) noexcept {
     return (idx + GROUP) & tbl->mask;
   }
 
   // Tables come straight from kmalloc so that running out of memory is an error the caller
   // sees, not a panic in operator new.
-  [[nodiscard]] static Table* allocate_table(const std::uint32_t capacity) noexcept {
+  [[nodiscard]] static Table* allocate_table(std::uint32_t capacity) noexcept {
     const std::size_t bytes = sizeof(Table) + sizeof(Entry) * capacity + capacity;
     auto* tbl = static_cast<Table*>(memory::heap::kmalloc(bytes, alignof(Table)));
     if (!tbl) {
@@ -169,8 +166,8 @@ class FastHashMap {
   }
 
   // Inserts a key known to be absent into a table known to have room.
-  static void insert_unique(Table* tbl, const K key, V* value, const std::uint8_t sig,
-                            const std::uint64_t hash) noexcept {
+  static void insert_unique(Table* tbl, const K key, V* value, std::uint8_t sig,
+                            std::uint64_t hash) noexcept {
     using namespace detail::swiss;
 
     for (std::uint32_t idx = first_group(tbl, hash);; idx = next_group(tbl, idx)) {

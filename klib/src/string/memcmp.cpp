@@ -5,15 +5,15 @@ namespace klib {
 namespace {
 // memcmp()'s answer for the first differing `T` among the offsets, which go from low to high.
 template <typename T, typename... Offsets>
-[[gnu::always_inline]] inline int compare_chunks(const std::uintptr_t p1, const std::uintptr_t p2,
-                                                 const Offsets... offsets) noexcept {
+[[gnu::always_inline]] int compare_chunks(std::uintptr_t p1, std::uintptr_t p2,
+                                          Offsets... offsets) noexcept {
   int diff = 0;
   (void)(((diff = string::check_chunk<T>(p1, p2, static_cast<std::size_t>(offsets))) != 0) || ...);
   return diff;
 }
 }  // namespace
 
-int memcmp(const void* s1, const void* s2, const size_t count) noexcept {
+int memcmp(const void* s1, const void* s2, std::size_t count) noexcept {
   if (count == 0 || s1 == s2) [[unlikely]] {
     return 0;
   }

@@ -1,9 +1,3 @@
-# Publishes a release of the commit it runs on: a Release build of the kernel for every
-# EREBUS_ARCH_LEVEL that cmake/CompilerFlags.cmake offers, as bootable ISOs and ELFs. The version
-# is the one in CMakeLists.txt, which is also what the kernel reports, and the tag is v<version>.
-#
-# Nothing is published unless the kernel tests pass, and each level's own test kernel passes on
-# the runner too, where the runner's CPU can run that level.
 name: Release
 
 on:
@@ -200,7 +194,7 @@ jobs:
             echo "x86-64 target the build supports. Take the most specific one your CPU can run;"
             echo "\`x86-64-v2\` runs on anything since Intel Nehalem and AMD Bulldozer. Next to each"
             echo "image is its kernel as an ELF with symbols, for debuggers, and SHA256SUMS has the"
-            echo "checksums of everything."
+            echo "checksums of every file."
             echo
             echo "| Target | Kernel tests |"
             echo "| --- | --- |"

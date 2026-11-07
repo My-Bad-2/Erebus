@@ -2,7 +2,7 @@
 #include "string.h"
 
 namespace klib {
-void* memmove(void* dest, const void* src, size_t count) noexcept {
+void* memmove(void* dest, const void* src, std::size_t count) noexcept {
   using string::transfer;
 
   if (count == 0 || dest == src) [[unlikely]] {

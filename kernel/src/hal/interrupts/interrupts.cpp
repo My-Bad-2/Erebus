@@ -54,15 +54,16 @@ struct FredStklvls {
  public:
   std::uint64_t raw() const noexcept { return m_data; }
 
-  [[nodiscard]] constexpr uint8_t get_exception_level(const InterruptVector vector) const noexcept {
-    if (vector >= InterruptVector::ExternalInterruptStart) [[unlikely]]
+  [[nodiscard]] constexpr uint8_t get_exception_level(InterruptVector vector) const noexcept {
+    if (vector >= InterruptVector::ExternalInterruptStart) [[unlikely]] {
       return 0;
+    }
 
     return (m_data >> (std::to_underlying(vector) * 2)) & 0b11;
   }
 
-  constexpr auto with_exception_level(const InterruptVector vector,
-                                      const FredStackLevel level) const noexcept {
+  constexpr FredStklvls with_exception_level(InterruptVector vector,
+                                             FredStackLevel level) const noexcept {
     FredStklvls copy = *this;
     if (vector < InterruptVector::ExternalInterruptStart) [[likely]] {
       const std::uint64_t shift = std::to_underlying(vector) * 2;
@@ -85,35 +86,31 @@ struct FredPointer {
 
 void initialize(const memory::VirtualAddress ring0_rsp,
                 memory::VirtualAddress ring0_critical_rsp) noexcept {
-  FredConfig config{};
-
   const auto entrypoint_addr = memory::VirtualAddress{&fred_entrypoint};
-  if (!entrypoint_addr.is_aligned(memory::PAGE_SIZE)) [[unlikely]]
+  if (!entrypoint_addr.is_aligned(memory::PAGE_SIZE)) [[unlikely]] {
     utils::logger::fatal("FRED entrypoint address is not aligned to page size!\n");
+  }
 
-  config.set_entrypoint_base(entrypoint_addr.value() >> memory::PAGE_SHIFT_4KB);
-  config.set_software_event_stack_level(FredStackLevel::Level0);
-  config.set_maskable_int_stack_level(FredStackLevel::Level0);
-  config.set_critical_event_stack_level(FredStackLevel::Level1);
-  config.set_redzone_reservation(FredRedzone::Disabled);
+  const auto config = FredConfig{}
+                          .with_entrypoint_base(entrypoint_addr.value() >> memory::PAGE_SHIFT_4KB)
+                          .with_software_event_stack_level(FredStackLevel::Level0)
+                          .with_maskable_int_stack_level(FredStackLevel::Level0)
+                          .with_critical_event_stack_level(FredStackLevel::Level1)
+                          .with_redzone_reservation(FredRedzone::Disabled);
 
   write::msr(std::to_underlying(FredMsr::Config), config.raw());
 
-  FredStklvls stklvls{};
-  stklvls =
-      stklvls.with_exception_level(InterruptVector::NonMaskableInterrupt, FredStackLevel::Level1);
-  stklvls = stklvls.with_exception_level(InterruptVector::DoubleFault, FredStackLevel::Level1);
-  stklvls = stklvls.with_exception_level(InterruptVector::MachineCheck, FredStackLevel::Level1);
+  constexpr auto stklvls =
+      FredStklvls{}
+          .with_exception_level(InterruptVector::NonMaskableInterrupt, FredStackLevel::Level1)
+          .with_exception_level(InterruptVector::MachineCheck, FredStackLevel::Level1);
   write::msr(std::to_underlying(FredMsr::Stklvls), stklvls.raw());
 
-  FredPointer rsp0{};
-  rsp0.set_ptr(ring0_rsp.value());
+  const auto rsp0 = FredPointer{}.with_ptr(ring0_rsp.value());
+  const auto rsp1 = FredPointer{}.with_ptr(ring0_critical_rsp.value());
+
   write::msr(std::to_underlying(FredMsr::Rsp0), rsp0.raw());
-
-  FredPointer rsp1{};
-  rsp1.set_ptr(ring0_critical_rsp.value());
   write::msr(std::to_underlying(FredMsr::Rsp1), rsp1.raw());
-
   write::msr(std::to_underlying(FredMsr::Rsp2), 0);
   write::msr(std::to_underlying(FredMsr::Rsp3), 0);
 
@@ -161,10 +158,8 @@ struct [[gnu::packed]] IDTR {
 };
 
 alignas(16) std::array<IDTEntry, IDT_SIZE> g_idt_table{};
-std::atomic<bool> g_idt_built{false};
+std::atomic g_idt_built{false};
 
-// The table is shared by every CPU. The BSP fills it in before any AP starts, which is why the
-// flag needs no more than acquire/release.
 void build_idt() noexcept {
   for (std::size_t vec = 0; vec < IDT_SIZE; ++vec) {
     const auto handler = reinterpret_cast<void*>(legacy_idt_stubs[vec]);

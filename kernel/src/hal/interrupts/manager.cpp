@@ -74,7 +74,7 @@ void InterruptManager::register_handler(const std::uint8_t vector,
 
   if (was_empty) [[likely]] {
     direct_callback = reg->m_callback;
-    direct_dpc = reg->m_dpc;
+    direct_dpc = reg->deferred_call();
     direct_ctx = reg->m_ctx;
   } else {
     direct_callback = nullptr;
@@ -85,38 +85,40 @@ void InterruptManager::unregister_handler(const std::uint8_t vector,
                                           InterruptRegistration* reg) noexcept {
   auto& [lock, direct_callback, direct_dpc, direct_ctx, list, lvl_triggered, ioapic] =
       s_slots[vector];
-  utils::IrqSaveGuard guard(lock);
-  list.remove(*reg);
 
-  const auto it = list.begin();
-  if (it != list.end()) {
-    auto next = it;
-    ++next;
+  {
+    utils::IrqSaveGuard guard(lock);
+    list.remove(*reg);
 
-    if (next == list.end()) {
-      direct_callback = it->m_callback;
-      direct_dpc = it->m_dpc;
-      direct_ctx = it->m_ctx;
-      return;
+    direct_callback = nullptr;
+
+    const auto it = list.begin();
+    if (it != list.end()) {
+      auto next = it;
+      ++next;
+
+      if (next == list.end()) {
+        direct_callback = it->m_callback;
+        direct_dpc = it->deferred_call();
+        direct_ctx = it->m_ctx;
+      }
     }
   }
 
-  direct_callback = nullptr;
+  // No new interrupt gets to it from here on, so this ends.
+  reg->m_dpc.flush();
 }
 
 void InterruptManager::route_event(const Event& event) noexcept {
   if (event.category == EventClass::Interrupt) [[likely]] {
     // The local APIC raises the spurious vector when an interrupt goes away before it could be
-    // delivered. Nothing is in service, so there is nothing to acknowledge either: an EOI here
-    // would retire some other interrupt.
+    // delivered. Nothing is in service, so there is nothing to acknowledge either.
     if (event.vector == std::to_underlying(InterruptVector::LocalApicSpurious)) [[unlikely]] {
       return;
     }
 
     percpu::hardirq_enter();
-
-    auto& [lock, direct_callback, direct_dpc, direct_ctx, list, lvl_triggered, ioapic] =
-        s_slots[event.vector];
+    auto& slot = s_slots[event.vector];
 
     bool handled = false;
     bool yield = false;
@@ -125,20 +127,20 @@ void InterruptManager::route_event(const Event& event) noexcept {
     // every CPU at once and the handler is free to take locks or wait for other CPUs (TLB
     // shootdowns do). Registration happens at init time; a snapshot is all that is needed.
     Callback callback;
-    DpcCallback dpc;
+    sched::Dpc* dpc;
     void* ctx;
     {
-      utils::NakedGuard guard(lock);
-      callback = direct_callback;
-      dpc = direct_dpc;
-      ctx = direct_ctx;
+      utils::NakedGuard guard(slot.lock);
+      callback = slot.direct_callback;
+      dpc = slot.direct_dpc;
+      ctx = slot.direct_ctx;
     }
 
     if (callback != nullptr) [[likely]] {
       const InterruptStatus status = callback(event, ctx);
 
-      if (status == InterruptStatus::ScheduleDPC && dpc) [[unlikely]] {
-        // Queue a DPC
+      if (status == InterruptStatus::ScheduleDPC && dpc != nullptr) [[unlikely]] {
+        (void)dpc->queue();
         handled = true;
       } else {
         handled = status != InterruptStatus::Unhandled;
@@ -146,12 +148,13 @@ void InterruptManager::route_event(const Event& event) noexcept {
       }
     } else {
       // Shared vectors walk the list, which needs the lock.
-      utils::NakedGuard guard(lock);
-      for (auto& reg : list) {
-        InterruptStatus status = reg.m_callback(event, reg.m_ctx);
+      utils::NakedGuard guard(slot.lock);
+      for (auto& reg : slot.list) {
+        const InterruptStatus status = reg.m_callback(event, reg.m_ctx);
 
-        if (status == InterruptStatus::ScheduleDPC && reg.m_dpc) [[unlikely]] {
-          // Queue a DPC
+        if (sched::Dpc* deferred = reg.deferred_call();
+            status == InterruptStatus::ScheduleDPC && deferred != nullptr) [[unlikely]] {
+          (void)deferred->queue();
           handled = true;
           continue;
         }
@@ -163,10 +166,13 @@ void InterruptManager::route_event(const Event& event) noexcept {
 
     percpu::lapic().eoi();
 
-    if (lvl_triggered) [[unlikely]]
-      if (ioapic) ioapic->send_eoi(event.vector);
+    if (slot.is_level_triggered) [[unlikely]] {
+      if (slot.ioapic_controller) {
+        slot.ioapic_controller->send_eoi(event.vector);
+      }
+    }
 
-    if (!handled && list.empty()) [[unlikely]] {
+    if (!handled && slot.list.empty()) [[unlikely]] {
       // Spurious interrupt
     }
 
@@ -177,9 +183,10 @@ void InterruptManager::route_event(const Event& event) noexcept {
     percpu::hardirq_exit();
 
     // This thread's stack carries the interrupt frame, so it can simply be left here and come back
-    // to it later. The interrupt is over as far as the APIC is concerned.
-    if (percpu::preempt_pending()) [[unlikely]] {
-      sched::Scheduler::preempt_from_interrupt();
+    // to it later, and deferred calls can run on top of it. The interrupt is over as far as the
+    // APIC is concerned. Only the outermost interrupt gets here with no blockers.
+    if (percpu::ast_pending()) [[unlikely]] {
+      sched::Scheduler::handle_ast();
     }
 
     return;
@@ -213,6 +220,15 @@ void InterruptManager::handle_exception(const Event& event) noexcept {
 
   if (callback && callback(event, ctx) != InterruptStatus::Unhandled) {
     return;
+  }
+
+  const auto vector = static_cast<InterruptVector>(event.vector);
+  if (event.cpl == EventCpl::Ring3 && vector != InterruptVector::MachineCheck &&
+      vector != InterruptVector::DoubleFault) {
+    if (const UserFaultHandler handler = s_user_fault_handler.load(std::memory_order_acquire)) {
+      handler(event);
+      return;
+    }
   }
 
   dump_event(event);

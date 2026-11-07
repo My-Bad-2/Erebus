@@ -15,8 +15,6 @@
 namespace kernel::hw::apic {
 struct IoApicConfig {
   static constexpr std::size_t max_isa_overrides = 16;
-  /// Redirection entries start at register 0x10 and take two registers each; the 8-bit register
-  /// index runs out after 120 of them.
   static constexpr std::size_t max_pins_per_controller = 120;
 };
 

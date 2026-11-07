@@ -4,10 +4,12 @@
 
 #include <new>
 
+#include "hal/smp/ipi.hpp"
 #include "hal/smp/smp.hpp"
 #include "memory/address.hpp"
 #include "memory/pmm.hpp"
 #include "memory/pmm/bootstrap.hpp"
+#include "memory/shrinker.hpp"
 #include "utils/logger.hpp"
 
 namespace kernel::memory::heap {
@@ -19,13 +21,9 @@ constexpr std::uint32_t KMALLOC_MAX_SHIFT = 15;  // 2^15 = 32KB
 constexpr std::uint32_t NUM_KMALLOC_CACHES = KMALLOC_MAX_SHIFT - KMALLOC_MIN_SHIFT + 1;
 constexpr std::size_t MIN_ALLOC_SIZE = std::size_t{1} << KMALLOC_MIN_SHIFT;
 
-// A slab grows until it holds MIN_OBJECTS_PER_SLAB objects, but not past MAX_SLAB_ORDER unless a
-// single object needs more. High-order blocks get scarce once memory fragments, and every CPU
-// pins a few slabs per cache, so big slabs are expensive.
 constexpr std::uint32_t MIN_OBJECTS_PER_SLAB = 32;
 constexpr std::uint8_t MAX_SLAB_ORDER = 3;
 
-// SlabState::total is 15 bits wide and object indices must stay clear of SLUB_NO_IDX.
 static_assert((PAGE_SIZE << MAX_SLAB_ORDER) / sizeof(void*) <= 0x7FFF);
 
 KmemCache* g_meta_cache = nullptr;
@@ -33,6 +31,33 @@ KmemCache* g_meta_cpu_array = nullptr;
 KmemCache* g_meta_node_array = nullptr;
 
 KmemCache* g_kmalloc_caches[NUM_KMALLOC_CACHES] = {nullptr};
+
+constinit utils::QSpinlock g_cache_list_lock{};
+KmemCache* g_cache_list = nullptr;
+
+std::size_t shrink_heap(const std::uint32_t node_id, void*) noexcept {
+  return shrink_node(node_id);
+}
+
+constinit Shrinker g_heap_shrinker{&shrink_heap, nullptr};
+
+[[nodiscard]] bool is_on_node(const std::uint32_t cpu, const void* node_id) noexcept {
+  return hw::smp::entry(cpu).numa_node == *static_cast<const std::uint32_t*>(node_id);
+}
+
+// Runs fn(arg) on every CPU of the node, this one included if it is one of them, the way an IPI
+// would: with interrupts off.
+void run_on_node_cpus(std::uint32_t node_id, const hw::ipi::Function fn, void* arg) noexcept {
+  hw::percpu::preempt_disable();
+  (void)hw::ipi::call_many(&is_on_node, &node_id, fn, arg, hw::ipi::Wait::Yes);
+
+  if (hw::percpu::numa_node_id() == node_id) {
+    utils::IrqDisableGuard irq_guard;
+    fn(arg);
+  }
+
+  hw::percpu::preempt_enable();
+}
 
 char* page_to_virt(const pmm::Page* page) noexcept {
   return DirectMap::phys_to_virt(pmm::page_to_phys(page)).as<char>();
@@ -119,6 +144,10 @@ void initialize() noexcept {
   g_meta_cpu_array = carve_bootstrap_cache(sizeof(CpuCache) * total_cpus);
   g_meta_node_array = carve_bootstrap_cache(sizeof(NodeCache) * total_numa_nodes);
 
+  for (KmemCache* cache : {g_meta_cache, g_meta_cpu_array, g_meta_node_array}) {
+    KmemCache::add_to_cache_list(cache);
+  }
+
   for (std::uint32_t i = 0; i < NUM_KMALLOC_CACHES; ++i) {
     const std::uint32_t size = 1u << (i + KMALLOC_MIN_SHIFT);
 
@@ -128,6 +157,14 @@ void initialize() noexcept {
       utils::logger::fatal("Failed to allocate generic caches for Kmalloc!\n");
     }
   }
+
+  register_shrinker(g_heap_shrinker);
+}
+
+void KmemCache::add_to_cache_list(KmemCache* cache) noexcept {
+  utils::PreemptGuard guard{g_cache_list_lock};
+  cache->m_next_cache = g_cache_list;
+  g_cache_list = cache;
 }
 
 std::expected<KmemCache*, Error> KmemCache::create(const std::uint32_t obj_size,
@@ -180,10 +217,24 @@ std::expected<KmemCache*, Error> KmemCache::create(const std::uint32_t obj_size,
   const std::span node_span(static_cast<NodeCache*>(*node_mem), pmm::g_topology.active_nodes());
   std::uninitialized_default_construct(node_span.begin(), node_span.end());
 
-  return new (*cache_mem) KmemCache(obj_size, size, order, flags, ctor, cpu_span, node_span);
+  auto* cache = new (*cache_mem) KmemCache(obj_size, size, order, flags, ctor, cpu_span, node_span);
+  add_to_cache_list(cache);
+  return cache;
 }
 
 void KmemCache::destroy() noexcept {
+  // Off the list first, so that no shrink starts on what is about to go away. One that has it
+  // already holds the list, so taking the lock is waiting for that to end.
+  {
+    utils::PreemptGuard guard{g_cache_list_lock};
+    for (KmemCache** link = &g_cache_list; *link != nullptr; link = &(*link)->m_next_cache) {
+      if (*link == this) {
+        *link = m_next_cache;
+        break;
+      }
+    }
+  }
+
   utils::IrqDisableGuard irq_guard;
 
   // Slabs that still hold live objects are leaked rather than freed: handing them back to the
@@ -581,25 +632,129 @@ void KmemCache::discard_if_empty(pmm::Page* slab) noexcept {
       return;
     }
 
-    if (slab->slub.prev_partial) {
-      slab->slub.prev_partial->slub.next_partial = slab->slub.next_partial;
-    } else {
-      node.partial_head = slab->slub.next_partial;
-    }
-
-    if (slab->slub.next_partial) {
-      slab->slub.next_partial->slub.prev_partial = slab->slub.prev_partial;
-    } else {
-      node.partial_tail = slab->slub.prev_partial;
-    }
-
-    slab->slub.next_partial = nullptr;
-    slab->slub.prev_partial = nullptr;
-    slab->slub.on_node_list = false;
-    node.num_partial--;
+    unlink_partial_locked(node, slab);
   }
 
   release_slab(slab);
+}
+
+void KmemCache::unlink_partial_locked(NodeCache& node, pmm::Page* slab) noexcept {
+  if (slab->slub.prev_partial) {
+    slab->slub.prev_partial->slub.next_partial = slab->slub.next_partial;
+  } else {
+    node.partial_head = slab->slub.next_partial;
+  }
+
+  if (slab->slub.next_partial) {
+    slab->slub.next_partial->slub.prev_partial = slab->slub.prev_partial;
+  } else {
+    node.partial_tail = slab->slub.prev_partial;
+  }
+
+  slab->slub.next_partial = nullptr;
+  slab->slub.prev_partial = nullptr;
+  slab->slub.on_node_list = false;
+  node.num_partial--;
+}
+
+void KmemCache::unfreeze(pmm::Page* slab) noexcept {
+  SlabState state = slab->read_slub_state();
+  SlabState new_state;
+
+  do {
+    new_state = state;
+    new_state.frozen = 0;
+    new_state.generation++;
+  } while (!slab->try_update_slub_state(state, new_state));
+
+  // From here on it is like any slab nobody owns, and frees go by the rules for those. Being on
+  // no list, a partial one is ours to publish; a full one waits for the free that changes that.
+  if (new_state.in_use < new_state.total) {
+    publish_partial(slab);
+  }
+}
+
+void KmemCache::flush_cpu_partials_local() noexcept {
+  CpuCache& cpu = m_cpu_caches[hw::percpu::id()];
+  pmm::Page* slab = std::exchange(cpu.cpu_partial, nullptr);
+  cpu.partial_count = 0;
+
+  while (slab != nullptr) {
+    pmm::Page* next = slab->slub.next_partial;
+    unfreeze(slab);
+    slab = next;
+  }
+}
+
+void KmemCache::flush_cpu_partials_of(void* cache) noexcept {
+  static_cast<KmemCache*>(cache)->flush_cpu_partials_local();
+}
+
+void KmemCache::flush_every_cpu_partial(void*) noexcept {
+  // Whoever sent this holds the list of caches until every CPU is done, so it cannot change.
+  for (KmemCache* cache = g_cache_list; cache != nullptr; cache = cache->m_next_cache) {
+    cache->flush_cpu_partials_local();
+  }
+}
+
+std::size_t KmemCache::trim_node(const std::uint32_t node_id) noexcept {
+  NodeCache& node = m_node_caches[node_id];
+  pmm::Page* empty = nullptr;
+  std::size_t count = 0;
+
+  {
+    utils::IrqSaveGuard guard{node.lock};
+
+    // Nobody allocates from a slab on the list, and a slab with nothing in use gets no frees, so
+    // what is empty here stays empty.
+    for (pmm::Page* slab = node.partial_head; slab != nullptr;) {
+      pmm::Page* next = slab->slub.next_partial;
+
+      if (slab->read_slub_state().in_use == 0) {
+        unlink_partial_locked(node, slab);
+        slab->slub.next_partial = empty;
+        empty = slab;
+        ++count;
+      }
+
+      slab = next;
+    }
+  }
+
+  while (empty != nullptr) {
+    pmm::Page* next = empty->slub.next_partial;
+    empty->slub.next_partial = nullptr;
+    release_slab(empty);
+    empty = next;
+  }
+
+  return count << m_order;
+}
+
+std::size_t KmemCache::shrink_node(const std::uint32_t node_id) noexcept {
+  if (node_id >= m_node_caches.size()) [[unlikely]] {
+    return 0;
+  }
+
+  run_on_node_cpus(node_id, &flush_cpu_partials_of, this);
+  return trim_node(node_id);
+}
+
+std::size_t shrink_node(const std::uint32_t node_id) noexcept {
+  if (node_id >= pmm::g_topology.active_nodes()) [[unlikely]] {
+    return 0;
+  }
+
+  utils::PreemptGuard guard{g_cache_list_lock};
+
+  run_on_node_cpus(node_id, &KmemCache::flush_every_cpu_partial, nullptr);
+
+  std::size_t pages = 0;
+  for (KmemCache* cache = g_cache_list; cache != nullptr; cache = cache->m_next_cache) {
+    pages += cache->trim_node(node_id);
+  }
+
+  return pages;
 }
 
 pmm::Page* KmemCache::pop_from_node_partial(const std::uint32_t node_id) noexcept {

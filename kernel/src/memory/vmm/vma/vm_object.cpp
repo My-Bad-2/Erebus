@@ -13,7 +13,7 @@ VMObject::VMObject(const VMAType type, const PageSize page_size,
 VMObject::~VMObject() noexcept {
   const std::uint8_t order = page_order();
   m_pages.for_each(
-      [order](std::uint64_t, PhysToken* token) { pmm::free_pages(unpack(token), order); });
+      [order](std::uint64_t, const PhysToken* token) { pmm::free_pages(unpack(token), order); });
 
   if (m_shadow_parent) {
     m_shadow_parent->drop_ref();
@@ -66,7 +66,7 @@ std::optional<PhysicalAddress> VMObject::lookup_local(const std::size_t page_off
   return std::nullopt;
 }
 
-std::optional<PhysicalAddress> VMObject::lookup_inherited(const std::size_t page_offset) noexcept {
+std::optional<PhysicalAddress> VMObject::lookup_inherited(std::size_t page_offset) const noexcept {
   for (VMObject* obj = m_shadow_parent; obj; obj = obj->m_shadow_parent) {
     if (const auto page = obj->lookup_local(page_offset)) {
       return page;

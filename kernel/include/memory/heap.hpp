@@ -22,6 +22,11 @@
 /// kmalloc() rounds requests up to a power of two between 8 bytes and 32 KiB and serves them
 /// from one cache per size. Anything larger goes straight to the PMM. kfree() works out which of
 /// the two it is from the frame descriptor: every frame of a slab records its cache.
+///
+/// Slabs nobody uses are not given back at once: a node keeps a few empty ones for the next
+/// burst, and each CPU a few partial ones. Under memory pressure the reclaim daemon wants those
+/// back, which is what shrink_node() is for. Every cache is on one list for it, so a shrink can
+/// get to all of them; see memory/shrinker.hpp for how the daemon gets to the heap.
 
 #pragma once
 
@@ -93,6 +98,7 @@ struct alignas(std::hardware_destructive_interference_size) NodeCache {
 class alignas(std::hardware_destructive_interference_size) KmemCache {
   std::span<CpuCache> m_cpu_caches;
   std::span<NodeCache> m_node_caches;
+  KmemCache* m_next_cache{nullptr};  ///< The next one on the list of every cache.
 
   void (*m_ctor)(void*);
 
@@ -114,6 +120,19 @@ class alignas(std::hardware_destructive_interference_size) KmemCache {
   void publish_partial(pmm::Page* page) noexcept;
   void discard_if_empty(pmm::Page* page) noexcept;
   [[nodiscard]] pmm::Page* pop_from_node_partial(std::uint32_t node_id) noexcept;
+  static void unlink_partial_locked(NodeCache& node, pmm::Page* slab) noexcept;
+
+  // What shrink_node() is made of. The flushes run on every CPU of the node, with interrupts off.
+  void flush_cpu_partials_local() noexcept;
+  static void flush_cpu_partials_of(void* cache) noexcept;
+  static void flush_every_cpu_partial(void*) noexcept;
+  void unfreeze(pmm::Page* slab) noexcept;
+  [[nodiscard]] std::size_t trim_node(std::uint32_t node_id) noexcept;
+
+  static void add_to_cache_list(KmemCache* cache) noexcept;
+
+  friend std::size_t shrink_node(std::uint32_t node_id) noexcept;
+  friend void initialize() noexcept;
 
   [[nodiscard]] pmm::Page* slab_of(const void* obj) const noexcept;
   [[nodiscard]] std::uint16_t index_of(const pmm::Page* slab, const void* obj) const noexcept;
@@ -135,6 +154,9 @@ class alignas(std::hardware_destructive_interference_size) KmemCache {
   KmemCache& operator=(const KmemCache&) = delete;
 
   /// @brief Creates a cache.
+  ///
+  /// After boot, with interrupts on: a shrink holds the list of caches while it waits for other
+  /// CPUs, which would wait for this one if it were spinning for the list with interrupts off.
   /// @param obj_size  Object size in bytes (> 0).
   /// @param alignment Object alignment, a power of two. At least pointer alignment is used.
   /// @param flags     Debugging aids. Poison is ignored for caches with a constructor, since the
@@ -147,7 +169,16 @@ class alignas(std::hardware_destructive_interference_size) KmemCache {
 
   /// @brief Returns every slab to the PMM and frees the cache itself.
   /// @pre No CPU is using the cache any more. Objects still allocated are leaked (and reported).
+  ///      Interrupts are on, as for create().
   void destroy() noexcept;
+
+  /// @brief Gives every slab of NUMA node @p node_id that has no objects in use back to the PMM.
+  ///
+  /// The CPUs of the node first let go of the partial slabs they keep for themselves, which takes
+  /// an IPI. Their active slabs stay where they are: those are in use, or about to be.
+  /// @pre The calling thread can wait for other CPUs, and the cache stays alive meanwhile.
+  /// @return How many pages went back.
+  std::size_t shrink_node(std::uint32_t node_id) noexcept;
 
   /// @brief Distance between objects in a slab, including red zone and alignment padding.
   [[nodiscard]] std::uint32_t size() const noexcept { return m_size; }
@@ -228,6 +259,11 @@ class alignas(std::hardware_destructive_interference_size) KmemCache {
 
 /// @brief Sets up the bootstrap caches and the kmalloc size classes. Needs a working PMM.
 void initialize() noexcept;
+
+/// @brief KmemCache::shrink_node() for every cache there is, with one round of IPIs for all.
+/// @pre The calling thread can wait for other CPUs.
+/// @return How many pages went back to the PMM.
+std::size_t shrink_node(std::uint32_t node_id) noexcept;
 
 /// @brief Allocates @p size bytes aligned to @p alignment (a power of two).
 /// @return nullptr if @p size is zero, the alignment is invalid, or memory ran out.

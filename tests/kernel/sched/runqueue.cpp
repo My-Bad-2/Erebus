@@ -17,6 +17,7 @@ namespace {
 using sched::CpuPlacement;
 using sched::NumaDomain;
 using sched::PickMode;
+using sched::Priority;
 using sched::PriorityClass;
 using sched::RunQueue;
 using sched::Thread;
@@ -445,7 +446,7 @@ KTEST(RunQueue, thieves_leave_pinned_threads_alone) {
   KREQUIRE(pinned != nullptr);
 
   fixture.queue.enqueue_locked(*pinned);
-  KEXPECT(fixture.queue.try_steal(1) == nullptr);
+  KEXPECT(fixture.queue.try_steal(1, 0) == nullptr);
 
   // With the latest deadline, so that it is the first one a thief looks at, and has to pass over.
   Thread* free = fixture.make();
@@ -456,10 +457,10 @@ KTEST(RunQueue, thieves_leave_pinned_threads_alone) {
   fixture.queue.enqueue_locked(*free);
   fixture.queue.enqueue_locked(*pinned_late);
 
-  KEXPECT(fixture.queue.try_steal(1) == free);
+  KEXPECT(fixture.queue.try_steal(1, 0) == free);
   KEXPECT(!free->on_runqueue());
   KEXPECT_EQ(fixture.queue.waiting(), 2u);
-  KEXPECT(fixture.queue.try_steal(1) == nullptr);
+  KEXPECT(fixture.queue.try_steal(1, 0) == nullptr);
 }
 
 KTEST(RunQueue, thieves_can_ask_for_a_queue_with_threads_to_spare) {
@@ -469,10 +470,10 @@ KTEST(RunQueue, thieves_can_ask_for_a_queue_with_threads_to_spare) {
   KREQUIRE(first && second);
 
   fixture.queue.enqueue_locked(*first);
-  KEXPECT(fixture.queue.try_steal(2) == nullptr);
+  KEXPECT(fixture.queue.try_steal(2, 0) == nullptr);
 
   fixture.queue.enqueue_locked(*second);
-  KEXPECT(fixture.queue.try_steal(2) != nullptr);
+  KEXPECT(fixture.queue.try_steal(2, 0) != nullptr);
 }
 
 // Far enough away, a thread is only worth taking from someone it would otherwise never get a
@@ -490,19 +491,19 @@ KTEST(RunQueue, a_thread_behind_a_real_time_one_is_worth_coming_a_long_way_for) 
 
   // Taking turns with another fair thread: it will get its go.
   KEXPECT_EQ(fixture.queue.spare(), 1u);
-  KEXPECT(fixture.queue.try_steal(2) == nullptr);
+  KEXPECT(fixture.queue.try_steal(2, 0) == nullptr);
 
   fixture.queue.enqueue_locked(*realtime);
   KEXPECT(fixture.run_next(*fair) == realtime);
 
   // Now there are two waiting behind something that does not take turns.
   KEXPECT_EQ(fixture.queue.spare(), 3u);
-  KEXPECT(fixture.queue.try_steal(2) != nullptr);
-  KEXPECT(fixture.queue.try_steal(2) != nullptr);
+  KEXPECT(fixture.queue.try_steal(2, 0) != nullptr);
+  KEXPECT(fixture.queue.try_steal(2, 0) != nullptr);
 
   // Nobody left to help, and no reason to come.
   KEXPECT_EQ(fixture.queue.spare(), 0u);
-  KEXPECT(fixture.queue.try_steal(1) == nullptr);
+  KEXPECT(fixture.queue.try_steal(1, 0) == nullptr);
 }
 
 KTEST(RunQueue, thieves_take_the_thread_with_the_longest_to_wait) {
@@ -514,10 +515,10 @@ KTEST(RunQueue, thieves_take_the_thread_with_the_longest_to_wait) {
 
   fixture.queue.enqueue_locked(*soon);
   fixture.queue.enqueue_locked(*late);
-  KEXPECT(fixture.queue.try_steal(1) == late);
+  KEXPECT(fixture.queue.try_steal(1, 0) == late);
 
   fixture.queue.enqueue_locked(*realtime);
-  KEXPECT(fixture.queue.try_steal(1) == realtime);
+  KEXPECT(fixture.queue.try_steal(1, 0) == realtime);
 }
 
 KTEST(RunQueue, thieves_give_up_rather_than_search_a_long_queue) {
@@ -536,7 +537,7 @@ KTEST(RunQueue, thieves_give_up_rather_than_search_a_long_queue) {
   KREQUIRE(free != nullptr);
   fixture.queue.enqueue_locked(*free);
 
-  KEXPECT(fixture.queue.try_steal(1) == nullptr);
+  KEXPECT(fixture.queue.try_steal(1, 0) == nullptr);
 }
 
 // Virtual time on two CPUs has nothing to do with each other, so a thread cannot carry its virtual
@@ -556,7 +557,7 @@ KTEST(RunQueue, a_stolen_thread_keeps_what_it_is_owed) {
   from.queue.update_clock_locked(1000 + sched::DEFAULT_SLICE_NS / 2);
 
   // Has not had its turn yet, so it is owed time.
-  KEXPECT(from.queue.try_steal(1) == owed);
+  KEXPECT(from.queue.try_steal(1, 0) == owed);
   const std::int64_t lag = owed->vlag();
   KEXPECT_GT(lag, 0);
 
@@ -635,4 +636,183 @@ KTEST(RunQueue, tells_the_domain_when_it_has_work_to_spare) {
 
   domain.release();
 }
+
+KTEST(RunQueue, a_waiting_thread_can_change_its_share) {
+  Fixture fixture;
+  Thread* thread = fixture.make(PriorityClass::Normal);
+  KREQUIRE(thread != nullptr);
+
+  (void)fixture.queue.enqueue_locked(*thread);
+  fixture.queue.set_priority_locked(*thread, Priority::of(PriorityClass::High));
+
+  KEXPECT(thread->priority_class() == PriorityClass::High);
+  KEXPECT_EQ(thread->weight(), sched::priority_to_weight(PriorityClass::High));
+  KEXPECT_EQ(fixture.queue.waiting(), 1u);
+  KEXPECT(thread->on_runqueue());
+  KEXPECT(fixture.queue.fair().is_consistent());
+  KEXPECT_EQ(fixture.queue.fair().total_weight(),
+             std::uint64_t{sched::priority_to_weight(PriorityClass::High)});
+}
+
+KTEST(RunQueue, a_waiting_thread_can_move_up_to_the_real_time_tier) {
+  Fixture fixture;
+  Thread* thread = fixture.make(PriorityClass::Normal);
+  Thread* other = fixture.make(PriorityClass::Normal);
+  KREQUIRE(thread != nullptr && other != nullptr);
+
+  (void)fixture.queue.enqueue_locked(*other);
+  (void)fixture.queue.enqueue_locked(*thread);
+
+  fixture.queue.set_priority_locked(*thread, Priority::of(PriorityClass::RealTime));
+
+  KEXPECT(!thread->is_queued());
+  KEXPECT_EQ(fixture.queue.waiting(), 2u);
+  KEXPECT(fixture.run_next(*fixture.idle()) == thread);
+  KEXPECT(fixture.queue.fair().is_consistent());
+}
+
+KTEST(RunQueue, a_waiting_thread_can_move_down_from_the_real_time_tier) {
+  Fixture fixture;
+  Thread* thread = fixture.make(PriorityClass::RealTime);
+  Thread* other = fixture.make(PriorityClass::RealTime);
+  KREQUIRE(thread != nullptr && other != nullptr);
+
+  (void)fixture.queue.enqueue_locked(*thread);
+  (void)fixture.queue.enqueue_locked(*other);
+
+  fixture.queue.set_priority_locked(*thread, Priority::of(PriorityClass::Normal));
+
+  KEXPECT(thread->is_queued());
+  KEXPECT_EQ(fixture.queue.waiting(), 2u);
+  KEXPECT(fixture.run_next(*fixture.idle()) == other);
+}
+
+KTEST(RunQueue, a_waiting_thread_can_change_levels_within_the_real_time_tier) {
+  Fixture fixture;
+  Thread* thread = fixture.make(PriorityClass::RealTime);
+  Thread* other = fixture.make(PriorityClass::RealTime);
+  KREQUIRE(thread != nullptr && other != nullptr);
+
+  (void)fixture.queue.enqueue_locked(*other);
+  (void)fixture.queue.enqueue_locked(*thread);
+
+  fixture.queue.set_priority_locked(*thread, Priority::of(PriorityClass::TestRunner));
+
+  KEXPECT(fixture.run_next(*fixture.idle()) == thread);
+}
+
+KTEST(RunQueue, a_running_fair_thread_can_change_its_share) {
+  Fixture fixture;
+  Thread* thread = fixture.make(PriorityClass::Normal);
+  KREQUIRE(thread != nullptr);
+
+  (void)fixture.queue.enqueue_locked(*thread);
+  KREQUIRE(fixture.run_next(*fixture.idle()) == thread);
+
+  fixture.queue.set_priority_locked(*thread, Priority::of(PriorityClass::High));
+
+  KEXPECT(fixture.queue.fair().current() == thread);
+  KEXPECT_EQ(thread->weight(), sched::priority_to_weight(PriorityClass::High));
+  KEXPECT(fixture.queue.fair().is_consistent());
+}
+
+KTEST(RunQueue, a_running_fair_thread_can_become_real_time) {
+  Fixture fixture;
+  Thread* thread = fixture.make(PriorityClass::Normal);
+  Thread* other = fixture.make(PriorityClass::Normal);
+  KREQUIRE(thread != nullptr && other != nullptr);
+
+  (void)fixture.queue.enqueue_locked(*thread);
+  KREQUIRE(fixture.run_next(*fixture.idle()) == thread);
+  (void)fixture.queue.enqueue_locked(*other);
+
+  const std::uint32_t spare_before = fixture.queue.spare();
+  fixture.queue.set_priority_locked(*thread, Priority::of(PriorityClass::RealTime));
+
+  KEXPECT(fixture.queue.fair().current() == nullptr);
+  KEXPECT(fixture.queue.current() == thread);
+  KEXPECT_EQ(fixture.queue.fair().total_weight(), std::uint64_t{sched::NICE_0_WEIGHT});
+
+  // The one behind it is stuck now, and that has to show, as nothing would come and get it.
+  KEXPECT_EQ(fixture.queue.spare(), spare_before + 1);
+
+  // A real-time thread does not lose the CPU to what is only fair.
+  KEXPECT(!fixture.queue.should_switch_locked());
+  KEXPECT(fixture.run_next(*thread, PickMode::Preempted) == thread);
+  KEXPECT(fixture.queue.fair().is_consistent());
+}
+
+KTEST(RunQueue, a_running_real_time_thread_can_go_back_to_being_fair) {
+  Fixture fixture;
+  Thread* thread = fixture.make(PriorityClass::RealTime);
+  KREQUIRE(thread != nullptr);
+
+  (void)fixture.queue.enqueue_locked(*thread);
+  KREQUIRE(fixture.run_next(*fixture.idle()) == thread);
+
+  fixture.queue.set_priority_locked(*thread, Priority::of(PriorityClass::Normal));
+
+  KEXPECT(fixture.queue.fair().current() == thread);
+  KEXPECT(fixture.queue.current() == thread);
+  KEXPECT_EQ(fixture.queue.fair().total_weight(), std::uint64_t{sched::NICE_0_WEIGHT});
+  KEXPECT_EQ(fixture.queue.spare(), 0u);
+  KEXPECT(fixture.queue.fair().is_consistent());
+}
+
+// The way back has to leave it where a fair thread is expected to be, or the next switch breaks.
+KTEST(RunQueue, a_thread_that_was_boosted_while_running_can_go_through_a_switch) {
+  Fixture fixture;
+  Thread* thread = fixture.make(PriorityClass::Normal);
+  Thread* other = fixture.make(PriorityClass::RealTime);
+  KREQUIRE(thread != nullptr && other != nullptr);
+
+  (void)fixture.queue.enqueue_locked(*thread);
+  KREQUIRE(fixture.run_next(*fixture.idle()) == thread);
+
+  fixture.queue.set_priority_locked(*thread, Priority::of(PriorityClass::RealTime));
+  fixture.queue.set_priority_locked(*thread, Priority::of(PriorityClass::Normal));
+
+  (void)fixture.queue.enqueue_locked(*other);
+  KEXPECT(fixture.queue.should_switch_locked());
+
+  KEXPECT(fixture.run_next(*thread, PickMode::Preempted) == other);
+  KEXPECT(thread->on_runqueue());
+  KEXPECT(thread->is_queued());
+  KEXPECT(fixture.queue.fair().current() == nullptr);
+  KEXPECT(fixture.queue.fair().is_consistent());
+
+  thread->set_state(ThreadState::Blocked);
+  KEXPECT(fixture.queue.remove_locked(*thread));
+}
+
+KTEST(RunQueue, a_blocked_thread_just_takes_the_new_priority) {
+  Fixture fixture;
+  Thread* thread = fixture.make(PriorityClass::Normal);
+  KREQUIRE(thread != nullptr);
+
+  thread->set_state(ThreadState::Blocked);
+  fixture.queue.set_priority_locked(*thread, Priority::of(PriorityClass::RealTime));
+
+  KEXPECT(thread->priority_class() == PriorityClass::RealTime);
+  KEXPECT_EQ(fixture.queue.waiting(), 0u);
+  KEXPECT(!thread->on_runqueue());
+}
+
+KTEST(RunQueue, a_stolen_thread_is_marked_as_being_on_its_way) {
+  Fixture fixture;
+  Thread* thread = fixture.make(PriorityClass::Normal);
+  KREQUIRE(thread != nullptr);
+
+  (void)fixture.queue.enqueue_locked(*thread);
+  KREQUIRE(fixture.queue.try_steal(1, 0) == thread);
+
+  KEXPECT(thread->migrating());
+  KEXPECT(!thread->on_runqueue());
+  KEXPECT(thread->state() == ThreadState::Ready);
+
+  (void)fixture.queue.enqueue_locked(*thread);
+  KEXPECT(!thread->migrating());
+  KEXPECT(thread->on_runqueue());
+}
+
 }  // namespace kernel::testing

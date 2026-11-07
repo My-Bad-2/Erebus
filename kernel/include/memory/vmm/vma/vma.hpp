@@ -3,7 +3,9 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <span>
 
 #include "memory/vmm/pagemap/flags.hpp"
 #include "memory/vmm/pagemap/tlb.hpp"
@@ -129,6 +131,7 @@ class AddressSpace {
                                              bool is_heap = false) noexcept;
   void link_vma(VMArea* new_vma) noexcept;
   void unlink_vma(VMArea* vma) noexcept;
+  void release_vma_locked(VMArea* vma) noexcept;
   auto split_vma(VMArea* vma, VirtualAddress split_point) noexcept -> std::expected<VMArea*, Error>;
   [[nodiscard]] auto isolate_range(VirtualAddress start, VirtualAddress end) noexcept
       -> std::expected<VMArea*, Error>;
@@ -170,6 +173,10 @@ class AddressSpace {
 
   /// @brief Removes the VMA starting exactly at @p addr.
   [[nodiscard]] auto free(VirtualAddress addr) noexcept -> std::expected<void, Error>;
+
+  /// @brief Removes the VMA that contains @p addr, wherever it starts. A stack that has grown
+  ///        starts lower than where it was made, so this is how one is found again.
+  [[nodiscard]] auto free_containing(VirtualAddress addr) noexcept -> std::expected<void, Error>;
 
   /// @brief Grows the VMA starting at @p old_addr, moving it if the space after it is taken.
   ///
@@ -236,6 +243,26 @@ class AddressSpace {
   [[nodiscard]] auto handle_page_fault(VirtualAddress fault_addr, AccessFlags fault_type) noexcept
       -> std::expected<void, Error>;
 
+  /// @brief Copies @p bytes into this address space at @p dest, whether it is loaded or not.
+  ///
+  /// The kernel's own access to it: pages are faulted in as a write from the kernel would, which
+  /// a user mapping allows, and copy-on-write pages get their copy first. A VMA that does not
+  /// allow writing at all says no, as it would to anyone. The copy goes through the direct map,
+  /// so SMAP is no obstacle.
+  ///
+  /// Meant for an address space nobody else changes in the meantime, one that is being set up or
+  /// looked at by a test, say: a page that is remapped halfway through may get part of the copy.
+  /// @return The error of the first page that could not be faulted in. What came before it is
+  ///         copied already.
+  [[nodiscard]] auto write_bytes(VirtualAddress dest, std::span<const std::byte> bytes) noexcept
+      -> std::expected<void, Error>;
+
+  /// @brief The other way around: fills @p out from this address space at @p src.
+  ///
+  /// Pages that were never touched are faulted in as well, as a read from the kernel would.
+  [[nodiscard]] auto read_bytes(VirtualAddress src, std::span<std::byte> out) noexcept
+      -> std::expected<void, Error>;
+
   template <typename Func>
     requires std::invocable<Func, const VMArea&>
   void for_each_vma(Func&& callback) const noexcept {
@@ -249,6 +276,15 @@ class AddressSpace {
 
 /// @brief The kernel's own address space, or null before vmm::initialize().
 AddressSpace* kernel_space() noexcept;
+
+/// @brief Finds the address space of the user code that is running, or null if there is none.
+using UserSpaceLookup = AddressSpace* (*)() noexcept;
+
+/// @brief Tells the page fault handler where user faults go.
+///
+/// Who runs what is up to the layers above this one, which is why they have to say: faults in the
+/// lower half from ring 3 are resolved in whatever @p lookup returns, and fail without it.
+void set_user_space_lookup(UserSpaceLookup lookup) noexcept;
 
 /// @brief Maps @p size bytes of device registers at @p phys into the kernel, uncached.
 ///

@@ -35,7 +35,7 @@ class NumaNode;
 ///    takes the lock.
 ///  - Deferred frees: a CPU on a different NUMA node frees into an MPSC ring instead of
 ///    bouncing the zone lock across the interconnect. Whoever takes the lock next merges them.
-///  - Watermarks that wake the reclaim/compaction daemons (once those exist).
+///  - Watermarks that wake the reclaim/compaction daemons (see daemon.hpp).
 ///
 /// Block heads in the free lists are marked PageState::Free. Every other frame of the zone,
 /// including the interior frames of free blocks, is PageState::Active; the merge logic relies on
@@ -168,6 +168,15 @@ class alignas(std::hardware_destructive_interference_size) MobilityZone {
 
   /// @brief Returns a block to the zone. @p order must be the order it was allocated with.
   void free_page(Page* page, std::uint8_t order) noexcept;
+
+  /// @brief Gives every block the calling CPU keeps for this zone back to it, and merges what was
+  ///        left in the deferred ring while at it.
+  ///
+  /// Those blocks are free, but the zone neither counts them nor can merge them with their
+  /// buddies, so this is the cheapest memory reclaim can find, and it helps compaction too.
+  /// @pre Interrupts are off: the lists belong to the CPU, which uses them with interrupts off.
+  /// @return How many pages came back.
+  std::uint64_t drain_pcp_local() noexcept;
 
   /// @brief Removes the largest free block of at least @p min_order for a sibling zone to adopt.
   /// @return The block, already marked Active so concurrent merges cannot touch it, or nullptr.

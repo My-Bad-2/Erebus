@@ -43,7 +43,8 @@ std::size_t span(const char* str, const char* chars) noexcept {
 }
 }  // namespace
 
-size_t strspn(const char* str, const char* accept) noexcept { return span<true>(str, accept); }
-
-size_t strcspn(const char* str, const char* reject) noexcept { return span<false>(str, reject); }
+std::size_t strspn(const char* str, const char* accept) noexcept { return span<true>(str, accept); }
+std::size_t strcspn(const char* str, const char* reject) noexcept {
+  return span<false>(str, reject);
+}
 }  // namespace klib

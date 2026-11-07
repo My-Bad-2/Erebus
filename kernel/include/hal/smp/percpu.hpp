@@ -22,6 +22,7 @@
 #include "hal/timer/timer.hpp"
 #include "memory/pmm/pcp_cache.hpp"
 #include "memory/vmm/pagemap/tlb.hpp"
+#include "sched/dpc.hpp"
 #include "sched/numa_domain.hpp"
 #include "sched/runqueue.hpp"
 #include "utils/locks/locks.hpp"
@@ -73,6 +74,11 @@ struct alignas(std::hardware_destructive_interference_size) PerCpu {
   CpuTopology topology{0};
   memory::VirtualAddress stack_top{};   ///< Kernel stack the CPU was started on.
   sched::Thread* curr_thread{nullptr};  ///< What the CPU is running; see sched::current().
+
+  /// What IA32_KERNEL_GS_BASE holds for the next SWAPGS to user mode, so that a switch only writes
+  /// it when it changes. Nothing to begin with, so the first user thread always does.
+  std::uint64_t user_gs_base{~0ul};
+
   gdt::GlobalDescriptorTable gdt_table{};
 
   alignas(std::hardware_destructive_interference_size) CpuContext context{0};
@@ -88,6 +94,7 @@ struct alignas(std::hardware_destructive_interference_size) PerCpu {
 
   timer::TimerQueue timers{};
   sched::RunQueue runqueue{};
+  sched::DpcQueue dpcs{};
 
   constexpr explicit PerCpu() noexcept = default;
 };
@@ -133,29 +140,62 @@ inline constexpr std::size_t MCE_BYTE = CTX_BASE + 5;
 // Bytes 1-5 of the context: the preemption count and every interrupt nesting count. Byte 0 holds
 // the AST flags and bytes 6-7 are unused.
 inline constexpr std::uint64_t CTX_BLOCKERS = 0x0000'FFFF'FFFF'FF00ull;
+inline constexpr std::uint64_t CTX_AST_MASK = 0xFFull;
 
 /// @brief AST flag: the scheduler wants to look at what this CPU should be running.
-inline constexpr std::uint8_t AST_RESCHEDULE = 1u << 0;
+inline constexpr std::uint8_t AST_NEED_RESCHED = 1u << 0;
+
+/// @brief AST flag: this CPU has deferred calls waiting, see sched/dpc.hpp.
+inline constexpr std::uint8_t AST_DPC_PENDING = 1u << 1;
 
 [[nodiscard, gnu::always_inline]] inline std::uint8_t ast_flags() noexcept {
   return gs::read<AST_BYTE, std::uint8_t>();
 }
 
-[[gnu::always_inline]] inline void set_ast(const std::uint8_t flags) noexcept {
-  gs::write<AST_BYTE, std::uint8_t>(flags);
+/// @brief Raises AST flags. Safe with interrupts on: a handler may be raising others right now.
+[[gnu::always_inline]] inline void or_ast(const std::uint8_t mask) noexcept {
+  gs::set_bits<AST_BYTE>(mask);
+}
+
+/// @brief Takes AST flags down, and says which of all flags were up.
+[[gnu::always_inline]] inline std::uint8_t fetch_clear_ast(const std::uint8_t mask) noexcept {
+  return gs::fetch_clear_bits<AST_BYTE>(mask);
 }
 
 /// @brief Asks for the running thread to be looked at again as soon as it can lose the CPU.
-[[gnu::always_inline]] inline void request_reschedule() noexcept {
-  set_ast(ast_flags() | AST_RESCHEDULE);
-}
+[[gnu::always_inline]] inline void request_reschedule() noexcept { or_ast(AST_NEED_RESCHED); }
 
 [[gnu::always_inline]] inline void clear_reschedule() noexcept {
-  set_ast(ast_flags() & static_cast<std::uint8_t>(~AST_RESCHEDULE));
+  (void)fetch_clear_ast(AST_NEED_RESCHED);
 }
 
+/// @brief Whether an AST flag is up, and nothing stands in the way of acting on it.
+///
+/// Every interrupt and every preempt_enable() looks at this on its way out, so it is one load, and
+/// two tests of it.
+[[nodiscard, gnu::always_inline]] inline bool ast_pending() noexcept {
+  const std::uint64_t context = gs::read<CTX_BASE, std::uint64_t>();
+  return (context & CTX_AST_MASK) != 0 && (context & CTX_BLOCKERS) == 0;
+}
+
+/// @brief Acts on the AST flags, if interrupts are on. The rare path of preempt_enable().
+void preempt_schedule() noexcept;
+
 [[gnu::always_inline]] inline void preempt_disable() noexcept { gs::inc<PREEMPT_BYTE, 1>(); }
-[[gnu::always_inline]] inline void preempt_enable() noexcept { gs::dec<PREEMPT_BYTE, 1>(); }
+
+/// @brief Ends what preempt_disable() started.
+///
+/// A reschedule or a deferred call that came up in the meantime happens here. An interrupt could
+/// not act on it, and the next one may be a long way off, or a thread that wanted this CPU would
+/// be waiting for it. With interrupts off it stays pending, so anything that also restores them
+/// does so first.
+[[gnu::always_inline]] inline void preempt_enable() noexcept {
+  gs::dec<PREEMPT_BYTE, 1>();
+
+  if (ast_pending()) [[unlikely]] {
+    preempt_schedule();
+  }
+}
 
 [[nodiscard, gnu::always_inline]] inline std::uint8_t preempt_count() noexcept {
   return gs::read<PREEMPT_BYTE, std::uint8_t>();
@@ -198,14 +238,6 @@ inline constexpr std::uint8_t AST_RESCHEDULE = 1u << 0;
 /// @brief Whether the CPU may block: no preemption disabled and no interrupt in progress.
 [[nodiscard, gnu::always_inline]] inline bool can_sleep() noexcept {
   return (gs::read<CTX_BASE, std::uint64_t>() & CTX_BLOCKERS) == 0;
-}
-
-/// @brief Whether a reschedule is wanted, and nothing stands in the way of one.
-///
-/// Every interrupt looks at this on its way out, so it is one load, and a single test of it.
-[[nodiscard, gnu::always_inline]] inline bool preempt_pending() noexcept {
-  const std::uint64_t context = gs::read<CTX_BASE, std::uint64_t>();
-  return (context & AST_RESCHEDULE) != 0 && (context & CTX_BLOCKERS) == 0;
 }
 
 /// @brief Sets up the BSP's per-CPU area, GDT and GS base. The first thing the kernel does.

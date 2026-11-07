@@ -2,11 +2,7 @@
  * Erebus kernel image layout.
  *
  * The kernel is a position-independent ELF linked for the top 2 GiB of the address space, as
- * -mcmodel=kernel requires. Limine loads it there and applies the relocations reachable through
- * PT_DYNAMIC before jumping to _start.
- *
- * Every segment starts on a page of its own, so the VMM can map each with only the permissions
- * it needs; the __*_start and __*_end symbols tell it where they are.
+ * -mcmodel=kernel requires.
  *
  *   requests  RW  Limine requests, which the bootloader answers in place
  *   text      RX  code, static call trampolines included

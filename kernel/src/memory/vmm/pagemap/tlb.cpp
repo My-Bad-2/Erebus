@@ -4,11 +4,9 @@
 #include "hal/smp/percpu.hpp"
 #include "memory/vmm/pagemap/active_pcid.hpp"
 #include "patch/static_call.hpp"
+#include "utils/lock.hpp"
 
 namespace kernel::memory::vmm::tlb {
-// The static call trampolines are global symbols, so the declarations need external linkage.
-// Every default below is correct on any CPU; the alternatives are only faster. That matters
-// because the kernel runs on the defaults until StaticCallPatcher::apply_patches().
 namespace detail {
 DECLARE_STATIC_CALL(void, tlb_flush_everything);
 DECLARE_STATIC_CALL(bool, tlb_flush_pcid, std::uint16_t);
@@ -18,7 +16,6 @@ DECLARE_STATIC_CALL(void, tlb_remote_shootdown, PageMap*, VirtualAddress, std::s
 }  // namespace detail
 
 namespace {
-// Past this many pages one full flush is cheaper than individual invalidations.
 constexpr std::size_t SINGLE_PAGE_FLUSH_CEILING = 32;
 
 [[nodiscard]] constexpr std::size_t stride_bytes(const PageSize stride) noexcept {
@@ -155,6 +152,7 @@ void PcidManager::rollover_epoch() noexcept {
 
 void PcidManager::load(PageMap* pagemap) noexcept {
   const std::uint32_t my_cpu = hw::percpu::id();
+  m_active = pagemap;
 
   if (!g_paging_features.pcid) {
     pagemap->cpu_tracker().mark(my_cpu, 0);
@@ -327,6 +325,32 @@ void ShootdownCoordinator::broadcast(PageMap* pmap, const VirtualAddress virt,
   local_invalidate(pmap, virt, size_bytes, stride);
   detail::tlb_remote_shootdown(pmap, virt, size_bytes, stride, my_cpu);
 
+  hw::percpu::preempt_enable();
+}
+
+void ShootdownCoordinator::retire(PageMap* pmap) noexcept {
+  if (pmap->is_kernel()) [[unlikely]] {
+    return;
+  }
+
+  // Only a CPU that loaded the map can have it loaded now, and those are all in its tracker.
+  const auto loaded_it = [](const std::uint32_t cpu, const void* map) noexcept {
+    return static_cast<const PageMap*>(map)->cpu_tracker().test(cpu);
+  };
+
+  const auto leave_it = [](void* map) noexcept {
+    PcidManager& pcids = hw::percpu::pcid_manager();
+    if (pcids.active() == map) {
+      pcids.load(PageMap::kernel());
+    }
+  };
+
+  hw::percpu::preempt_disable();
+  (void)hw::ipi::call_many(loaded_it, pmap, leave_it, pmap, hw::ipi::Wait::Yes);
+  {
+    utils::IrqDisableGuard irq_guard;
+    leave_it(pmap);
+  }
   hw::percpu::preempt_enable();
 }
 

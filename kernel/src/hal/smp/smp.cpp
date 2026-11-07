@@ -45,24 +45,20 @@ using detail::g_online_mask;
 constexpr std::size_t AP_STACK_SIZE = KSTACK_SIZE;
 constexpr std::size_t EXCEPTION_STACK_SIZE = 2 * memory::PAGE_SIZE;
 
-// Every AP is started at the same time, so this bounds the whole bring-up rather than each CPU.
 constexpr klib::Duration AP_BOOT_TIMEOUT = 5_s;
-
-// How long a panicking CPU waits for the others to confirm that they have stopped.
 constexpr klib::Duration STOP_TIMEOUT = 100_ms;
 
-std::uint32_t g_possible = 1;  // CPUs we use, capped at MAX_CPUS
-std::uint32_t g_reported = 1;  // CPUs the boot loader listed
+std::uint32_t g_possible = 1;
+std::uint32_t g_reported = 1;
 bool g_cluster_dest = false;
 
 memory::VirtualAddress g_lapic_mmio{};
 std::uint64_t g_kernel_cr3 = 0;
 
-// What the APs run once online, instead of going straight to the idle loop.
 void (*g_ap_main)() noexcept = nullptr;
 
-std::atomic<std::uint32_t> g_stopper{INVALID_CPU};
-std::atomic<std::uint32_t> g_stopped{0};
+std::atomic g_stopper{INVALID_CPU};
+std::atomic g_stopped{0u};
 
 // Spins until `done()` or until @p timeout has passed. Without a calibrated clock the timeout
 // becomes a generous spin count instead, so a broken clock delays the boot but does not hang it.
@@ -70,7 +66,10 @@ template <typename Pred>
 bool spin_until(Pred&& done, const klib::Duration timeout) noexcept {
   if (drivers::SystemClock::scaler().freq_hz == 0) [[unlikely]] {
     for (std::uint64_t spins = 0; spins < (1ul << 30); ++spins) {
-      if (done()) return true;
+      if (done()) {
+        return true;
+      }
+
       pause();
     }
 
@@ -79,7 +78,10 @@ bool spin_until(Pred&& done, const klib::Duration timeout) noexcept {
 
   const klib::TimePoint deadline = drivers::SystemClock::now() + timeout;
   while (!done()) {
-    if (drivers::SystemClock::now() > deadline) return done();
+    if (drivers::SystemClock::now() > deadline) {
+      return done();
+    }
+
     cpu_relax();
   }
 
@@ -92,7 +94,9 @@ void for_each_ap(const limine_mp_response* resp, Fn&& fn) noexcept {
   std::uint32_t id = 1;
   for (std::uint64_t i = 0; i < resp->cpu_count && id < g_possible; ++i) {
     limine_mp_info* info = resp->cpus[i];
-    if (info->lapic_id != resp->bsp_lapic_id) fn(id++, info);
+    if (info->lapic_id != resp->bsp_lapic_id) {
+      fn(id++, info);
+    }
   }
 }
 
@@ -146,7 +150,7 @@ void build_registry(const limine_mp_response* resp) noexcept {
 // One PerNumaNode per node, each in memory of its own node.
 void build_numa_nodes() noexcept {
   const std::uint32_t nodes = std::max(memory::pmm::g_topology.active_nodes(), 1u);
-  const auto order = static_cast<std::uint8_t>(std::bit_width(
+  constexpr auto order = static_cast<std::uint8_t>(std::bit_width(
       (utils::maths::align_up(sizeof(PerNumaNode), memory::PAGE_SIZE) >> memory::PAGE_SHIFT_4KB) -
       1));
 
@@ -187,7 +191,7 @@ struct ApicAffinity {
                                  (std::uint32_t{p->proximity_domain_high[0]} << 8) |
                                  (std::uint32_t{p->proximity_domain_high[1]} << 16) |
                                  (std::uint32_t{p->proximity_domain_high[2]} << 24);
-    return ApicAffinity{p->id, domain};
+    return ApicAffinity{.apic_id = p->id, .domain = domain};
   }
 
   if (hdr->type == ACPI_SRAT_ENTRY_TYPE_X2APIC_AFFINITY) {
@@ -271,8 +275,7 @@ void assign_numa_nodes() noexcept {
   memory::heap::kfree(map);
 }
 
-// The MADT says which LINT pin carries NMIs (front-panel NMI buttons, platform watchdogs and
-// the like), either for one processor UID or for all of them.
+// The MADT says which LINT pin carries NMIs, either for one processor UID or for all of them.
 void assign_nmi_sources() noexcept {
   using namespace drivers::acpi;
 
@@ -315,16 +318,17 @@ void assign_nmi_sources() noexcept {
   };
 
   for (const acpi_entry_hdr* hdr : *payload) {
-    std::uint32_t uid = 0;
-    std::uint16_t flags = 0;
-    std::uint8_t lint = 0;
-    bool everyone = false;
+    std::uint32_t uid;
+    std::uint16_t flags;
+    std::uint8_t lint;
+    bool everyone;
 
     if (hdr->type == ACPI_MADT_ENTRY_TYPE_LAPIC_NMI) {
       const auto* nmi = entry_as<acpi_madt_lapic_nmi>(hdr);
       if (!nmi) {
         continue;
       }
+
       uid = nmi->uid;
       flags = nmi->flags;
       lint = nmi->lint;
@@ -334,6 +338,7 @@ void assign_nmi_sources() noexcept {
       if (!nmi) {
         continue;
       }
+
       uid = nmi->uid;
       flags = nmi->flags;
       lint = nmi->lint;
@@ -350,6 +355,7 @@ void assign_nmi_sources() noexcept {
       for (std::uint32_t cpu = 0; cpu < g_possible; ++cpu) {
         apply(g_cpus[cpu], lint, flags);
       }
+
       continue;
     }
 
@@ -362,8 +368,6 @@ void assign_nmi_sources() noexcept {
   memory::heap::kfree(index);
 }
 
-// FADT flag that firmware sets when logical destination mode must not be used. uACPI keeps a
-// full-size copy of the FADT, so short (old) FADTs need no special care here.
 [[nodiscard]] bool fadt_forces_physical_destinations() noexcept {
   acpi_fadt* fadt = nullptr;
   return uacpi_table_fadt(&fadt) == UACPI_STATUS_OK && fadt &&
@@ -372,9 +376,14 @@ void assign_nmi_sources() noexcept {
 
 // Stacks of a CPU that the BSP sets up before starting it: the TSS points at them.
 void prepare_stacks(PerCpu* cpu, const std::uint32_t id) noexcept {
+  const memory::VirtualAddress nmi_top =
+      alloc_stack(EXCEPTION_STACK_SIZE, id) -
+      static_cast<memory::VirtualAddress::OffsetType>(gdt::NMI_STACK_RESERVE);
+  *nmi_top.as<PerCpu*>() = cpu;
+
   cpu->gdt_table.set_kernel_stack(cpu->stack_top)
       .set_interrupt_stack(gdt::DOUBLE_FAULT_IST, alloc_stack(EXCEPTION_STACK_SIZE, id))
-      .set_interrupt_stack(gdt::NMI_IST, alloc_stack(EXCEPTION_STACK_SIZE, id))
+      .set_interrupt_stack(gdt::NMI_IST, nmi_top)
       .set_interrupt_stack(gdt::MACHINE_CHECK_IST, alloc_stack(EXCEPTION_STACK_SIZE, id));
 }
 
@@ -420,7 +429,6 @@ void adopt_boot_stack(const PerCpu* cpu) noexcept {
   }
 }
 
-// Makes the calling CPU a target for IPIs. Interrupts must still be disabled.
 [[nodiscard]] bool go_online(const std::uint32_t cpu, CpuState from) noexcept {
   if (!g_cpus[cpu].state.compare_exchange_strong(from, CpuState::Online,
                                                  std::memory_order_seq_cst)) {
@@ -430,9 +438,7 @@ void adopt_boot_stack(const PerCpu* cpu) noexcept {
   g_online_mask[cpu / 64].fetch_or(1ul << (cpu % 64), std::memory_order_seq_cst);
   g_online_count.fetch_add(1, std::memory_order_seq_cst);
 
-  // Pairs with the fence in ipi::call_many(). Whoever changed shared state (page tables, say)
-  // before picking its targets either finds us online, or its changes are visible to us from
-  // here on. The TLB may still hold entries from before, so drop them all.
+  // The TLB may still hold entries from before, so drop them all.
   std::atomic_thread_fence(std::memory_order_seq_cst);
   memory::vmm::tlb::ShootdownCoordinator::cpu_online();
   return true;
@@ -441,7 +447,7 @@ void adopt_boot_stack(const PerCpu* cpu) noexcept {
 [[noreturn]] void park_stopped(const std::uint32_t cpu) noexcept {
   irq::disable();
 
-  // NMIs can still wake the halted CPU and bring it back here; count it once.
+  // NMIs can still wake the halted CPU and bring it back here.
   if (g_cpus[cpu].state.exchange(CpuState::Stopped, std::memory_order_acq_rel) !=
       CpuState::Stopped) {
     g_online_mask[cpu / 64].fetch_and(~(1ul << (cpu % 64)), std::memory_order_relaxed);
@@ -456,8 +462,8 @@ void adopt_boot_stack(const PerCpu* cpu) noexcept {
   memory::vmm::initialize_hw();
   percpu::install(cpu);
 
-  // The entry stub loaded the kernel map by hand. Load it again through the PCID manager so this
-  // CPU's bookkeeping matches what CR3 really holds.
+  // Load the kernel map again through the PCID manager so this CPU's bookkeeping matches what CR3
+  // really holds.
   percpu::pcid_manager().load(&memory::vmm::kernel_space()->pagemap());
   cpu->info = profile_manager.register_cpu();
 
@@ -468,7 +474,7 @@ void adopt_boot_stack(const PerCpu* cpu) noexcept {
   const std::uint32_t id = percpu::id();
   if (!go_online(id, CpuState::Booting)) {
     // The BSP has given up on us. Joining late would surprise everyone who already counted the
-    // CPUs, so stay out of the way for good.
+    // CPUs, so stay out of the way.
     dead_loop();
   }
 
@@ -484,7 +490,6 @@ void adopt_boot_stack(const PerCpu* cpu) noexcept {
   sched::Scheduler::enter_idle_loop();
 }
 
-// Where Limine sends each AP: still on the boot loader's page tables and stack, interrupts off.
 void ap_entry(limine_mp_info* info) noexcept {
   auto* cpu = reinterpret_cast<PerCpu*>(info->extra_argument);
 
@@ -511,7 +516,7 @@ std::uint32_t start_aps(const limine_mp_response* resp) noexcept {
     }
 
     CpuEntry& e = g_cpus[id];
-    PerCpu* cpu = new (area->as<PerCpu>()) PerCpu();
+    auto cpu = new (area->as<PerCpu>()) PerCpu();
     cpu->topology = CpuTopology{}.with_cpu_id(id).with_numa_node(e.numa_node);
     cpu->numa_node = node_area(e.numa_node);
     cpu->stack_top = alloc_stack(AP_STACK_SIZE, id);
@@ -539,7 +544,7 @@ void wait_for_aps(const std::uint32_t started) noexcept {
   }
 
   for (std::uint32_t cpu = 1; cpu < g_possible; ++cpu) {
-    CpuState expected = CpuState::Booting;
+    auto expected = CpuState::Booting;
     if (g_cpus[cpu].state.compare_exchange_strong(expected, CpuState::Failed)) {
       utils::logger::warn("SMP: CPU {} (APIC ID {}) did not come up, leaving it alone\n", cpu,
                           g_cpus[cpu].apic_id);
@@ -575,7 +580,6 @@ void initialize(const memory::VirtualAddress bsp_stack_top) noexcept {
   bsp->stack_top = bsp_stack_top;
   prepare_stacks(bsp, 0);
 
-  // Only xAPIC mode uses the MMIO window, but the mapping is cheap and keeps the code simple.
   const memory::PhysicalAddress lapic_phys{
       apic::BaseMsrSchema{read::msr(apic::IA32_APIC_BASE)}.get_base_address()
       << memory::PAGE_SHIFT_4KB};
@@ -584,6 +588,7 @@ void initialize(const memory::VirtualAddress bsp_stack_top) noexcept {
     utils::logger::fatal("SMP: failed to map the local APIC: {}\n",
                          std::to_underlying(lapic_mmio.error()));
   }
+
   g_lapic_mmio = *lapic_mmio;
 
   apic::io_apic_manager.initialize();
@@ -601,11 +606,13 @@ void initialize(const memory::VirtualAddress bsp_stack_top) noexcept {
   if (!go_online(0, CpuState::Offline)) [[unlikely]] {
     utils::logger::fatal("SMP: the BSP is already online?\n");
   }
+
   irq::enable();
 
   wait_for_aps(start_aps(resp));
+  sched::Scheduler::finish_bring_up();
 
-  const char* ipi_mode = "xAPIC physical";
+  auto ipi_mode = "xAPIC physical";
   if (g_cluster_dest) {
     ipi_mode = "x2APIC cluster";
   } else if (bsp->lapic.mode() == apic::ApicMode::x2APIC) {
@@ -629,7 +636,7 @@ void stop_other_cpus() noexcept {
       return;  // a second panic while stopping
     }
 
-    // Someone else is stopping the world. Its NMI is on the way; save it the trouble.
+    // Someone else is stopping the kernel. Its NMI is on the way; save it the trouble.
     park_stopped(me);
   }
 

@@ -63,6 +63,11 @@ inline constexpr IstIndex DOUBLE_FAULT_IST = IstIndex::Ist1;
 inline constexpr IstIndex NMI_IST = IstIndex::Ist2;
 inline constexpr IstIndex MACHINE_CHECK_IST = IstIndex::Ist3;
 
+/// Bytes kept free above the frame on the NMI stack. The first word holds the CPU's own PerCpu,
+/// which is how the NMI entry finds the right GS base whatever it interrupted (see stubs.cpp).
+/// Sixteen keep the frame aligned the way the CPU wants it.
+inline constexpr std::size_t NMI_STACK_RESERVE = 16;
+
 struct [[gnu::packed]] TaskStateSegment {
   std::uint32_t reserved0{0};
   std::uint64_t rsp0{0};  // Ring 0 Stack Pointer

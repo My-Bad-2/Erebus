@@ -13,8 +13,7 @@ using State = std::array<std::uint32_t, 16>;
 // "expand 32-byte k"
 constexpr std::uint32_t SIGMA[4] = {0x61707865, 0x3320646e, 0x79622d32, 0x6b206574};
 
-[[gnu::always_inline]] inline void quarter_round(State& x, const int a, const int b, const int c,
-                                                 const int d) noexcept {
+[[gnu::always_inline]] void quarter_round(State& x, int a, int b, int c, int d) noexcept {
   x[a] += x[b];
   x[d] = std::rotl(x[d] ^ x[a], 16);
   x[c] += x[d];
@@ -25,7 +24,7 @@ constexpr std::uint32_t SIGMA[4] = {0x61707865, 0x3320646e, 0x79622d32, 0x6b2065
   x[b] = std::rotl(x[b] ^ x[c], 7);
 }
 
-State initial_state(const Key& key, const std::uint32_t counter, const Nonce& nonce) noexcept {
+State initial_state(const Key& key, std::uint32_t counter, const Nonce& nonce) noexcept {
   State s;
   for (int i = 0; i < 4; ++i) {
     s[i] = SIGMA[i];

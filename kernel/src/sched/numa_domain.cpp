@@ -1,22 +1,40 @@
 #include "sched/numa_domain.hpp"
 
 #include <algorithm>
+#include <array>
 #include <memory>
 
 #include "memory/address.hpp"
 #include "memory/memory.hpp"
 #include "memory/pmm.hpp"
+#include "sched/balance.hpp"
 #include "utils/assert.hpp"
 #include "utils/maths.hpp"
 
 namespace kernel::sched {
 namespace {
-// Makes room for @p count objects of type T at @p offset and returns where they start.
+/// Makes room for @p count objects of type T at @p offset and returns where they start.
 template <typename T>
 [[nodiscard]] std::size_t reserve(std::size_t& offset, const std::size_t count) noexcept {
   const std::size_t start = utils::maths::align_up(offset, alignof(T));
   offset = start + sizeof(T) * count;
   return start;
+}
+
+// Two CPUs are in the same group of a level if everything from there on up is the same. Comparing
+// the rest as well means that IDs only have to be unique within what is above them.
+[[nodiscard]] bool share_group(const CpuPlacement& a, const CpuPlacement& b,
+                               const std::uint32_t level) noexcept {
+  const std::array first{a.core, a.cluster, a.cache, a.package};
+  const std::array second{b.core, b.cluster, b.cache, b.package};
+
+  for (std::uint32_t above = level; above < SHARING_LEVELS; ++above) {
+    if (first[above] != second[above]) {
+      return false;
+    }
+  }
+
+  return true;
 }
 }  // namespace
 
@@ -28,7 +46,7 @@ auto NumaDomain::initialize(const std::uint32_t node_id, const std::span<const C
 
   std::uint32_t core_count = 0;
   for (std::uint32_t slot = 0; slot < cpu_count; ++slot) {
-    core_count += slot == 0 || cpus[slot].core != cpus[slot - 1].core;
+    core_count += slot == 0 || !share_group(cpus[slot - 1], cpus[slot], 0);
   }
 
   // One block for everything: it is all used by the same CPUs, and it never goes away.
@@ -75,16 +93,33 @@ auto NumaDomain::initialize(const std::uint32_t node_id, const std::span<const C
 
   std::uint32_t cores_seen = 0;
   for (std::uint32_t slot = 0; slot < cpu_count; ++slot) {
-    if (slot == 0 || cpus[slot].core != cpus[slot - 1].core) {
+    if (slot == 0 || !share_group(cpus[slot - 1], cpus[slot], 0)) {
       std::construct_at(&m_cores[cores_seen++], 0u, slot, 0u);
     }
 
     Core& core = m_cores[cores_seen - 1];
-    m_slots[slot] = {.cpu = cpus[slot].cpu, .core = cores_seen - 1};
+    m_slots[slot] = {
+        .cpu = cpus[slot].cpu, .core = cores_seen - 1, .capacity = FULL_CAPACITY, .groups = {}};
     core.busy.fetch_add(1, std::memory_order_relaxed);
     ++core.siblings;
   }
 
+  for (std::uint32_t level = 0; level < SHARING_LEVELS; ++level) {
+    std::uint32_t first = 0;
+
+    for (std::uint32_t slot = 1; slot <= cpu_count; ++slot) {
+      if (slot == cpu_count || !share_group(cpus[slot - 1], cpus[slot], level)) {
+        for (std::uint32_t member = first; member < slot; ++member) {
+          m_slots[member].groups[level] = {first, slot - first};
+        }
+
+        first = slot;
+      }
+    }
+  }
+
+  m_top_capacity = FULL_CAPACITY;
+  m_mixed_capacity = false;
   return {};
 }
 
@@ -104,7 +139,7 @@ void NumaDomain::release() noexcept {
   m_neighbor_count = 0;
 }
 
-void NumaDomain::mark_idle(const std::uint32_t slot) noexcept {
+void NumaDomain::mark_idle(const std::uint32_t slot) const noexcept {
   klib::BmiWord& word = m_idle_cpus[word_of(slot)];
   const std::uint64_t bit = std::uint64_t{1} << bit_of(slot);
 
@@ -125,7 +160,7 @@ void NumaDomain::mark_idle(const std::uint32_t slot) noexcept {
 // Goes with clearing the CPU's idle bit, and whoever clears it does this, exactly once. That keeps
 // the count right however the CPU left the list. The core bit may end up a little behind if two
 // siblings change at the same moment, which claim_idle_core() can live with.
-void NumaDomain::note_busy(const std::uint32_t slot) noexcept {
+void NumaDomain::note_busy(const std::uint32_t slot) const noexcept {
   const std::uint32_t core_index = m_slots[slot].core;
   if (m_cores[core_index].busy.fetch_add(1, std::memory_order_acq_rel) == 0) {
     (void)m_idle_cores[word_of(core_index)].acquire_specific(bit_of(core_index));
@@ -141,37 +176,108 @@ bool NumaDomain::claim_cpu(const std::uint32_t slot) noexcept {
   return true;
 }
 
-std::uint32_t NumaDomain::claim_idle_core() noexcept {
-  for (std::uint32_t word = 0; word < m_words; ++word) {
-    while (true) {
-      const std::uint32_t bit = m_idle_cores[word].acquire_first_free();
-      if (bit == BITS_PER_WORD) {
-        break;
-      }
+std::uint32_t NumaDomain::claim_idle_core_in(const SlotSpan span, const bool fast_only) noexcept {
+  const std::uint32_t first_core = m_slots[span.first].core;
+  const std::uint32_t end_core = m_slots[span.first + span.count - 1].core + 1;
+  std::uint32_t claimed = NO_CPU;
 
-      const Core& core = m_cores[word * BITS_PER_WORD + bit];
-      for (std::uint32_t sibling = 0; sibling < core.siblings; ++sibling) {
-        if (claim_cpu(core.first_slot + sibling)) {
-          return cpu_at(core.first_slot + sibling);
-        }
+  (void)for_each_bit(m_idle_cores, first_core, end_core, [&](const std::uint32_t core_index) {
+    const Core& core = m_cores[core_index];
+    if (fast_only && !is_fast(core.first_slot)) {
+      return false;
+    }
+
+    // Only a hint, and it may be out of date by now, so whatever it says, the siblings decide.
+    if (!m_idle_cores[word_of(core_index)].acquire_specific(bit_of(core_index))) {
+      return false;
+    }
+
+    for (std::uint32_t sibling = 0; sibling < core.siblings; ++sibling) {
+      if (claim_cpu(core.first_slot + sibling)) {
+        claimed = cpu_at(core.first_slot + sibling);
+        return true;
       }
+    }
+
+    return false;
+  });
+
+  return claimed;
+}
+
+std::uint32_t NumaDomain::claim_idle_cpu_in(const SlotSpan span, const bool fast_only) noexcept {
+  std::uint32_t claimed = NO_CPU;
+
+  (void)for_each_bit(m_idle_cpus, span.first, span.first + span.count,
+                     [&](const std::uint32_t slot) {
+                       if ((fast_only && !is_fast(slot)) || !claim_cpu(slot)) {
+                         return false;
+                       }
+
+                       claimed = cpu_at(slot);
+                       return true;
+                     });
+
+  return claimed;
+}
+
+std::uint32_t NumaDomain::claim_idle_core() noexcept {
+  if (m_cpu_count == 0) {
+    return NO_CPU;
+  }
+
+  if (m_mixed_capacity) {
+    if (const std::uint32_t cpu = claim_idle_core_in(whole_node(), true); cpu != NO_CPU) {
+      return cpu;
     }
   }
 
-  return NO_CPU;
+  return claim_idle_core_in(whole_node(), false);
 }
 
 std::uint32_t NumaDomain::claim_idle_cpu() noexcept {
-  for (std::uint32_t word = 0; word < m_words; ++word) {
-    const std::uint32_t bit = m_idle_cpus[word].acquire_first_free();
-    if (bit != BITS_PER_WORD) {
-      const std::uint32_t slot = word * BITS_PER_WORD + bit;
-      note_busy(slot);
-      return cpu_at(slot);
+  if (m_cpu_count == 0) {
+    return NO_CPU;
+  }
+
+  if (m_mixed_capacity) {
+    if (const std::uint32_t cpu = claim_idle_cpu_in(whole_node(), true); cpu != NO_CPU) {
+      return cpu;
     }
   }
 
-  return NO_CPU;
+  return claim_idle_cpu_in(whole_node(), false);
+}
+
+std::uint32_t NumaDomain::claim_near(const std::uint32_t slot) noexcept {
+  const SlotSpan span = group_of(slot, Sharing::Cache);
+
+  // On a hybrid part this is the whole node, so here is where the fast CPUs get their chance.
+  if (m_mixed_capacity) {
+    if (const std::uint32_t cpu = claim_idle_core_in(span, true); cpu != NO_CPU) {
+      return cpu;
+    }
+
+    if (const std::uint32_t cpu = claim_idle_cpu_in(span, true); cpu != NO_CPU) {
+      return cpu;
+    }
+  }
+
+  const std::uint32_t cpu = claim_idle_core_in(span, false);
+  return cpu != NO_CPU ? cpu : claim_idle_cpu_in(span, false);
+}
+
+void NumaDomain::set_capacity(const std::uint32_t slot, const std::uint32_t capacity) noexcept {
+  m_slots[slot].capacity = capacity;
+
+  m_top_capacity = 0;
+  m_mixed_capacity = false;
+
+  for (std::uint32_t other = 0; other < m_cpu_count; ++other) {
+    const std::uint32_t theirs = m_slots[other].capacity;
+    m_mixed_capacity |= other != 0 && theirs != m_top_capacity;
+    m_top_capacity = std::max(m_top_capacity, theirs);
+  }
 }
 
 std::uint32_t NumaDomain::idle_cpu_count() const noexcept {
@@ -183,7 +289,7 @@ std::uint32_t NumaDomain::idle_cpu_count() const noexcept {
   return count;
 }
 
-void NumaDomain::set_overloaded(const std::uint32_t slot, const bool overloaded) noexcept {
+void NumaDomain::set_overloaded(const std::uint32_t slot, const bool overloaded) const noexcept {
   klib::BmiWord& word = m_overloaded[word_of(slot)];
   if (overloaded) {
     word.release_bit(bit_of(slot));

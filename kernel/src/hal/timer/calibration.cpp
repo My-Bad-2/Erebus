@@ -1,3 +1,5 @@
+// For a better explanation, visit: https://osdev.wiki/wiki/TSC
+
 #include "hal/timer/calibration.hpp"
 
 #include "drivers/clock.hpp"
@@ -7,21 +9,26 @@
 namespace kernel::hw::timer {
 namespace {
 Result probe_hypervisor(const CpuInfo& cpu) noexcept {
-  if (!cpu.is_virtualized()) return {};
+  if (!cpu.is_virtualized()) {
+    return {};
+  }
 
   auto [max_hv, _, _, _] = cpu.query(0x40000000);
-  if (max_hv < 0x40000010) return {};
+  if (max_hv < 0x40000010) {
+    return {};
+  }
 
   auto [tsc_khz, apic_khz, _, _] = cpu.query(0x40000010);
 
   Result res{};
   if (tsc_khz >= 100'000 && tsc_khz <= 20'000'000) {
     res.source = Source::HypervisorLeaf;
-    res.tsc_hz = static_cast<std::uint64_t>(tsc_khz) * 1'000ul;
+    res.tsc_hz = static_cast<std::uint64_t>(tsc_khz) * 1'000;
   }
 
-  if (apic_khz >= 1'000 && apic_khz <= 10'000'000)
-    res.apic_bus_hz = static_cast<std::uint64_t>(apic_khz) * 1'000ul;
+  if (apic_khz >= 1'000 && apic_khz <= 10'000'000) {
+    res.apic_bus_hz = static_cast<std::uint64_t>(apic_khz) * 1'000;
+  }
 
   return res;
 }
@@ -106,8 +113,9 @@ std::uint32_t read_amd_num_boost_states(const CpuInfo& cpu) noexcept {
   if (!cpu.has<Feature::AMD_CPB>()) return 0;
 
   const AmdNbCfgMsr nb_cfg{read::msr(MSR_AMD_NB_CFG)};
-  if (!nb_cfg.get_enable_cf8_ext_cfg())
+  if (!nb_cfg.get_enable_cf8_ext_cfg()) {
     write::msr(MSR_AMD_NB_CFG, nb_cfg.with_enable_cf8_ext_cfg().raw());
+  }
 
   // PCI Address for Bus 0, Device 0x18 (Node 0), Function 4, Extended Offset 0x15C:
   // Bit 31 = Enable, Bits [27:24] = ExtReg[11:8] (0x1), Bits [15:11] = Dev (0x18),
@@ -120,9 +128,13 @@ std::uint32_t read_amd_num_boost_states(const CpuInfo& cpu) noexcept {
   // Read 0xCFC
   const AmdCpbControlReg cpb_ctrl{pci_cfg.read<std::uint32_t>(4)};
 
-  if (!nb_cfg.get_enable_cf8_ext_cfg()) write::msr(MSR_AMD_NB_CFG, nb_cfg.raw());
+  if (!nb_cfg.get_enable_cf8_ext_cfg()) {
+    write::msr(MSR_AMD_NB_CFG, nb_cfg.raw());
+  }
 
-  if (cpb_ctrl.raw() == 0xFFFFFFFF) return 0;
+  if (cpb_ctrl.raw() == std::numeric_limits<std::uint32_t>::max()) {
+    return 0;
+  }
 
   const std::uint32_t raw_boost = cpb_ctrl.get_num_boost_states();
   return cpu.microarchitecture() == UArch::K10 ? raw_boost & 0x1 : raw_boost & 0x7;
@@ -130,7 +142,9 @@ std::uint32_t read_amd_num_boost_states(const CpuInfo& cpu) noexcept {
 
 Result probe_amd(const CpuInfo& cpu) noexcept {
   // The P-state MSRs describe the real silicon; a hypervisor's TSC need not run at P0.
-  if (cpu.vendor() != Vendor::Amd || cpu.is_virtualized()) return {};
+  if (cpu.vendor() != Vendor::Amd || cpu.is_virtualized()) {
+    return {};
+  }
 
   Result res{};
 
@@ -188,7 +202,9 @@ bool is_tsc_invariant(const CpuInfo& cpu) noexcept {
 
   // Invariant TSC is masked by default for live-migration compatibility unless +invtsc is passed,
   // but both KVM and TCG back guest TSC with a monotonic clock.
-  if (cpu.hypervisor() == Hypervisor::Kvm || cpu.hypervisor() == Hypervisor::Qemu) return true;
+  if (cpu.hypervisor() == Hypervisor::Kvm || cpu.hypervisor() == Hypervisor::Qemu) {
+    return true;
+  }
 
   // Any hypervisor advertising the standard 0x40000010 timing leaf provides a fixed-frequency
   // virtual TSC.
@@ -206,9 +222,17 @@ bool is_tsc_invariant(const CpuInfo& cpu) noexcept {
 
 Result probe_hardware_frequencies(const CpuInfo& cpu) noexcept {
   const Result hv = probe_hypervisor(cpu);
-  if (hv.tsc_hz != 0 || hv.apic_bus_hz != 0) return hv;
-  if (cpu.vendor() == Vendor::Intel) return probe_intel(cpu);
-  if (cpu.vendor() == Vendor::Amd) return probe_amd(cpu);
+  if (hv.tsc_hz != 0 || hv.apic_bus_hz != 0) {
+    return hv;
+  }
+
+  if (cpu.vendor() == Vendor::Intel) {
+    return probe_intel(cpu);
+  }
+
+  if (cpu.vendor() == Vendor::Amd) {
+    return probe_amd(cpu);
+  }
   return {};
 }
 }  // namespace kernel::hw::timer

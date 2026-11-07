@@ -5,7 +5,7 @@ namespace klib {
 // Up to 64 bytes: two (or four, or eight) loads and stores from either end, overlapping in the
 // middle, which covers every length in a band without a loop or a byte tail. Beyond that,
 // `rep movsb`, which is the fastest copy on CPUs with ERMS/FSRM.
-void* memcpy(void* __restrict dest, const void* __restrict src, const size_t count) noexcept {
+void* memcpy(void* __restrict dest, const void* __restrict src, const std::size_t count) noexcept {
   using string::copy_chunk;
 
   const auto d = reinterpret_cast<std::uintptr_t>(dest);

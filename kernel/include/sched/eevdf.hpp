@@ -97,9 +97,15 @@ class Entity : public utils::AvlNode {
   [[nodiscard]] constexpr std::int64_t vlag() const noexcept { return m_vlag; }
 
   /// @brief Sets the share of the entity. A weight of 0 would never age, so it counts as 1.
+  ///
+  /// What the entity is owed stays what it is: the same lag means less virtual time to something
+  /// heavier. EevdfQueue::reweight() does this for an entity that is on a queue.
   /// @pre The entity is on no queue.
   constexpr void set_weight(const std::uint32_t weight) noexcept {
-    m_weight = weight != 0 ? weight : 1;
+    const std::uint32_t next = weight != 0 ? weight : 1;
+
+    m_vlag = static_cast<std::int64_t>(static_cast<__int128>(m_vlag) * m_weight / next);
+    m_weight = next;
     m_rate = (std::uint64_t{NICE_0_WEIGHT} << RATE_SHIFT) / m_weight;
   }
 
@@ -192,7 +198,13 @@ class EevdfQueue {
   bool charge(std::uint64_t delta_ns) noexcept;
 
   /// @brief Lets the others go first: the running entity moves on to its next deadline.
-  void yield_current() noexcept;
+  void yield_current() const noexcept;
+
+  /// @brief Changes the share of @p entity, which is waiting here or running.
+  ///
+  /// The entity keeps what it is owed and how much of its request is left, both in real time, so
+  /// that neither V nor anyone else's standing changes. See the comment in the source for the sums.
+  void reweight(Entity& entity, std::uint32_t weight) noexcept;
 
   /// @brief The entity that should be running now, which may be the current one.
   /// @return Null only if there is nothing at all on the queue.

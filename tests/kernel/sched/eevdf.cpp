@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ktest.hpp"
+#include "support.hpp"
 
 namespace kernel::testing {
 namespace {
@@ -555,4 +556,206 @@ KTEST(Eevdf, very_large_numbers_add_up) {
   KEXPECT(queue.pick() != nullptr);
   empty(queue, entities);
 }
+
+// What an entity is owed is w * (V - v) and has to survive this, or a thread would gain or lose
+// time just by having inherited something for a moment.
+KTEST(Eevdf, changing_the_weight_keeps_what_an_entity_is_owed) {
+  EevdfQueue queue;
+  std::array<Entity, 4> entities;
+
+  for (Entity& entity : entities) {
+    queue.enqueue(entity);
+  }
+
+  // Not a whole number of slices each, or everyone is back to owing nothing, and scaling that
+  // proves nothing.
+  for (std::uint32_t round = 0; round < 14; ++round) {
+    (void)run_for(queue, SLICE / 3);
+  }
+
+  if (queue.current() != nullptr) {
+    queue.requeue_current();
+  }
+
+  Entity& behind = *std::ranges::min_element(entities, {}, &Entity::vruntime);
+  const std::uint64_t virtual_time = queue.virtual_time();
+  const auto lag = static_cast<std::int64_t>(virtual_time - behind.vruntime());
+  const std::uint64_t left = behind.vdeadline() - behind.vruntime();
+
+  KREQUIRE_GT(lag, 0);
+
+  queue.reweight(behind, NICE_0_WEIGHT * 4);
+
+  KEXPECT_EQ(behind.weight(), NICE_0_WEIGHT * 4);
+  KEXPECT_LE(distance(queue.virtual_time(), virtual_time), 2);
+  KEXPECT_LE(distance(static_cast<std::uint64_t>(lag),
+                      4 * static_cast<std::uint64_t>(virtual_time - behind.vruntime())),
+             8);
+  KEXPECT_LE(distance(left, 4 * (behind.vdeadline() - behind.vruntime())), 8);
+  KEXPECT(queue.is_consistent());
+
+  queue.reweight(behind, NICE_0_WEIGHT);
+  KEXPECT_LE(distance(queue.virtual_time(), virtual_time), 2);
+  KEXPECT(queue.is_consistent());
+
+  empty(queue, entities);
+}
+
+KTEST(Eevdf, the_running_entity_can_change_its_weight) {
+  EevdfQueue queue;
+  Entity running;
+  Entity waiting;
+
+  queue.enqueue(running);
+  queue.enqueue(waiting);
+  queue.set_current(running);
+  (void)queue.charge(SLICE / 2);
+
+  const std::uint64_t left = queue.slice_left_ns();
+  queue.reweight(running, NICE_0_WEIGHT * 8);
+
+  KEXPECT_EQ(running.weight(), NICE_0_WEIGHT * 8);
+  KEXPECT(queue.current() == &running);
+  KEXPECT_LE(distance(queue.slice_left_ns(), left), 16);
+  KEXPECT(queue.is_consistent());
+
+  // Eight times the weight ages at an eighth of the speed, which is what it should do from here.
+  const std::uint64_t before = running.vruntime();
+  (void)queue.charge(8 * 1024);
+  KEXPECT_EQ(running.vruntime() - before, 1024ull);
+
+  queue.retire_current();
+  queue.dequeue(waiting);
+}
+
+KTEST(Eevdf, the_only_entity_on_a_queue_can_change_its_weight) {
+  EevdfQueue queue;
+  Entity entity;
+
+  queue.enqueue(entity);
+  queue.reweight(entity, 3 * NICE_0_WEIGHT);
+
+  KEXPECT_EQ(queue.total_weight(), 3ull * NICE_0_WEIGHT);
+  KEXPECT(queue.pick() == &entity);
+  KEXPECT(queue.is_consistent());
+
+  queue.dequeue(entity);
+}
+
+KTEST(Eevdf, the_order_of_the_tree_follows_a_new_weight) {
+  EevdfQueue queue;
+  Entity first;
+  Entity second;
+  second.set_slice_ns(4 * SLICE);
+
+  queue.enqueue(first);
+  queue.enqueue(second);
+
+  KEXPECT(queue.pick() == &first);
+
+  // Far heavier, its request comes to a much nearer virtual deadline.
+  queue.reweight(second, NICE_0_WEIGHT * 64);
+
+  KEXPECT(queue.pick() == &second);
+  KEXPECT(queue.is_consistent());
+
+  queue.dequeue(first);
+  queue.dequeue(second);
+}
+
+KTEST(Eevdf, shares_follow_a_change_of_weight) {
+  EevdfQueue queue;
+  Entity light;
+  Entity heavy;
+
+  queue.enqueue(light);
+  queue.enqueue(heavy);
+
+  for (std::uint32_t round = 0; round < 100; ++round) {
+    (void)run_for(queue, SLICE);
+  }
+
+  queue.reweight(heavy, NICE_0_WEIGHT * 3);
+
+  std::uint64_t light_ns = 0;
+  std::uint64_t heavy_ns = 0;
+  for (std::uint32_t round = 0; round < 4000; ++round) {
+    (run_for(queue, SLICE / 4) == &light ? light_ns : heavy_ns) += SLICE / 4;
+  }
+
+  KEXPECT_LE(distance(heavy_ns, 3 * light_ns), (heavy_ns + light_ns) / 16);
+
+  if (queue.current() != nullptr) {
+    queue.retire_current();
+  }
+
+  for (Entity* entity : {&light, &heavy}) {
+    if (entity->is_queued()) {
+      queue.dequeue(*entity);
+    }
+  }
+}
+
+// A wrong sum shows up nowhere at first, and much later as a pick that finds nothing eligible.
+KTEST(Eevdf, survives_random_changes_of_weight) {
+  static constexpr std::uint32_t COUNT = 32;
+
+  EevdfQueue queue;
+  std::array<Entity, COUNT> entities;
+  support::Rng rng{7};
+
+  for (Entity& entity : entities) {
+    entity.set_weight(static_cast<std::uint32_t>(64 + rng.below(8192)));
+    queue.enqueue(entity);
+  }
+
+  for (std::uint32_t round = 0; round < 20'000; ++round) {
+    (void)run_for(queue, 1 + rng.below(SLICE));
+
+    Entity& someone = entities[rng.below(COUNT)];
+    const auto weight = static_cast<std::uint32_t>(1 + rng.below(70'000));
+
+    if (someone.is_queued() || &someone == queue.current()) {
+      queue.reweight(someone, weight);
+    } else {
+      queue.enqueue(someone);
+    }
+
+    if (rng.below(8) == 0 && queue.queued() > 1) {
+      Entity& leaver = entities[rng.below(COUNT)];
+      if (leaver.is_queued()) {
+        queue.dequeue(leaver);
+      }
+    }
+
+    if (round % 1024 == 0) {
+      KREQUIRE(queue.is_consistent());
+    }
+  }
+
+  KEXPECT(queue.is_consistent());
+  empty(queue, entities);
+}
+
+KTEST(Eevdf, an_entity_off_the_queue_keeps_what_it_is_owed_too) {
+  EevdfQueue queue;
+  Entity leaver;
+  Entity other;
+
+  queue.enqueue(leaver);
+  queue.enqueue(other);
+
+  queue.set_current(leaver);
+  (void)queue.charge(SLICE);
+  queue.retire_current();
+
+  const std::int64_t lag = leaver.vlag();
+  KEXPECT_LT(lag, 0);
+
+  leaver.set_weight(NICE_0_WEIGHT * 2);
+  KEXPECT_EQ(leaver.vlag(), lag / 2);
+
+  queue.dequeue(other);
+}
+
 }  // namespace kernel::testing

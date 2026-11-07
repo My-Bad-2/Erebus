@@ -54,12 +54,18 @@
 /// what timers mostly do. So the hardware is only touched when a timer becomes the first to expire.
 /// Cancelling the first one leaves the hardware armed; it goes off for nothing, and finds out what
 /// is next then. Timeouts mostly get cancelled, so that interrupt mostly replaces many writes.
+///
+/// A CPU about to go idle is the exception. Nothing is running that an early interrupt would only
+/// briefly disturb, and it would wake the CPU for nothing, so TimerQueue::prepare_for_idle() is
+/// worth one write. With no timers waiting, nothing goes off on an idle CPU at all.
 #pragma once
 
 #include <atomic>
 #include <chrono.hpp>
+#include <cstddef>
 #include <cstdint>
 #include <expected>
+#include <type_traits>
 
 #include "core/errors.hpp"
 #include "utils/avl_tree.hpp"
@@ -85,7 +91,7 @@ enum class TimerPrecision : std::uint8_t {
 /// One can be started, restarted and cancelled from any CPU at any moment, including from its own
 /// callback, and calls may race with each other and with the expiry. The one rule is about going
 /// away: the owner has to see cancel_sync() through first.
-class Timer : public utils::AvlNode {
+class Timer {
  public:
   /// @brief Runs in interrupt context with interrupts off. May start and cancel timers, and wake
   ///        threads. Must not sleep, and should be short: the rest of the queue is waiting.
@@ -93,6 +99,11 @@ class Timer : public utils::AvlNode {
 
  private:
   friend class TimerQueue;
+
+  // Its links in the queue's tree. A member rather than a base, and the first one: that keeps a
+  // Timer, and everything with one inside, a standard-layout type, which the per-CPU area has to
+  // be for its offsetof() accessors. It also makes the links and the timer the same address.
+  utils::AvlNode m_node{};
 
   std::uint64_t m_fire_ns{0};      // Order in the queue: when the hardware has to go off.
   std::uint64_t m_earliest_ns{0};  // Does not run before this, whatever else is going on.
@@ -178,6 +189,7 @@ class Timer : public utils::AvlNode {
 class LatencyEstimator {
   std::uint64_t m_mean_ns{DEFAULT_MEAN_NS};
   std::uint64_t m_deviation_ns{DEFAULT_DEVIATION_NS};
+  std::uint64_t m_samples{0};
 
  public:
   /// @brief The guess before the first measurement.
@@ -202,7 +214,12 @@ class LatencyEstimator {
     m_deviation_ns =
         static_cast<std::uint64_t>(static_cast<std::int64_t>(m_deviation_ns) +
                                    (size - static_cast<std::int64_t>(m_deviation_ns)) / 4);
+    ++m_samples;
   }
+
+  /// @brief How many measurements it took into account. Once it has settled, the estimate itself
+  ///        can stay put through thousands of them, as the averages move in whole nanoseconds.
+  [[nodiscard]] constexpr std::uint64_t samples() const noexcept { return m_samples; }
 
   /// @brief How early to go off for the interrupt to almost always be there in time.
   [[nodiscard]] constexpr std::uint64_t advance_ns() const noexcept {
@@ -230,7 +247,19 @@ class TimerQueue {
     }
 
     static void update(Timer&) noexcept {}
+
+    [[nodiscard]] static const utils::AvlNode& node(const Timer& timer) noexcept {
+      return timer.m_node;
+    }
+
+    // The links are the first member of a standard-layout class, so the two pointers are
+    // interconvertible.
+    [[nodiscard]] static const Timer* item(const utils::AvlNode* node) noexcept {
+      return reinterpret_cast<const Timer*>(node);
+    }
   };
+
+  static_assert(std::is_standard_layout_v<Timer> && offsetof(Timer, m_node) == 0);
 
   using Tree = utils::AvlTree<Timer, Order>;
 
@@ -292,11 +321,18 @@ class TimerQueue {
   /// @brief Programs the hardware for what is first now. @pre On the queue's CPU.
   void reprogram() noexcept;
 
+  /// @brief Moves the hardware to what is really next, or stops it if nothing is, so that an
+  ///        idle CPU gets no interrupt that has nothing to do. @pre On the queue's CPU.
+  void prepare_for_idle() noexcept;
+
   /// @brief When the first timer wants to go off, or null if there is none.
   [[nodiscard]] const Timer* first() const noexcept { return m_first; }
 
   /// @brief How early an Exact timer goes off right now.
   [[nodiscard]] std::uint64_t advance_ns() const noexcept { return m_latency.advance_ns(); }
+
+  /// @brief How many interrupt latencies went into advance_ns() so far.
+  [[nodiscard]] std::uint64_t latency_samples() const noexcept { return m_latency.samples(); }
 
   [[nodiscard]] TimerStats stats() const noexcept { return m_stats; }
 

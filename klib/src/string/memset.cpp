@@ -3,7 +3,7 @@
 
 namespace klib {
 // The same overlapping-stores scheme as memcpy(), then `rep stosb` beyond 64 bytes.
-void* memset(void* dest, const int ch, const size_t count) noexcept {
+void* memset(void* dest, const int ch, std::size_t count) noexcept {
   using string::unaligned_store;
 
   const auto byte = static_cast<std::uint8_t>(ch);

@@ -27,7 +27,7 @@ struct FrequencyScaler {
   constexpr FrequencyScaler() noexcept = default;
 
   constexpr explicit FrequencyScaler(std::uint64_t hz) noexcept : freq_hz(hz) {
-    const __uint128_t NS_PER_SEC = 1'000'000'000ull;
+    const __uint128_t NS_PER_SEC = 1'000'000'000;
     ns_to_ticks_mult = ((static_cast<__uint128_t>(hz) << 32) + NS_PER_SEC / 2) / NS_PER_SEC;
     ticks_to_ns_mult = hz != 0 ? ((NS_PER_SEC << 32) + hz / 2) / hz : 0;
   }
@@ -56,15 +56,11 @@ class SystemClock {
   static inline std::uint64_t s_cached_apic_bus_hz{0};
 
   static inline hw::MmioResource s_hpet{};
-  static inline std::uint64_t s_hpet_mask{~0ull};
+  static inline std::uint64_t s_hpet_mask{~0ul};
   static inline std::uint16_t s_pm_timer_port{0};
   static inline std::uint64_t s_pm_timer_mask{0};
 
-  // A counter narrower than 64 bits (a 32-bit HPET, the PM timer) wraps, so raw_ticks() widens
-  // it: this holds the last value handed out, and each read adds how far the hardware moved
-  // since. That only works if the clock is read at least once per half wrap period (about two
-  // minutes for a 32-bit HPET, two seconds for a 24-bit PM timer).
-  static inline std::uint64_t s_backend_mask{~0ull};
+  static inline std::uint64_t s_backend_mask{~0ul};
   static inline std::atomic<std::uint64_t> s_widened{0};
 
   [[nodiscard]] static std::uint64_t initialize_hpet() noexcept;

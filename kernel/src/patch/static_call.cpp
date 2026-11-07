@@ -86,11 +86,8 @@ void serialize(const hw::CpuInfo& cpu) noexcept {
   if (cpu.has(hw::Feature::SERIALIZE)) {
     asm volatile("serialize" ::: "memory");
   } else {
-    std::uint32_t eax = 0;
-    std::uint32_t ebx = 0;
-    std::uint32_t ecx = 0;
-    std::uint32_t edx = 0;
-    asm volatile("cpuid" : "+a"(eax), "=b"(ebx), "+c"(ecx), "=d"(edx)::"memory");
+    std::uint32_t eax, ebx, ecx, edx;
+    asm volatile("cpuid" : "+a"(eax), "=b"(ebx), "+c"(ecx), "=d"(edx) : /* No Input */ : "memory");
   }
 }
 }  // namespace

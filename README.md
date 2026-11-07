@@ -1,50 +1,53 @@
 # Erebus
 
-[![Kernel tests](https://github.com/My-Bad-2/Erebus/actions/workflows/tests.yml/badge.svg)](https://github.com/My-Bad-2/Erebus/actions/workflows/tests.yml)
-[![Release](https://img.shields.io/github/v/release/My-Bad-2/Erebus?include_prereleases&sort=semver)](https://github.com/My-Bad-2/Erebus/releases)
-[![License: BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue)](LICENSE.md)
-![C++](https://img.shields.io/badge/C%2B%2B-gnu%2B%2B2d-00599C)
-![Platform](https://img.shields.io/badge/platform-x86--64%20UEFI-lightgrey)
+<center>
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://www.shieldcn.dev/github/ci/My-Bad-2/Erebus.svg?variant=secondary&amp;mode=dark&amp;font=space-grotesk"><img alt="CI" src="https://www.shieldcn.dev/github/ci/My-Bad-2/Erebus.svg?variant=secondary&amp;mode=light&amp;font=space-grotesk"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://www.shieldcn.dev/github/release/My-Bad-2/Erebus.svg?variant=ghost&amp;mode=dark&amp;font=space-grotesk"><img alt="Release" src="https://www.shieldcn.dev/github/release/My-Bad-2/Erebus.svg?variant=ghost&amp;mode=light&amp;font=space-grotesk"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://www.shieldcn.dev/github/license/My-Bad-2/Erebus.svg?variant=ghost&amp;mode=dark&amp;font=space-grotesk"><img alt="License" src="https://www.shieldcn.dev/github/license/My-Bad-2/Erebus.svg?variant=ghost&amp;mode=light&amp;font=space-grotesk"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://www.shieldcn.dev/github/last-commit/My-Bad-2/Erebus.svg?variant=secondary&amp;mode=dark&amp;font=space-grotesk"><img alt="Last commit" src="https://www.shieldcn.dev/github/last-commit/My-Bad-2/Erebus.svg?variant=secondary&amp;mode=light&amp;font=space-grotesk"></picture>
+<br />
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/C%2B%2B.svg?variant=ghost&amp;brand=cplusplus&amp;size=default&amp;mode=dark&amp;font=space-grotesk"><img alt="C++" src="https://shieldcn.dev/badge/C%2B%2B.svg?variant=ghost&amp;brand=cplusplus&amp;size=default&amp;mode=light&amp;font=space-grotesk"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Compiled%20using-CMake-064F8C.svg?logo=cmake&amp;logoColor=fff&amp;variant=ghost&amp;size=default&amp;mode=dark&amp;font=space-grotesk"><img alt="Compiled using CMake" src="https://shieldcn.dev/badge/Compiled%20using-CMake-064F8C.svg?logo=cmake&amp;logoColor=fff&amp;variant=ghost&amp;size=default&amp;mode=light&amp;font=space-grotesk"></picture>
+<br />
+<picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Runs%20on-hopes%20%26%20dreams-FF69B4.svg?variant=ghost&amp;size=default&amp;mode=dark&amp;font=space-grotesk"><img alt="Hopes &amp; Dreams" src="https://shieldcn.dev/badge/Runs%20on-hopes%20%26%20dreams-FF69B4.svg?variant=ghost&amp;size=default&amp;mode=light&amp;font=space-grotesk"></picture>
+</center>
 
-Erebus is a hobby kernel for x86-64 PCs, written in freestanding C++ and booted by Limine.
+Erebus is a hobby kernel for x86-64 PCs, written in C++.
 
-Right now it boots, takes over memory, wakes up every CPU, calibrates its clocks, says
-`Hello, World!` and then idles. Forever. There is a scheduler, but nothing for it to run: no
-userspace and no filesystem. Not yet, anyway.
+Right now it boots, maps memory, wakes up every CPU core, calibrates its clocks, echoes `Hello, World!` and then idles.
+Forever. There are processes, and threads that can run in ring 3, but nothing to run in them yet: no system calls, no
+elf loader and no filesystem. Not yet, anyway.
 
-The parts that do exist:
+What was built (till now):
 
 - A buddy allocator for physical memory, split per NUMA node and per mobility class, with
   per-CPU page caches in front of it. Blocks go from 4 KiB all the way up to 1 GiB.
-- SLUB-style slab caches and a kernel heap on top of that. Yes, it follows Linux's SLUB closely.
-  On purpose.
-- Address spaces built out of VMAs: 4- or 5-level paging, PCID, memory filled in on the first
-  fault, stacks that grow by themselves, and copy-on-write (Mooooo!).
-- Every CPU online, on x2APIC or xAPIC, with an I/O APIC for device interrupts and cross-CPU
-  function calls (IPIs).
-- A preemptive scheduler: EEVDF for ordinary threads, FIFO for real-time ones, one run queue per
-  CPU. Idle CPUs steal work, nearest NUMA node first, and queueing a thread never allocates.
+- SLUB-style slab caches and a kernel heap on top of that. Very similar to Linux's SLUB.
+- Address spaces built on VMAs: 4- or 5-level paging, PCID, memory filled in on the first
+  fault, stacks that grow by themselves, and copy-on-write (🐄).
+- Every CPU is online, on x2APIC or xAPIC, with an I/O APIC for device interrupts and cross-CPU calls (IPIs).
+- A preemptive tickless scheduler: EEVDF for ordinary threads, FIFO for real-time ones, one run queue per CPU, and work
+  stealing.
+- Blocking Synchronization primitives: mutexes, semaphores, condition variables, completions and sleeps.
 - Per-CPU timers with nanosecond deadlines, on the TSC-deadline timer or the APIC countdown,
-  whichever the CPU has. The ones that care start within a few dozen nanoseconds of their deadline.
-- ACPI through uACPI. A monotonic clock on the invariant TSC, measured against the HPET or the
-  ACPI PM timer when the CPU won't say how fast it runs.
-- A random number generator: a BLAKE2b entropy pool feeding a ChaCha20 generator per CPU.
-- klib, a small C library of its own (strings, stdlib, ctype) and a formatting library whose
-  format strings are checked at compile time.
+  whichever the CPU has.
+- Deferred calls for the slow half of an interrupt handler, which can't fail or overflow, and work queues for work that
+  needs to sleep, with a pool of kernel threads on every NUMA node.
+- Kernel daemons: Thread reaper (which preserves thread stacks for later on), and per-node reclaim and compaction
+  threads that empty slab caches and per-CPU page caches when a node runs low.
+- Processes with their own address spaces, user threads, and fork() with copy-on-write. Kernel threads borrow whatever
+  page tables were loaded last instead of switching.
+- A monotonic clock on the invariant TSC, measured against the HPET or the ACPI PM timer as fallback.
 
-## Building it
+## Building
 
-You need:
+Prerequisites:
 
-- Clang and LLD, and a recent pair. CI uses LLVM 23; much older releases won't support `-std=gnu++2d`.
-- CMake 3.28 or newer, and Ninja.
-- xorriso, which packs the ISO.
-- QEMU (`qemu-system-x86_64`) and Python 3, to run the kernel and its tests.
-- Doxygen, only if you want the API docs. Graphviz makes its graphs nicer.
-
-Everything else is fetched for you. The git submodules are checked out if you forgot
-`--recursive`, and Limine and OVMF come as prebuilt downloads, checked against pinned SHA-256
-hashes.
+- Clang and LLD (CI uses LLVM 23).
+- CMake 3.28 or newer.
+- xorriso.
+- QEMU (`qemu-system-x86_64`) and Python 3.
+- Doxygen and Graphviz (Optional).
 
 ```sh
 git clone --recursive https://github.com/My-Bad-2/Erebus.git
@@ -63,39 +66,38 @@ If the LLVM you want isn't the one on your `PATH`:
 cmake --preset debug -DLLVM_PREFIX=/usr/lib/llvm-23
 ```
 
-## Running it
+## Running
 
 ```sh
-cmake --build --preset debug --target qemu_run        # a QEMU window, serial console in the terminal
-cmake --build --preset debug --target qemu_headless   # no window; Ctrl-A X quits
-cmake --build --preset debug --target qemu_debug      # frozen at the first instruction, GDB stub on :1234
+cmake --build --preset debug --target qemu_run        # a QEMU window + terminal as serial console
+cmake --build --preset debug --target qemu_headless   # no window.
+cmake --build --preset debug --target qemu_debug      # For debugging (duh!)
 ```
 
-For `qemu_debug`, attach with `gdb build-debug/kernel/kernel -ex 'target remote :1234'`. KASLR
-is off in `misc/limine.conf`, so the addresses in the ELF are the ones you get.
+For `qemu_debug`, attach with `gdb build-debug/kernel/kernel -ex 'target remote :1234'`. KASLR is on, by default, in
+`misc/limine.conf`.
 
-The guest gets 2 GiB of memory, 4 CPUs, `-cpu max` and KVM when the host has it. All of that is
-in the cache:
+The guest gets 2 GiB of memory, 4 CPUs, `-cpu max` and KVM when the host has it. All of that can be modified as:
 
 ```sh
 cmake --preset debug -DEREBUS_QEMU_SMP=16 -DEREBUS_QEMU_MEMORY=8G
 ```
 
-Other knobs are `EREBUS_QEMU_CPU`, `EREBUS_QEMU_ACCEL` (`auto`, `kvm`, `hvf`, `whpx`, `tcg`)
-and `EREBUS_QEMU_EXTRA_ARGS`.
+Other parameters are `EREBUS_QEMU_CPU`, `EREBUS_QEMU_ACCEL` (`auto`, `kvm`, `hvf`, `whpx`, `tcg`) and
+`EREBUS_QEMU_EXTRA_ARGS`.
 
-Live Testing? The ISO is a hybrid image, so writing it to a USB stick should boot on a UEFI
-machine. Should is the keyword. No Guarantees.
+<p align="center">
+  <img src="misc/assets/screenshot.png" alt="Demo Screenshot">
+</p>
 
 ## Testing
 
-The tests don't run on your host, they run in the kernel itself. A second image, `kernel_test`, is
-linked from the same objects as the real kernel plus everything under `tests/`. It boots in
-QEMU, runs every test and reports on the serial console, and QEMU's exit status says how it
-went: 1 if everything passed, 3 if something failed.
+The tests are built to run in the kernel environment itself. A second image, `kernel_test`, is linked from the same
+objects as the real kernel plus everything under `tests/`. It boots in QEMU, runs every test and reports on the serial
+console, and QEMU's exit status tells the final result: 1 if everything passed, 3 if something failed.
 
 ```sh
-cmake --build --preset debug --target check   # one boot, console on screen
+cmake --build --preset debug --target check    # one boot, console on screen
 ctest --preset kernel                          # the same boot through CTest, after a build
 cmake --workflow --preset check                # configure, build and test in one go
 ```
@@ -103,17 +105,17 @@ cmake --workflow --preset check                # configure, build and test in on
 A run looks like this:
 
 ```text
-ktest: running 385 tests on 4 CPUs
+ktest: running 588 tests on 4 CPUs
 ktest: pass Maths.alignment (0 ms)
 ...
-ktest: 381 passed, 0 failed, 4 skipped
+ktest: 575 passed, 0 failed, 6 skipped
 ktest: ALL PASSED
 ```
 
-Then there is the stress test, which boots the test kernel over and over: 1, 2, 4 and 8 CPUs,
-512 MiB and 2 GiB, one NUMA node or two, and CPU models with x2APIC, the TSC-deadline timer,
-PCID/INVPCID/FSGSBASE, the hardware RNG, compacted XSAVE or XSAVE altogether taken away. Twice
-each. That's 196 boots.
+Then there is the stress test, which boots the test kernel over: 1, 2, 4 and 8 CPUs, plus 8 CPUs laid out as two sockets
+of two hyperthreaded cores, so the load balancer has more than one cache to think about. 512 MiB and 2 GiB, one NUMA
+node or two, and CPU models with x2APIC, the TSC-deadline timer, PCID/INVPCID/FSGSBASE, the hardware RNG, compacted
+XSAVE or XSAVE altogether taken away.
 
 ```sh
 cmake --preset release
@@ -126,7 +128,7 @@ and every boot leaves its serial log in `build/qemu_stress/`.
 
 ### Writing a test
 
-Put a `.cpp` file anywhere under `tests/`, and the build picks it up:
+Put a `.cpp` file anywhere under `tests/`:
 
 ```cpp
 #include "utils/maths.hpp"
@@ -136,50 +138,44 @@ Put a `.cpp` file anywhere under `tests/`, and the build picks it up:
 namespace maths = kernel::utils::maths;
 
 KTEST(Maths, alignment) {
-  KEXPECT_EQ(maths::align_up(0x1234u, 0x1000u), 0x2000u);
-  KEXPECT(maths::is_aligned(0x3000ull, 0x1000u));
+  KEXPECT_EQ(maths::align_up(0x1234, 0x1000), 0x2000);
+  KEXPECT(maths::is_aligned(0x3000, 0x1000));
 }
 ```
 
-`KEXPECT_*` reports a failure and carries on, and `KREQUIRE_*` reports it and leaves the test.
-`KTEST_ALL_CPUS` runs the body on every CPU at the same time, and `KTEST_SKIP` gives up
-politely when the machine can't run the test. The whole framework is described in
-[tests/framework/ktest.hpp](tests/framework/ktest.hpp).
+`KEXPECT_*` reports a failure and carries on, and `KREQUIRE_*` reports it and leaves the test. `KTEST_ALL_CPUS` runs the
+body on every CPU at the same time, and `KTEST_SKIP` gives up politely when the machine can't run the test. The whole
+framework is described in [tests/framework/ktest.hpp](tests/framework/ktest.hpp).
 
-## Arch levels, CI and releases
+## Arch levels
 
 By default, the kernel is built for `x86-64-v2`, which any x86-64 CPU since Intel Nehalem or AMD
-Bulldozer can run. If you know your CPU, you can be pickier:
+Bulldozer should be able to run. If you know your target CPU, you can be pickier:
 
 ```sh
 cmake --preset release -DEREBUS_ARCH_LEVEL=x86-64-v3   # or x86-64-v4, znver4, znver5
 ```
 
-Every push runs the test kernel on GitHub Actions, in Debug and in Release. Releases are cut by
-hand from the Release workflow: it builds one ISO for every arch level, boots each one's tests
-wherever the runner's CPU can, and publishes the ISOs with their kernel ELFs and a
-`SHA256SUMS`. The version is whatever `project()` in `CMakeLists.txt` says.
-
-## Other things the build does
+## Miscellaneous
 
 Each of these wants its configure preset run once first: `cmake --preset release` before the
 docs, `cmake --preset lint` before the lint build.
 
-| Command | What you get |
-|---|---|
-| `cmake --build --preset docs` | Doxygen HTML in `build/docs/html/`, and the whole API as JSON in `build/docs/api.json` |
-| `cmake --build --preset lint` | A Debug build in `build-lint/`, with clang-tidy going over the code |
-| `cmake --build --preset debug --target format` | Everything run through clang-format |
-| `cmake --build --preset debug --target format_check` | The same check, without touching any file |
+| Command                                              | What you get                                                                           |
+|------------------------------------------------------|----------------------------------------------------------------------------------------|
+| `cmake --build --preset docs`                        | Doxygen HTML in `build/docs/html/`, and the whole API as JSON in `build/docs/api.json` |
+| `cmake --build --preset lint`                        | A Debug build in `build-lint/`, with clang-tidy going over the code                    |
+| `cmake --build --preset debug --target format`       | Everything run through clang-format                                                    |
+| `cmake --build --preset debug --target format_check` | The same check, without touching any file                                              |
 
 And two options worth knowing: `-DEREBUS_UBSAN=ON` makes undefined behaviour trap, and
-`-DEREBUS_WERROR=ON` turns every warning into an error. By default only the warnings that are
-always bugs stop the build.
+`-DEREBUS_WERROR=ON` turns every warning into an error. By default, only the warnings that are almost always bugs stop
+the build.
 
-## Where things are
+## Project Structure
 
 ```text
-kernel/        the kernel: boot, hal, memory, sched, drivers, crypto, patch, utils
+kernel/        the kernel: boot, hal, memory, sched, proc, drivers, crypto, patch, utils
 klib/          the freestanding C library and kformat
 tests/         the in-kernel test framework, and the tests
 cmake/         build modules, the QEMU test runner, Doxygen templates
@@ -194,16 +190,16 @@ Copyright 2026 Yash Verma.
 
 ## Third-party code
 
-None of this would boot without other people's work. Thank you, all of you.
+None of this would be possible without other people's work. Thank you, all of you.
 
-| Project | What Erebus uses it for  |
-|---|---|---|
-| [Limine](https://github.com/Limine-Bootloader/Limine), by Mintsuki and contributors | The bootloader. Its UEFI binaries go into every ISO, and its protocol header is `kernel/include/boot/limine.h`. |
-| [uACPI](https://github.com/uACPI/uACPI), by Daniil Tatianin | ACPI. The kernel only answers its questions, in `kernel/src/glue/uacpi.cpp`. |
-| [Zydis](https://github.com/zyantific/zydis) and [Zycore](https://github.com/zyantific/zycore-c), by Florian Bernd and Joel Höner | x86 instruction decoding and encoding, linked into the kernel | 
-| [freestanding-cxx-hdrs-gnu](https://github.com/osdev0/freestanding-cxx-hdrs-gnu) | The freestanding part of GCC's libstdc++ headers: `<atomic>`, `<span>`, `<expected>` and friends | 
-| [freestanding-lgrt](https://github.com/osdev0/freestanding-lgrt) | Compiler runtime builtins from LLVM's compiler-rt, such as 128-bit division and wide atomics |
-| [edk2-ovmf-stable-bins](https://github.com/osdev0/edk2-ovmf-stable-bins), OVMF from [TianoCore EDK II](https://github.com/tianocore/edk2) | UEFI firmware for QEMU. It only runs the kernel and is never part of an image. |
+| Project                                                                                         | Contributors                                                                                                |
+|-------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------|
+| [Limine](https://github.com/Limine-Bootloader/Limine)                                           | by Mintsuki and contributors                                                                                |
+| [uACPI](https://github.com/uACPI/uACPI)                                                         | by Daniil Tatianin, and Contributors                                                                        |
+| [Zydis](https://github.com/zyantific/zydis) and [Zycore](https://github.com/zyantific/zycore-c) | by Florian Bernd, Joel Höner, and contributors                                                              |
+| [freestanding-cxx-hdrs-gnu](https://github.com/osdev0/freestanding-cxx-hdrs-gnu)                | by The GNU Compiler Collection (GCC) project team                                                           |
+| [freestanding-lgrt](https://github.com/osdev0/freestanding-lgrt)                                | by The LLVM Project developer community (thanks to Mintsuki for separating out the freestanding components) |
+| [edk2-ovmf](https://github.com/osdev0/edk2-ovmf-stable-bins)                        | by the TianoCore community                                                                                  |
 
 Each submodule carries its own license file under `third_party/`, and Limine's comes with the
 download.

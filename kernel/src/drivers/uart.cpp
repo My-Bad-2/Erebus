@@ -6,20 +6,14 @@
 
 namespace kernel::drivers::uart {
 namespace {
-// How many line status reads a wait for the transmitter may take. A 16-byte FIFO drains in
-// under 17 ms even at 9600 baud, and a port read costs about a microsecond, so this is a few
-// times the slowest legitimate wait.
 constexpr std::uint32_t TX_WAIT_LIMIT = 100'000;
 }  // namespace
 
 bool SerialPort::probe() const noexcept {
-  // A floating bus reads all ones.
   if (read<Lsr>().raw() == 0xFF) {
     return false;
   }
 
-  // A real UART keeps the low four bits of IER; missing hardware usually reads back 0x00 or
-  // 0xFF whatever was written. Interrupts stay off at the interrupt controller meanwhile.
   write<Ier>(IER{0x00});
   const bool cleared = (read<Ier>().raw() & 0x0F) == 0x00;
   write<Ier>(IER{0x0F});
@@ -31,7 +25,6 @@ bool SerialPort::probe() const noexcept {
 
 std::expected<void, std::string_view> SerialPort::initialize(const std::uint32_t baud_rate,
                                                              std::uint32_t base_clock_hz) noexcept {
-  // With DLAB left on by the firmware, IER would alias the divisor latch.
   write<Lcr>(read<Lcr>().without_dlab());
 
   if (!probe()) {
@@ -76,7 +69,6 @@ std::expected<void, std::string_view> SerialPort::initialize(const std::uint32_t
     m_fifo_depth = 1;
   }
 
-  // DTR and RTS for the other end, OUT2 so that interrupts can reach the PIC once wanted.
   write<Mcr>(MCR{}.with_dtr().with_rts().with_out2());
 
   m_tx_room = 0;
@@ -85,7 +77,6 @@ std::expected<void, std::string_view> SerialPort::initialize(const std::uint32_t
 }
 
 bool SerialPort::wait_for_tx_room() noexcept {
-  // THRE means the whole transmit FIFO is empty, so a full FIFO's worth may follow.
   const std::uint32_t limit = m_stalled ? 1 : TX_WAIT_LIMIT;
   for (std::uint32_t i = 0; i < limit; ++i) {
     if (read<Lsr>().get_thr_empty()) {
@@ -130,15 +121,13 @@ void SerialPort::append_fill(const std::size_t count, const char c) noexcept {
   }
 }
 
-void SerialPort::flush() noexcept {
+void SerialPort::flush() const noexcept {
   for (std::uint32_t i = 0; i < TX_WAIT_LIMIT && !read<Lsr>().get_transmitter_empty(); ++i) {
     hw::pause();
   }
 }
 
 std::expected<char, ReceiveError> SerialPort::take(const LSR lsr) const noexcept {
-  // Always consume the byte, even a bad one: left in RBR it would come back on the next read.
-  // The error bits clear when LSR is read, so they come from the same read as data_ready.
   const auto byte = static_cast<char>(read<RBR>());
 
   if (lsr.get_break_interrupt()) return std::unexpected(ReceiveError::BreakInterrupt);

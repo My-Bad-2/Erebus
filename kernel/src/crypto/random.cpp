@@ -66,7 +66,7 @@ template <typename Read>
   std::uint64_t prev = 0;
   for (int i = 0; i < 8; ++i) {
     std::uint64_t value = 0;
-    if (!read(value) || value == 0 || value == ~std::uint64_t{0} || (i != 0 && value == prev)) {
+    if (!read(value) || value == 0 || value == ~0ul || (i != 0 && value == prev)) {
       return false;
     }
 
@@ -94,7 +94,7 @@ void detect_hardware() noexcept {
   }
 }
 
-// Fills `words` from RDSEED, or RDRAND where RDSEED has nothing; words neither can fill stay as
+// Fills `words` from RDSEED, or RDRAND where RDSEED has nothing. Words neither can fill stay as
 // they were. Returns how many were filled.
 std::size_t read_hardware(const std::span<std::uint64_t> words) noexcept {
   std::size_t filled = 0;
@@ -109,7 +109,6 @@ std::size_t read_hardware(const std::span<std::uint64_t> words) noexcept {
   return filled;
 }
 
-// Everything ever mixed in, compressed into a BLAKE2b state.
 [[clang::no_destroy]] constinit Blake2b g_pool{};
 constinit utils::QSpinlock g_pool_lock;
 
@@ -130,7 +129,7 @@ void absorb_jitter(Blake2b& pool) noexcept {
       const std::uint64_t start = hw::read_tsc();
       std::uint64_t x = start;
       for (std::uint64_t i = 0; i < 16 + (start & 15); ++i) {
-        x = x * 6364136223846793005ull + scratch[x >> 56];
+        x = x * 6364136223846793005ul + scratch[x >> 56];
         scratch[x & 0xFF] = static_cast<std::uint8_t>(scratch[x & 0xFF] + 1);
       }
 
@@ -191,17 +190,10 @@ void extract_key(chacha20::Key& key) noexcept {
 constinit ChaChaRng g_base{};
 constinit utils::QSpinlock g_base_lock;
 
-// Bumped on every reseed; CPUs whose key is from an older generation fetch a new one. Zero
-// until the first seed.
 std::atomic<std::uint64_t> g_generation{0};
-
-// When the next reseed is due, in clock nanoseconds. The clock reads 0 until it is calibrated,
-// which postpones reseeding until then.
 std::atomic<std::uint64_t> g_next_reseed_ns{0};
 
 void reseed() noexcept {
-  // Fresh hardware output first, so that a reseed never repeats a key even if nothing else
-  // reached the pool in the meantime.
   std::array<std::uint64_t, 4> fresh{};
   fresh[0] = hw::read_tsc();
   (void)read_hardware(fresh);
@@ -252,8 +244,7 @@ void initialize() noexcept {
 
   secure_zero(hardware);
   reseed();
-  g_next_reseed_ns.store(static_cast<std::uint64_t>(RESEED_INTERVAL.to_ns()),
-                         std::memory_order_relaxed);
+  g_next_reseed_ns.store(RESEED_INTERVAL.to_ns(), std::memory_order_relaxed);
 
   if (hardware_words != 0) {
     utils::logger::info("Random: seeded with {} bits from {}, timing jitter and boot data.\n",

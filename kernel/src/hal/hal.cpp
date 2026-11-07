@@ -1,14 +1,12 @@
 #include "hal/hal.hpp"
 
 #include "hal/smp/cpu_info.hpp"
+#include "hal/smp/ipi.hpp"
 
 namespace kernel::hw {
 namespace {
-// Whether initialize() turned on CR4.FSGSBASE. The GS base static calls are patched for the BSP,
-// so every AP has to match it before its first GS base write.
 bool g_fsgsbase = false;
 
-// The FS and GS bases in use right now. GS's SWAPGS partner, IA32_KERNEL_GS_BASE, is 0xC0000102.
 constexpr std::uint32_t IA32_FS_BASE = 0xC0000100;
 constexpr std::uint32_t IA32_GS_BASE = 0xC0000101;
 
@@ -21,7 +19,7 @@ void idle_generic(const std::atomic<std::uint32_t>* work) noexcept {
 void idle_mwait(const std::atomic<std::uint32_t>* work) noexcept {
   irq::disable();
 
-  // Address in RAX; no extensions (ECX) or hints (EDX).
+  // Address in RAX, no extensions (ECX) or hints (EDX).
   asm volatile("monitor" : : "a"(work), "c"(0), "d"(0) : "memory");
 
   // Re-check once the monitor is armed: a store that landed before it would not wake us.
@@ -46,8 +44,13 @@ void tpause(const std::uint32_t state, const std::uint64_t delay) noexcept {
 DEFINE_STATIC_CALL(cpu_relax_impl, pause);
 REGISTER_STATIC_CALL_ALT(cpu_relax_impl, tpause, Feature::WAITPKG);
 
+// The two go together: whatever makes cpu_idle() use MWAIT is what makes the kick unnecessary. The
+// IPI is the default, as being woken once too often is a good deal better than not being woken.
 DEFINE_STATIC_CALL(cpu_idle, idle_generic);
 REGISTER_STATIC_CALL_ALT(cpu_idle, idle_mwait, Feature::MONITOR, !Feature::HYPERVISOR);
+
+DEFINE_STATIC_CALL(kick_idle_cpu, ipi::send_reschedule);
+DISABLE_STATIC_CALL_ON_FEATURE(kick_idle_cpu, Feature::MONITOR, !Feature::HYPERVISOR);
 
 namespace read {
 namespace {
@@ -119,4 +122,6 @@ void initialize_secondary() noexcept {
     write::cr4(read::cr4().with_fsgsbase());
   }
 }
+
+bool fsgsbase_enabled() noexcept { return g_fsgsbase; }
 }  // namespace kernel::hw

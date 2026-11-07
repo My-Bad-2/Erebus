@@ -35,6 +35,7 @@
 
 #include "hal/timer/timer.hpp"
 #include "sched/eevdf.hpp"
+#include "sched/priority.hpp"
 #include "utils/linked_list.hpp"
 #include "utils/locks/locks.hpp"
 
@@ -76,6 +77,7 @@ class alignas(std::hardware_destructive_interference_size) RunQueue {
   NumaDomain* m_domain{nullptr};
   std::uint32_t m_cpu_id{0};
   std::uint32_t m_slot{0};
+  std::uint32_t m_capacity{1};  ///< What the CPU gets done, see balance.hpp.
 
   alignas(std::hardware_destructive_interference_size) utils::QSpinlock m_lock{};
   bool m_lock_handed_over{false};  ///< The next thread to run has to release m_lock.
@@ -105,8 +107,20 @@ class alignas(std::hardware_destructive_interference_size) RunQueue {
   [[nodiscard]] Thread* switch_in(Thread& next, const Thread& prev) noexcept;
 
  public:
-  /// @brief Real-time levels from the top, for a thread that has one.
-  /// @return RT_LEVELS or above for a thread that is not real-time.
+  /// @brief Real-time levels from the top, for a class that has one.
+  /// @return RT_LEVELS or above for a class that is not real-time.
+  [[nodiscard]] static constexpr std::uint32_t rt_level(const PriorityClass prio) noexcept {
+    switch (prio) {
+      case PriorityClass::TestRunner:
+        return 0;
+      case PriorityClass::RealTime:
+        return 1;
+      default:
+        return RT_LEVELS;
+    }
+  }
+
+  /// @brief The level of the class @p thread is in right now.
   [[nodiscard]] static std::uint32_t rt_level(const Thread& thread) noexcept;
 
   constexpr RunQueue() noexcept = default;
@@ -147,6 +161,12 @@ class alignas(std::hardware_destructive_interference_size) RunQueue {
   /// @return false if it is not on this queue.
   bool remove_locked(Thread& thread) noexcept;
 
+  /// @brief Gives @p thread another priority, wherever it is: moved between the tiers if it has to,
+  ///        keeping what it is owed. Whether that calls for a switch is should_switch_locked().
+  /// @pre The thread last ran here, and is not on its way somewhere: see Thread::mark_migrating().
+  ///      The clock is up to date.
+  void set_priority_locked(Thread& thread, Priority priority) noexcept;
+
   /// @brief Decides what runs next, and files @p prev accordingly: back on the queue if it can
   ///        still run, nowhere if it blocked, and on the dead list if it is `Dead`.
   /// @param prev What is running now. It is what gets returned if it should carry on.
@@ -158,15 +178,30 @@ class alignas(std::hardware_destructive_interference_size) RunQueue {
   /// @brief Whether pick_next_locked() would choose something other than what is running.
   [[nodiscard]] bool should_switch_locked() const noexcept;
 
-  /// @brief Takes a thread off this queue for another CPU, if the lock is free and spare() is at
+  /// @brief Takes a thread off this queue for CPU @p thief, if the lock is free and spare() is at
   ///        least @p enough. Never waits: there are always other queues to try.
+  ///
+  /// The thread belongs to @p thief from here on, before this lock goes: see Thread::set_cpu_id().
   /// @pre Interrupts are off.
-  [[nodiscard]] Thread* try_steal(std::uint32_t enough) noexcept;
+  [[nodiscard]] Thread* try_steal(std::uint32_t enough, std::uint32_t thief) noexcept;
 
   /// @brief Destroys the threads on the dead list. Their stacks are gone, so this cannot run on
   ///        one of them, and it takes a thread context that can wait for other CPUs.
+  ///
+  /// The scheduler leaves this to the reaper (see Scheduler::finish_switch()). This is for queues
+  /// that are driven by hand.
   /// @return How many there were.
   std::size_t drain_dead() noexcept;
+
+  /// @brief Takes the whole dead list, which is left empty.
+  /// @pre The lock is held, by the thread that a switch handed it to: every thread on the list
+  ///      has left its CPU then.
+  [[nodiscard]] utils::SList<Thread, ReapQueueTag> take_dead_locked() noexcept {
+    return std::move(m_dead);
+  }
+
+  /// @brief Whether there are threads waiting to be destroyed. Only good for a rough look.
+  [[nodiscard]] bool has_dead_threads() const noexcept { return !m_dead.empty(); }
 
   /// @brief Whether a slice timer has something to do: there is someone to take turns with.
   [[nodiscard]] bool wants_timer_locked() const noexcept;
@@ -212,8 +247,13 @@ class alignas(std::hardware_destructive_interference_size) RunQueue {
     return waiting() + (current() != m_idle_thread ? 1 : 0);
   }
 
+  /// @brief What the CPU gets done, compared to others.
+  [[nodiscard]] std::uint32_t capacity() const noexcept { return m_capacity; }
+
+  void set_capacity(const std::uint32_t capacity) noexcept { m_capacity = capacity; }
+
   /// @brief Publishes the CPU as idle in its domain.
-  void publish_idle() noexcept;
+  void publish_idle() const noexcept;
 
   /// @brief A cheap pseudo-random number, for sampling other CPUs. Not for anything else.
   [[nodiscard]] std::uint64_t next_random() noexcept;

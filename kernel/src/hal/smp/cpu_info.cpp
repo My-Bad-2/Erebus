@@ -1,5 +1,6 @@
 #include "hal/smp/cpu_info.hpp"
 
+#include "string.h"
 #include "utils/lock.hpp"
 
 namespace kernel::hw {
@@ -40,7 +41,7 @@ void CpuInfo::parse_brand() noexcept {
   if (m_max_ext_leaf >= 0x80000004) {
     for (std::uint32_t i = 0; i < 3; ++i) {
       auto r = query(0x80000002 + i);
-      __builtin_memcpy(m_brand_string.data() + (i * 16), &r, 16);
+      klib::memcpy(m_brand_string.data() + (i * 16), &r, 16);
     }
   }
 }
@@ -68,6 +69,7 @@ void CpuInfo::parse_caches() noexcept {
       c.line_size = (ebx & 0xFFF) + 1;
       const std::uint32_t partitions = ((ebx >> 12) & 0x3FF) + 1;
       c.sets = ecx + 1;
+      c.threads_sharing = ((eax >> 14) & 0xFFF) + 1;
       c.size_bytes = c.ways * partitions * c.line_size * c.sets;
 
       m_caches[m_num_caches++] = c;
@@ -192,11 +194,11 @@ void CpuInfo::parse_hypervisor() noexcept {
   if (m_is_virtualized) {
     const auto r = query(0x40000000);
     std::array<char, 13> hv{};
-    __builtin_memcpy(hv.data() + 0, &r.ebx, 4);
-    __builtin_memcpy(hv.data() + 4, &r.ecx, 4);
-    __builtin_memcpy(hv.data() + 8, &r.edx, 4);
+    klib::memcpy(hv.data() + 0, &r.ebx, 4);
+    klib::memcpy(hv.data() + 4, &r.ecx, 4);
+    klib::memcpy(hv.data() + 8, &r.edx, 4);
 
-    std::string_view hv_sv{hv.data()};
+    const std::string_view hv_sv{hv.data()};
     if (hv_sv == "KVMKVMKVM") {
       m_hypervisor = Hypervisor::Kvm;
     } else if (hv_sv == "VMwareVMware") {
@@ -253,11 +255,11 @@ void CpuInfo::initialize() noexcept {
   const auto r0 = query(0);
   m_max_leaf = r0.eax;
 
-  __builtin_memcpy(m_vendor_string.data(), &r0.ebx, 4);
-  __builtin_memcpy(m_vendor_string.data() + 4, &r0.edx, 4);
-  __builtin_memcpy(m_vendor_string.data() + 8, &r0.ecx, 4);
+  klib::memcpy(m_vendor_string.data(), &r0.ebx, 4);
+  klib::memcpy(m_vendor_string.data() + 4, &r0.edx, 4);
+  klib::memcpy(m_vendor_string.data() + 8, &r0.ecx, 4);
 
-  std::string_view vendor_sv{m_vendor_string.data()};
+  const std::string_view vendor_sv{m_vendor_string.data()};
   if (vendor_sv == "GenuineIntel") {
     m_vendor = Vendor::Intel;
   } else if (vendor_sv == "AuthenticAMD") {
@@ -302,6 +304,12 @@ void CpuInfo::initialize() noexcept {
     if (m_vendor == Vendor::Amd) {
       m_apic_id_core_id_size = (ecx >> 12) & 0xF;
     }
+  }
+
+  // Leaf 0x1A only means something on hybrid parts, where it tells P- and E-cores apart.
+  constexpr std::uint32_t HYBRID = 1u << 15;
+  if (m_max_leaf >= 0x1A && (query(7, 0).edx & HYBRID) != 0) {
+    m_core_type = static_cast<CoreType>(query(0x1A).eax >> 24);
   }
 
   parse_brand();
@@ -413,6 +421,8 @@ UArch CpuInfo::decode_uarch() const noexcept {
         return UArch::Zen4;  // Genoa, Raphael
       case 0x1A:
         return UArch::Zen5;
+      default:
+        break;
     }
   }
 

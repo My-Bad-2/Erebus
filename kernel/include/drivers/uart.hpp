@@ -186,7 +186,7 @@ class SerialPort {
   void append_fill(std::size_t count, char c) noexcept;
 
   /// @brief Waits (boundedly) until every byte has left the shift register.
-  void flush() noexcept;
+  void flush() const noexcept;
 
   [[nodiscard]] static constexpr char* advance(std::size_t /* n */) noexcept {
     // UARTs are stream devices, not memory buffers. Formatter must fall back

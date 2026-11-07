@@ -7,7 +7,7 @@
 namespace kernel::memory::pmm {
 namespace {
 // Descriptors inside a block we own are always in range, so skip pfn_to_page()'s bounds check.
-[[gnu::always_inline]] inline Page* page_at(const std::uint64_t pfn) noexcept {
+[[gnu::always_inline]] Page* page_at(const std::uint64_t pfn) noexcept {
   return detail::g_vmemmap_base + pfn;
 }
 }  // namespace
@@ -59,9 +59,9 @@ void MobilityZone::buddy_merge_internal(Page* page, std::uint8_t order) noexcept
       break;
     }
 
-    // A buddy that is free with the same order is linked into the free list of *some* zone.
+    // A buddy that is free with the same order is linked into the free list of some zone.
     // Mobility and node tell us whether it is ours; if it is not, unlinking it from our list
-    // would corrupt both. Read the flags once so the three fields come from the same moment.
+    // would corrupt both.
     Page* buddy = page_at(buddy_pfn);
     const Flags buddy_flags{buddy->flags.load(std::memory_order_acquire)};
     if (buddy_flags.get_state() != PageState::Free || buddy_flags.get_order() != order ||
@@ -106,7 +106,7 @@ Page* MobilityZone::extract_block_internal(const std::uint8_t requested_order) n
   const std::uint32_t node_id = m_parent_node->get_id();
   const std::uint64_t pfn = page_to_pfn(page);
 
-  // Keep the lower half each time and give the upper half back.
+  // Keep the lower-half each time and give the upper-half back.
   while (curr_order > requested_order) {
     --curr_order;
     Page* upper = page_at(pfn + (1ul << curr_order));
@@ -195,6 +195,28 @@ void MobilityZone::batch_drain_pcp(PcpList& list, const std::uint8_t order) noex
   }
 
   add_free_pages(static_cast<std::uint64_t>(count) << order);
+}
+
+std::uint64_t MobilityZone::drain_pcp_local() noexcept {
+  utils::NakedGuard guard{m_lock};
+  flush_deferred_frees_internal();
+
+  if (m_pcp_cache == nullptr) {
+    return 0;
+  }
+
+  std::uint64_t pages = 0;
+  for (std::uint8_t order = 0; order <= PCP_MAX_ORDER; ++order) {
+    PcpList& list = m_pcp_cache[hw::percpu::id()].lists[order];
+
+    while (Page* p = list.pop_cold()) {
+      buddy_merge_internal(p, order);
+      pages += 1ul << order;
+    }
+  }
+
+  add_free_pages(pages);
+  return pages;
 }
 
 Page* MobilityZone::alloc_pages(const std::uint8_t requested_order) noexcept {

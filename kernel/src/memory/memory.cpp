@@ -11,8 +11,8 @@
 
 namespace kernel::memory {
 void initialize() {
-  std::span memmap(boot::memmap_request.response->entries,
-                   boot::memmap_request.response->entry_count);
+  const std::span memmap(boot::memmap_request.response->entries,
+                         boot::memmap_request.response->entry_count);
   const std::uint32_t total_cpus = hw::smp::possible_cpus();
 
   DirectMap::initialize(boot::hhdm_request.response->offset);

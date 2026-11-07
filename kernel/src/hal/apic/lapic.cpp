@@ -5,7 +5,9 @@
 namespace kernel::hw::apic {
 std::uint64_t Lapic::calibrate_bus_frequency() const noexcept {
   const std::uint64_t cached = s_calibrated_bus_hz.load(std::memory_order_acquire);
-  if (cached != 0) return cached;
+  if (cached != 0) {
+    return cached;
+  }
 
   std::uint64_t bus_hz = drivers::SystemClock::cached_apic_bus_hz();
 
@@ -17,7 +19,7 @@ std::uint64_t Lapic::calibrate_bus_frequency() const noexcept {
     write(Reg::TimerDivide, Raw32Schema{std::to_underlying(TimerDivide::Div1)});
     write(Reg::LvtTimer, LvtSchema{}.with_timer_mode(TimerMode::OneShot).with_masked());
 
-    // Measure over 3 x 1 ms windows against SystemClock::raw_ticks() (rdtsc)
+    // Measure over 3 x 1ms windows against SystemClock::raw_ticks()
     constexpr auto sample_time = (1_ms).to_ns();
     const std::uint64_t window_ticks =
         std::max(1ul, drivers::SystemClock::scaler().ns_to_ticks(sample_time));
@@ -71,9 +73,6 @@ void Lapic::initialize(memory::VirtualAddress mmio_base, bool prefer_x2apic) noe
   BaseMsrSchema apic_base = read::msr(IA32_APIC_BASE);
   apic_base.set_global_enable();
 
-  // The boot loader may have switched to x2APIC already, and there is no way back short of
-  // disabling the APIC altogether. Firmware only does that when it has to (APIC IDs past 255),
-  // so staying in x2APIC is the right call anyway.
   if (apic_base.get_x2apic_enable() || (prefer_x2apic && m_caps.has_x2apic)) {
     apic_base.set_x2apic_enable();
     write::msr(IA32_APIC_BASE, apic_base.raw());

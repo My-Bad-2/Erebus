@@ -81,8 +81,8 @@ std::expected<void, Error> PageMap::map_1gb_as_2mb(const VirtualAddress virt,
 
       if (!installed) [[unlikely]] {
         for (std::uint32_t j = 0; j < i; ++j) {
-          [[maybe_unused]] auto _ = unmap(
-              virt + static_cast<VirtualAddress::OffsetType>(j * PAGE_SIZE_2MB), PageSize::Size2M);
+          auto _ = unmap(virt + static_cast<VirtualAddress::OffsetType>(j * PAGE_SIZE_2MB),
+                         PageSize::Size2M);
         }
 
         return std::unexpected(Error::AlreadyMapped);

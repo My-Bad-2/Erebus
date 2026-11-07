@@ -31,14 +31,14 @@ namespace kernel::hw::smp {
 /// the largest single-image systems today have a few thousand threads, and Linux stops at 8192.
 /// 65536 is far beyond either while keeping a CPU number small enough to pack, which the
 /// QSpinlock tail relies on. CPUs the firmware reports past this limit are never started.
-inline constexpr std::uint32_t MAX_CPUS = 1u << 16;
+inline constexpr std::uint32_t MAX_CPUS = 1 << 16;
 
 /// @brief Most NUMA nodes the memory manager will track.
 ///
 /// ACPI proximity domains are 32-bit as well. Nodes are numbered densely and some per-node
 /// tables are quadratic in the node count, so the cap mostly protects against firmware that
 /// invents domains. Real machines, CXL and HBM included, stay in the dozens.
-inline constexpr std::uint32_t MAX_NUMA_NODES = 1u << 12;
+inline constexpr std::uint32_t MAX_NUMA_NODES = 1 << 12;
 
 /// @brief Returned by lookups that find no CPU.
 inline constexpr std::uint32_t INVALID_CPU = ~0u;

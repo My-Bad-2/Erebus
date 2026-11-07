@@ -455,6 +455,13 @@ KTEST(LatencyEstimator, settles_on_what_it_measures) {
   // A steady latency: nothing on top, give or take what integer averages leave behind.
   KEXPECT_GE(estimator.advance_ns(), 3900u);
   KEXPECT_LE(estimator.advance_ns(), 4100u);
+  KEXPECT_EQ(estimator.samples(), 200u);
+
+  // Settled, it does not move for more of the same, though every one of them counts.
+  const std::uint64_t settled = estimator.advance_ns();
+  estimator.observe(4000);
+  KEXPECT_EQ(estimator.advance_ns(), settled);
+  KEXPECT_EQ(estimator.samples(), 201u);
 }
 
 KTEST(LatencyEstimator, leaves_more_room_when_latency_varies) {
@@ -477,6 +484,7 @@ KTEST(LatencyEstimator, does_not_learn_from_something_else_keeping_interrupts_of
   estimator.observe(100'000'000);
 
   KEXPECT_EQ(estimator.advance_ns(), before);
+  KEXPECT_EQ(estimator.samples(), 0u);
 }
 
 KTEST(LatencyEstimator, has_an_upper_limit) {
@@ -631,7 +639,10 @@ KTEST(Timer, a_long_wait_goes_in_legs_and_ends_on_time) {
 
   KEXPECT(fired);
   KEXPECT_GE(probe.fired_ns.load(std::memory_order_relaxed), deadline.raw_ns());
-  KEXPECT_GE(queue.stats().hardware_arms, arms + 8);
+
+  // Ten legs if every interrupt is on time. A host that keeps the CPU away for a while makes the
+  // next leg shorter, so all this can count on is that there was more than one.
+  KEXPECT_GE(queue.stats().hardware_arms, arms + 2);
 }
 
 KTEST(Timer, can_be_started_on_another_cpu) {
@@ -767,14 +778,17 @@ KTEST(Timer, a_periodic_timer_does_not_drift) {
     std::atomic<std::uint64_t> missed{0};
   } scene;
 
+  // Periods skipped by the last callback are not periods of this timer: it stops there.
   Timer timer{[](Timer& self, void* context) noexcept {
                 auto* s = static_cast<Scene*>(context);
                 s->last_deadline.store(self.deadline().raw_ns(), std::memory_order_relaxed);
 
+                if (s->runs.fetch_add(1, std::memory_order_release) + 1 == PERIODS) {
+                  return TimerAction::Done;
+                }
+
                 s->missed.fetch_add(self.forward(PERIOD) - 1, std::memory_order_relaxed);
-                return s->runs.fetch_add(1, std::memory_order_release) + 1 < PERIODS
-                           ? TimerAction::Restart
-                           : TimerAction::Done;
+                return TimerAction::Restart;
               },
               &scene};
 
@@ -874,11 +888,12 @@ KTEST(Timer, exact_timers_start_on_their_deadline) {
     }
   };
 
-  // The first rounds are spent finding out how long interrupts take here.
-  const std::uint64_t advance_before = hw::percpu::timers().advance_ns();
+  // The first rounds are spent finding out how long interrupts take here. Earlier tests may have
+  // taught the estimate all there is to know already, so what has to show is that it listened.
+  const std::uint64_t samples_before = hw::percpu::timers().latency_samples();
   measure(TimerPrecision::Normal, normal);
   measure(TimerPrecision::Normal, normal);
-  KEXPECT_NE(hw::percpu::timers().advance_ns(), advance_before);
+  KEXPECT_GT(hw::percpu::timers().latency_samples(), samples_before);
 
   measure(TimerPrecision::Exact, exact);
 
@@ -902,4 +917,167 @@ KTEST(Timer, exact_timers_start_on_their_deadline) {
   // of this code's hands: on a VM, the host can take the CPU away at any moment.
   KEXPECT_LE(median_exact, median_normal / 2);
 }
+
+namespace {
+struct FireCount {
+  std::atomic<std::uint32_t> fired{0};
+};
+
+TimerAction count_fired(Timer&, void* counters) noexcept {
+  static_cast<FireCount*>(counters)->fired.fetch_add(1, std::memory_order_acq_rel);
+  return TimerAction::Done;
+}
+
+void wait_out(const Duration time) noexcept {
+  const TimePoint end = SystemClock::now() + time;
+  while (SystemClock::now() < end) {
+    hw::pause();
+  }
+}
+
+template <typename Pred>
+[[nodiscard]] bool wait_until_true(Pred&& done) noexcept {
+  const TimePoint deadline = SystemClock::now() + Duration::seconds(10);
+  while (!done()) {
+    if (SystemClock::now() > deadline) {
+      return false;
+    }
+
+    hw::pause();
+  }
+
+  return true;
+}
+}  // namespace
+
+// A CPU going idle for a timer that was given up on should sleep through, and that is the one time
+// a write to the hardware is worth it. What the last test left behind has gone off by the time this
+// starts counting: interrupts come back on at the end of prepare_for_idle().
+KTEST(TimerIdle, a_cancelled_timer_does_not_wake_an_idle_cpu) {
+  FireCount counters;
+  Timer timer{&count_fired, &counters};
+
+  TimerQueue& queue = hw::percpu::timers();
+
+  (void)timer.start_after(Duration::milliseconds(1));
+  KEXPECT(timer.cancel());
+
+  queue.prepare_for_idle();
+  const auto before = queue.stats();
+
+  wait_out(Duration::milliseconds(3));
+  KEXPECT_EQ(queue.stats().idle_wakeups, before.idle_wakeups);
+}
+
+KTEST(TimerIdle, the_hardware_still_works_afterwards) {
+  FireCount counters;
+  Timer timer{&count_fired, &counters};
+
+  (void)timer.start_after(Duration::milliseconds(1));
+  KEXPECT(timer.cancel());
+  hw::percpu::timers().prepare_for_idle();
+
+  (void)timer.start_after(Duration::microseconds(100));
+  KEXPECT(wait_until_true([&] { return counters.fired.load() == 1; }));
+
+  timer.cancel_sync();
+}
+
+KTEST(TimerIdle, the_hardware_moves_on_to_what_is_next) {
+  FireCount early_counters;
+  FireCount late_counters;
+  Timer early{&count_fired, &early_counters};
+  Timer late{&count_fired, &late_counters};
+
+  TimerQueue& queue = hw::percpu::timers();
+
+  (void)early.start_after(Duration::milliseconds(1));
+  (void)late.start_after(Duration::milliseconds(3));
+  KEXPECT(early.cancel());
+
+  queue.prepare_for_idle();
+  const auto before = queue.stats();
+
+  // Nothing for the first timer's interrupt, which would find nothing to do, and the second one
+  // still arrives.
+  KEXPECT(wait_until_true([&] { return late_counters.fired.load() == 1; }));
+  KEXPECT_EQ(queue.stats().idle_wakeups, before.idle_wakeups);
+
+  late.cancel_sync();
+}
+
+KTEST(TimerIdle, an_armed_timer_is_left_alone) {
+  FireCount counters;
+  Timer timer{&count_fired, &counters};
+
+  TimerQueue& queue = hw::percpu::timers();
+
+  (void)timer.start_after(Duration::milliseconds(1));
+  const auto before = queue.stats();
+
+  queue.prepare_for_idle();
+
+  KEXPECT_EQ(queue.stats().hardware_arms, before.hardware_arms);
+  KEXPECT(wait_until_true([&] { return counters.fired.load() == 1; }));
+  timer.cancel_sync();
+}
+
+namespace {
+// What is left of a timer after cancel_sync() has to be nothing at all, so the callback looks at
+// whether its owner still thinks it is around. Everything here is static, as the failure this is
+// after is a callback on memory that belongs to someone else by then.
+struct Abandoned {
+  Timer timer{};
+  std::atomic<bool> owned{false};
+  std::atomic<std::uint32_t> calls{0};
+  std::atomic<std::uint32_t> calls_after_the_end{0};
+};
+
+constinit Abandoned g_abandoned;
+
+TimerAction check_for_owner(Timer&, void* context) noexcept {
+  auto* abandoned = static_cast<Abandoned*>(context);
+
+  abandoned->calls.fetch_add(1, std::memory_order_relaxed);
+
+  // Long enough for the other CPU to get ahead of this, if it was not waiting.
+  for (std::uint32_t i = 0; i < 32; ++i) {
+    hw::pause();
+  }
+
+  if (!abandoned->owned.load(std::memory_order_acquire)) {
+    abandoned->calls_after_the_end.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  return TimerAction::Done;
+}
+}  // namespace
+
+// The expiry and the cancel on two CPUs at the same moment, over and over, with the timer given up
+// on right as it goes off.
+KTEST(Timer, cancel_sync_leaves_nothing_of_a_timer_on_another_cpu) {
+  if (smp::online_cpus() < 2) {
+    KTEST_SKIP("takes a second CPU for the timer to go off on");
+  }
+
+  const std::uint32_t cpu = smp::online_cpus() - 1;
+
+  g_abandoned.timer.set_callback(&check_for_owner, &g_abandoned);
+
+  for (std::uint32_t round = 0; round < 3000; ++round) {
+    g_abandoned.owned.store(true, std::memory_order_release);
+
+    const Duration delay = Duration::nanoseconds(2000 + (round % 64) * 50);
+    KREQUIRE(g_abandoned.timer.start_on(cpu, SystemClock::now() + delay).has_value());
+
+    wait_out(delay);
+    g_abandoned.timer.cancel_sync();
+
+    g_abandoned.owned.store(false, std::memory_order_release);
+  }
+
+  KEXPECT_EQ(g_abandoned.calls_after_the_end.load(), 0u);
+  KEXPECT_GT(g_abandoned.calls.load(), 0u);
+}
+
 }  // namespace kernel::testing

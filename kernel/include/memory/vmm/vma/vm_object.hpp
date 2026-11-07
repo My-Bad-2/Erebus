@@ -54,7 +54,8 @@ class VMObject {
 
   [[nodiscard]] std::uint8_t page_order() const noexcept;
   [[nodiscard]] std::optional<PhysicalAddress> lookup_local(std::size_t page_offset) noexcept;
-  [[nodiscard]] std::optional<PhysicalAddress> lookup_inherited(std::size_t page_offset) noexcept;
+  [[nodiscard]] std::optional<PhysicalAddress> lookup_inherited(
+      std::size_t page_offset) const noexcept;
   [[nodiscard]] std::expected<PhysicalAddress, Error> install(std::size_t page_offset,
                                                               PhysicalAddress page) noexcept;
 

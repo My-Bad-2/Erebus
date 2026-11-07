@@ -1,9 +1,5 @@
 /// @file string.h
-/// @brief The kernel's <string.h>: memory and string functions, tuned for x86-64.
-///
-/// The memory functions handle small sizes with a few overlapping unaligned loads and stores and
-/// hand large ones to `rep movsb` / `rep stosb`. The string functions read a word at a time, but
-/// never from a page the string does not reach, so they cannot fault past its end.
+/// @brief The kernel's <string.h>: memory and string functions.
 #pragma once
 
 #include <stddef.h>

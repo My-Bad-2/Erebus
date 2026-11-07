@@ -66,7 +66,7 @@ class SubtableView {
     }
 
     Iterator operator++(int) noexcept {
-      Iterator tmp = *this;
+      const Iterator tmp = *this;
       ++*this;
       return tmp;
     }

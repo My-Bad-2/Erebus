@@ -38,17 +38,24 @@ class Config:
     memory_mib: int
     numa_nodes: int
     iteration: int
+    topology: str = ""  # What goes after the CPU count in -smp, like sockets=2,cores=2.
 
     @property
     def name(self) -> str:
         cpu = re.sub(r"[^A-Za-z0-9]+", "_", self.cpu).strip("_")
-        return (f"{self.accel}-{cpu}-smp{self.smp}-{self.memory_mib}M"
+        shape = re.sub(r"[^A-Za-z0-9]+", "_", self.topology)
+        return (f"{self.accel}-{cpu}-smp{self.smp}{shape}-{self.memory_mib}M"
                 f"-numa{self.numa_nodes}-run{self.iteration}")
 
     @property
     def summary(self) -> str:
-        return (f"{self.accel:<4} {self.cpu:<45} smp={self.smp:<3} mem={self.memory_mib}M "
+        return (f"{self.accel:<4} {self.cpu:<45} smp={self.smp_argument:<3} mem={self.memory_mib}M "
                 f"numa={self.numa_nodes} #{self.iteration}")
+
+
+    @property
+    def smp_argument(self) -> str:
+        return f"{self.smp},{self.topology}" if self.topology else str(self.smp)
 
 
 @dataclasses.dataclass
@@ -97,7 +104,7 @@ def qemu_command(args: argparse.Namespace, config: Config, log: Path, vars_file:
         args.qemu,
         "-M", "q35",
         "-m", f"{config.memory_mib}M",
-        "-smp", str(config.smp),
+        "-smp", config.smp_argument,
         "-cpu", config.cpu,
         "-accel", config.accel,
         *numa_arguments(config),
@@ -177,12 +184,13 @@ def build_matrix(args: argparse.Namespace) -> tuple[list[Config], list[str]]:
         accels.remove("kvm")
         skipped.append("kvm: /dev/kvm is not usable by this user")
 
-    for accel, cpu, smp, memory, nodes in itertools.product(
+    for accel, cpu, machine, memory, nodes in itertools.product(
             accels, args.cpu, args.smp, args.memory, args.numa):
-        if nodes > smp:
+        smp, _, topology = machine.partition(",")
+        if nodes > int(smp):
             continue  # A node without CPUs is legal, but not what anyone means by this.
         for iteration in range(1, args.iterations + 1):
-            configs.append(Config(accel, cpu, smp, memory, nodes, iteration))
+            configs.append(Config(accel, cpu, int(smp), memory, nodes, iteration, topology))
     return configs, skipped
 
 
@@ -197,7 +205,9 @@ def main() -> int:
     # Each of these is given once per value; the defaults apply when one is not given at all.
     parser.add_argument("--accel", action="append", help="accelerator (default: kvm)")
     parser.add_argument("--cpu", action="append", help="CPU model (default: max,migratable=no)")
-    parser.add_argument("--smp", action="append", type=int, help="CPU count (default: 1, 2, 4)")
+    parser.add_argument("--smp", action="append",
+                        help="CPU count, and optionally a shape as QEMU's -smp takes it, like "
+                             "8,sockets=2,cores=2,threads=2 (default: 1, 2, 4)")
     parser.add_argument("--memory", action="append", type=parse_memory,
                         help="memory size such as 512M or 2G (default: 2G)")
     parser.add_argument("--numa", action="append", type=int, help="NUMA node count (default: 1)")
@@ -215,7 +225,7 @@ def main() -> int:
     args = parser.parse_args()
     args.accel = args.accel or ["kvm"]
     args.cpu = args.cpu or ["max,migratable=no"]
-    args.smp = args.smp or [1, 2, 4]
+    args.smp = args.smp or ["1", "2", "4"]
     args.memory = args.memory or [2048]
     args.numa = args.numa or [1]
 

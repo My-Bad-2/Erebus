@@ -10,6 +10,8 @@
 #include "hal/smp/smp.hpp"
 #include "ktest.hpp"
 #include "memory/memory.hpp"
+#include "memory/pmm/bootstrap.hpp"
+#include "memory/shrinker.hpp"
 #include "memory/vmm/vma/vma.hpp"
 #include "sched/fpu_guard.hpp"
 #include "utils/linked_list.hpp"
@@ -472,8 +474,45 @@ KTEST(Thread, destroy_refuses_a_thread_stopped_halfway) {
   run_to_completion(game.worker);
 }
 
-KTEST(Thread, destroy_gives_the_stack_back) {
+namespace {
+// Stacks go back to the VMM under memory pressure, so this is how a test gets a cache with room.
+void empty_the_stack_cache() noexcept {
+  for (std::uint32_t node = 0; node < memory::pmm::g_topology.active_nodes(); ++node) {
+    (void)memory::run_shrinkers(node);
+  }
+}
+}  // namespace
+
+// A stack of the usual size stays mapped for the next thread, which gets it without asking the VMM
+// for anything. Other threads may come and go meanwhile, so this goes by the counts.
+KTEST(Thread, destroy_keeps_a_stack_for_the_next_thread) {
+  empty_the_stack_cache();
+
   const auto created = Thread::create_kernel("stack", &do_nothing);
+  KREQUIRE(created.has_value());
+  const VirtualAddress stack = (*created)->stack_base();
+
+  const sched::StackCacheStats before = Thread::stack_cache_stats();
+  KEXPECT(Thread::destroy(*created).has_value());
+  KEXPECT_GT(Thread::stack_cache_stats().cached, before.cached);
+  KEXPECT(memory::vmm::kernel_space()->pagemap().translate(stack).has_value());
+
+  const auto next = Thread::create_kernel("next", &do_nothing);
+  KREQUIRE(next.has_value());
+  KEXPECT_GT(Thread::stack_cache_stats().reused, before.reused);
+  KEXPECT(*(*next)->stack_base().as<volatile std::uint64_t>() != 0);
+  KEXPECT(Thread::destroy(*next).has_value());
+}
+
+// Only the usual size is worth keeping. Anything else is unmapped, so a stack overflow into where
+// it was would still fault.
+KTEST(Thread, destroy_gives_an_unusual_stack_back) {
+  // With room in the cache, or the stack would go back whatever its size.
+  empty_the_stack_cache();
+
+  const auto created =
+      Thread::create_kernel("big", &do_nothing, nullptr,
+                            ThreadCreateOptions{.stack_size = 2 * sched::DEFAULT_KSTACK_SIZE});
   KREQUIRE(created.has_value());
   const VirtualAddress stack = (*created)->stack_base();
 
@@ -648,9 +687,9 @@ KTEST(Thread, threads_go_on_intrusive_lists) {
   KREQUIRE(first.has_value());
   KREQUIRE(second.has_value());
 
-  using Link = utils::SListNode<Thread, sched::WaitQueueTag>;
+  using Link = utils::SListNode<Thread, sched::RunQueueTag>;
 
-  utils::SList<Thread, sched::WaitQueueTag> queue;
+  utils::SList<Thread, sched::RunQueueTag> queue;
   queue.push_front(**first);
   queue.push_front(**second);
 

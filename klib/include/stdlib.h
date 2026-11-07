@@ -1,9 +1,6 @@
 /// @file stdlib.h
 /// @brief The parts of <stdlib.h> that make sense without a hosted runtime: number parsing,
 ///        sorting and searching, and integer arithmetic.
-///
-/// There is no errno: the conversion functions report overflow only through their clamped
-/// result, and through `endptr`.
 #pragma once
 
 #include <stddef.h>

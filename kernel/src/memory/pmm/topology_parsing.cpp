@@ -8,7 +8,6 @@
 
 namespace kernel::memory::pmm {
 namespace {
-// The variable-length arrays of ACPI tables have no alignment guarantee.
 template <typename T>
 [[nodiscard]] T load_unaligned(const std::uint8_t* src) noexcept {
   T value;
@@ -172,7 +171,7 @@ void TopologyParser::process_hmat_locality(const void* slb) const noexcept {
 
   // Layout after the fixed header: u32 initiators[num_init], u32 targets[num_tgt],
   // u16 matrix[num_init][num_tgt]. Refuse structures whose arrays do not fit in their length.
-  const std::uint64_t initiators_off = sizeof(acpi_hmat_locality);
+  constexpr std::uint64_t initiators_off = sizeof(acpi_hmat_locality);
   const std::uint64_t targets_off = initiators_off + num_init * sizeof(std::uint32_t);
   const std::uint64_t matrix_off = targets_off + num_tgt * sizeof(std::uint32_t);
   const std::uint64_t needed = matrix_off + num_init * num_tgt * sizeof(std::uint16_t);
@@ -190,9 +189,11 @@ void TopologyParser::process_hmat_locality(const void* slb) const noexcept {
   const auto initiator = [&](const std::uint64_t i) {
     return load_unaligned<std::uint32_t>(base + initiators_off + i * sizeof(std::uint32_t));
   };
+
   const auto target = [&](const std::uint64_t t) {
     return load_unaligned<std::uint32_t>(base + targets_off + t * sizeof(std::uint32_t));
   };
+
   const auto entry = [&](const std::uint64_t i, const std::uint64_t t) {
     return load_unaligned<std::uint16_t>(base + matrix_off +
                                          (i * num_tgt + t) * sizeof(std::uint16_t));
@@ -221,8 +222,7 @@ void TopologyParser::process_hmat_locality(const void* slb) const noexcept {
 
       if (latency) {
         // Latencies are reported in picoseconds.
-        const auto lat_ns =
-            std::max<std::uint32_t>(1, static_cast<std::uint32_t>(scaled_val / 1000));
+        const auto lat_ns = std::max(1u, static_cast<std::uint32_t>(scaled_val / 1000));
         metrics.base_latency_ns = lat_ns;
 
         if (lat_ns < 60) {

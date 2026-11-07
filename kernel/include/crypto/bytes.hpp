@@ -3,6 +3,8 @@
 ///        secrets, and comparing them in constant time.
 #pragma once
 
+#include <string.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -40,14 +42,14 @@ namespace kernel::crypto {
     return;
   }
 
-  __builtin_memset(bytes.data(), 0, bytes.size());
+  klib::memset(bytes.data(), 0, bytes.size());
   asm volatile("" : : "r"(bytes.data()) : "memory");
 }
 
 /// @brief secure_zero() of a whole object, which must be trivially copyable.
 template <typename T>
   requires std::is_trivially_copyable_v<T>
-[[gnu::always_inline]] inline void secure_zero(T& object) noexcept {
+[[gnu::always_inline]] void secure_zero(T& object) noexcept {
   secure_zero(std::as_writable_bytes(std::span{&object, 1}));
 }
 

@@ -1,10 +1,6 @@
 #include "boot/boot.hpp"
 #include "utils/logger.hpp"
 
-// Limine looks for the requests between the start and end markers, and Limine alone reads the
-// markers and the base revision tag. Nothing in the kernel refers to them, so every one of them
-// is [[gnu::used]]: link-time optimization would otherwise drop them, and with the tag gone
-// Limine silently falls back to base revision 0.
 namespace kernel::boot {
 namespace {
 [[gnu::used, gnu::section(".limine_requests_start")]]
@@ -13,7 +9,6 @@ volatile std::uint64_t start_marker[] = LIMINE_REQUESTS_START_MARKER;
 [[gnu::used, gnu::section(".limine_requests_end")]]
 volatile std::uint64_t end_marker[] = LIMINE_REQUESTS_END_MARKER;
 
-// Limine clears the last word when it supports the revision asked for.
 [[gnu::used, gnu::section(".limine_requests")]]
 volatile std::uint64_t base_revision[] = LIMINE_BASE_REVISION(BASE_REVISION);
 }  // namespace

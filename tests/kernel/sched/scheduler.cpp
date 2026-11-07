@@ -9,6 +9,7 @@
 #include <bit>
 #include <chrono.hpp>
 #include <cstdint>
+#include <span>
 
 #include "../hal/fpu_registers.hpp"
 #include "drivers/clock.hpp"
@@ -965,7 +966,7 @@ KTEST(Scheduler, a_thread_that_loses_its_cpu_goes_to_an_idle_one) {
   KREQUIRE(usurper.has_value());
   scene.usurper = *usurper;
 
-  // Stays away from the test's CPU by starting on the last one, which is sure to be idle by now.
+  // Stays away from the test's CPU by asking for the last one, which should be idle by now.
   (void)wait_for([] { return false; }, Duration::milliseconds(50));
 
   const auto displaced = Thread::spawn_kernel(
@@ -973,8 +974,11 @@ KTEST(Scheduler, a_thread_that_loses_its_cpu_goes_to_an_idle_one) {
       +[](Scene* s) noexcept {
         spin_for(Duration::milliseconds(50));
 
+        // Where it said it wanted to go is only a preference, so this goes by where it ended up.
         const std::uint32_t before = hw::percpu::id();
-        if (before == s->start_cpu && Scheduler::enqueue(s->usurper).has_value()) {
+        s->usurper->set_cpu_id(before);
+
+        if (Scheduler::enqueue(s->usurper).has_value()) {
           s->moved.store(hw::percpu::id() != before, std::memory_order_release);
         }
 
@@ -989,6 +993,163 @@ KTEST(Scheduler, a_thread_that_loses_its_cpu_goes_to_an_idle_one) {
            scene.usurper_done.load(std::memory_order_acquire);
   }));
   KEXPECT(scene.moved.load(std::memory_order_acquire));
+}
+
+// An interrupt that wants the CPU back cannot have it while the thread holds a lock. The thread has
+// to give way when it lets go: the next interrupt may be a whole slice away, or never come.
+KTEST(Scheduler, a_thread_gives_way_as_soon_as_preemption_is_back_on) {
+  if (smp::online_cpus() < 2) {
+    KTEST_SKIP("takes two CPUs");
+  }
+
+  struct Scene {
+    std::atomic<bool> holding{false};
+    std::atomic<std::uint32_t> urgent_ran{0};
+    std::atomic<bool> finished{false};
+    std::uint32_t seen_on_release{0};
+    bool request_arrived{false};
+    klib::TimePoint give_up_at{};
+  } scene{.give_up_at = drivers::SystemClock::now() + Duration::seconds(5)};
+
+  const auto holder = Thread::spawn_kernel(
+      "holder",
+      +[](Scene* s) noexcept {
+        hw::percpu::preempt_disable();
+        s->holding.store(true, std::memory_order_release);
+
+        // Until the interrupt has been and gone, unable to do anything about this thread.
+        while ((hw::percpu::ast_flags() & hw::percpu::AST_NEED_RESCHED) == 0 &&
+               drivers::SystemClock::now() < s->give_up_at) {
+          hw::pause();
+        }
+
+        s->request_arrived = (hw::percpu::ast_flags() & hw::percpu::AST_NEED_RESCHED) != 0;
+
+        hw::percpu::preempt_enable();
+        s->seen_on_release = s->urgent_ran.load(std::memory_order_acquire);
+        s->finished.store(true, std::memory_order_release);
+      },
+      &scene, pinned_to(last_cpu()));
+  KREQUIRE(holder.has_value());
+  KEXPECT(Scheduler::enqueue(*holder).has_value());
+  KEXPECT(wait_for([&] { return scene.holding.load(std::memory_order_acquire); }));
+
+  const auto urgent = Thread::spawn_kernel(
+      "urgent",
+      +[](std::atomic<std::uint32_t>* ran) noexcept { ran->store(1, std::memory_order_release); },
+      &scene.urgent_ran,
+      {.priority = PriorityClass::RealTime, .preferred_cpu = last_cpu(), .pinned = true});
+  KREQUIRE(urgent.has_value());
+  KEXPECT(Scheduler::enqueue(*urgent).has_value());
+
+  KEXPECT(wait_for([&] { return scene.finished.load(std::memory_order_acquire); }));
+  KEXPECT(scene.request_arrived);
+  KEXPECT_EQ(scene.seen_on_release, 1u);
+}
+
+// The same with interrupts off too, the way every spinlock guard does it: interrupts have to be
+// back on by the time the guard looks, or it finds it cannot switch, and the moment is gone.
+KTEST(Scheduler, a_guard_that_held_interrupts_off_gives_way_as_well) {
+  struct Scene {
+    std::atomic<std::uint32_t> urgent_ran{0};
+    std::uint32_t seen_on_release{0};
+    std::atomic<bool> finished{false};
+  } scene;
+
+  const auto created = Thread::spawn_kernel(
+      "starter",
+      +[](Scene* s) noexcept {
+        const auto urgent = Thread::spawn_kernel("urgent",
+                                                 +[](std::atomic<std::uint32_t>* ran) noexcept {
+                                                   ran->store(1, std::memory_order_release);
+                                                 },
+                                                 &s->urgent_ran,
+                                                 {.priority = PriorityClass::RealTime,
+                                                  .preferred_cpu = hw::percpu::id(),
+                                                  .pinned = true});
+
+        if (urgent) {
+          utils::IrqDisableGuard guard;
+          (void)Scheduler::enqueue(*urgent);
+        }
+
+        s->seen_on_release = s->urgent_ran.load(std::memory_order_acquire);
+        s->finished.store(true, std::memory_order_release);
+      },
+      &scene, pinned_to(last_cpu()));
+  KREQUIRE(created.has_value());
+  KEXPECT(Scheduler::enqueue(*created).has_value());
+
+  KEXPECT(wait_for([&] { return scene.finished.load(std::memory_order_acquire); }));
+  KEXPECT_EQ(scene.seen_on_release, 1u);
+}
+
+// The other side of it: code that turned off interrupts by hand wants the CPU to itself, and
+// neither a guard coming and going inside that, nor anything it wakes, gets to take it away.
+KTEST(Scheduler, a_thread_with_interrupts_off_keeps_the_cpu) {
+  struct Scene {
+    std::atomic<std::uint32_t> urgent_ran{0};
+    std::uint32_t seen_with_interrupts_off{1};
+    std::uint32_t seen_afterwards{0};
+    std::atomic<bool> finished{false};
+  } scene;
+
+  const auto created = Thread::spawn_kernel(
+      "keeper",
+      +[](Scene* s) noexcept {
+        const auto urgent = Thread::spawn_kernel("urgent",
+                                                 +[](std::atomic<std::uint32_t>* ran) noexcept {
+                                                   ran->store(1, std::memory_order_release);
+                                                 },
+                                                 &s->urgent_ran,
+                                                 {.priority = PriorityClass::RealTime,
+                                                  .preferred_cpu = hw::percpu::id(),
+                                                  .pinned = true});
+
+        if (urgent) {
+          hw::irq::disable();
+          (void)Scheduler::enqueue(*urgent);
+
+          {
+            utils::IrqDisableGuard guard;
+          }
+
+          s->seen_with_interrupts_off = s->urgent_ran.load(std::memory_order_acquire);
+          hw::irq::enable();
+
+          // Still pending, so the next chance it gets is this one.
+          hw::percpu::preempt_disable();
+          hw::percpu::preempt_enable();
+          s->seen_afterwards = s->urgent_ran.load(std::memory_order_acquire);
+        }
+
+        s->finished.store(true, std::memory_order_release);
+      },
+      &scene, pinned_to(last_cpu()));
+  KREQUIRE(created.has_value());
+  KEXPECT(Scheduler::enqueue(*created).has_value());
+
+  KEXPECT(wait_for([&] { return scene.finished.load(std::memory_order_acquire); }));
+  KEXPECT_EQ(scene.seen_with_interrupts_off, 0u);
+  KEXPECT_EQ(scene.seen_afterwards, 1u);
+}
+
+// The last thread on a CPU has nothing but the idle thread running after it, and that switch has to
+// hand it to the reaper like any other. Otherwise the stack of a thread that is long gone sits on a
+// sleeping CPU.
+KTEST(Scheduler, the_last_thread_on_a_cpu_does_not_stay_behind_when_it_goes_idle) {
+  if (smp::online_cpus() < 2) {
+    KTEST_SKIP("takes two CPUs");
+  }
+
+  Counter counter;
+  const auto created = Thread::spawn_kernel("last", &count_once, &counter, pinned_to(last_cpu()));
+  KREQUIRE(created.has_value());
+  KEXPECT(Scheduler::enqueue(*created).has_value());
+  KEXPECT(wait_for([&] { return counter.done.load(std::memory_order_acquire) == 1; }));
+
+  const RunQueue& rq = Scheduler::cpu_runqueue(last_cpu());
+  KEXPECT(wait_for([&] { return !rq.has_dead_threads(); }));
 }
 
 KTEST(Scheduler, a_thread_that_starts_something_urgent_gets_out_of_the_way) {
@@ -1153,4 +1314,166 @@ KTEST_LAST(Scheduler, the_queues_are_empty_when_the_tests_are_over) {
     KEXPECT_EQ(Scheduler::cpu_runqueue(cpu).waiting(), 0u);
   }
 }
+
+// Nothing wakes a CPU with nothing to do. A periodic tick would show up here at once.
+KTEST(Scheduler, an_idle_cpu_gets_no_timer_interrupts) {
+  if (smp::online_cpus() < 2) {
+    KTEST_SKIP("the test itself is keeping the only CPU busy");
+  }
+
+  const std::uint32_t cpu = last_cpu();
+  const hw::timer::TimerQueue& timers = hw::percpu::cpu_area(cpu)->timers;
+
+  // Give it a moment to finish whatever the last test left there.
+  spin_for(Duration::milliseconds(10));
+  const hw::timer::TimerStats before = timers.stats();
+
+  spin_for(Duration::milliseconds(30));
+  const hw::timer::TimerStats after = timers.stats();
+
+  KEXPECT_EQ(after.expired, before.expired);
+  KEXPECT_EQ(after.idle_wakeups, before.idle_wakeups);
+  KEXPECT_EQ(after.hardware_arms, before.hardware_arms);
+}
+
+KTEST(Scheduler, a_thread_alone_on_a_cpu_is_left_alone) {
+  if (smp::online_cpus() < 2) {
+    KTEST_SKIP("the test itself is keeping the only CPU busy");
+  }
+
+  const std::uint32_t cpu = last_cpu();
+  const hw::timer::TimerQueue& timers = hw::percpu::cpu_area(cpu)->timers;
+
+  Parked parked;
+  const auto created = Thread::spawn_kernel("alone", &park, &parked, pinned_to(cpu));
+  KREQUIRE(created.has_value());
+  KREQUIRE(Scheduler::enqueue(*created).has_value());
+  KREQUIRE(wait_for([&] { return parked.running.load(std::memory_order_acquire); }));
+
+  spin_for(Duration::milliseconds(5));
+  const std::uint64_t before = timers.stats().expired;
+
+  spin_for(Duration::milliseconds(30));
+  const std::uint64_t after = timers.stats().expired;
+
+  parked.released.store(true, std::memory_order_release);
+  KEXPECT(wait_for([&] { return parked.finished.load(std::memory_order_acquire); }));
+
+  KEXPECT_EQ(after, before);
+}
+
+namespace {
+// Runs flat out, noting how long it gets to run in one go.
+struct Stint {
+  std::atomic<bool>* stop{nullptr};
+  std::atomic<std::uint32_t>* running{nullptr};
+  std::array<std::uint64_t, 64> stints_ns{};
+  std::uint32_t count{0};
+};
+
+void measure_stints(Stint* stint) noexcept {
+  // Anything longer than this between two looks at the clock is the thread being away.
+  constexpr std::uint64_t AWAY_NS = 50'000;
+
+  std::uint64_t began = drivers::SystemClock::now().raw_ns();
+  std::uint64_t last = began;
+
+  while (!stint->stop->load(std::memory_order_acquire)) {
+    const std::uint64_t now = drivers::SystemClock::now().raw_ns();
+
+    if (now - last > AWAY_NS) {
+      if (stint->count < stint->stints_ns.size()) {
+        stint->stints_ns[stint->count++] = last - began;
+      }
+
+      began = now;
+    }
+
+    last = now;
+  }
+
+  stint->running->fetch_sub(1, std::memory_order_acq_rel);
+}
+}  // namespace
+
+// A millisecond each, with room for what a VM does to timing: a host that takes the CPU away for a
+// moment cuts a stint in two or makes it look longer. The median is what counts.
+KTEST(Scheduler, a_slice_lasts_as_long_as_it_says) {
+  if (smp::online_cpus() < 2) {
+    KTEST_SKIP("the test needs to get a word in");
+  }
+
+  static constexpr std::uint64_t SLICE_NS = 1'000'000;
+
+  const std::uint32_t cpu = last_cpu();
+  std::atomic<bool> stop{false};
+  std::atomic<std::uint32_t> running{2};
+  std::array<Stint, 2> stints{Stint{.stop = &stop, .running = &running},
+                              Stint{.stop = &stop, .running = &running}};
+
+  ThreadCreateOptions options = pinned_to(cpu);
+  options.slice_ns = SLICE_NS;
+
+  for (Stint& stint : stints) {
+    const auto created = Thread::spawn_kernel("stint", &measure_stints, &stint, options);
+    KREQUIRE(created.has_value());
+    KREQUIRE(Scheduler::enqueue(*created).has_value());
+  }
+
+  spin_for(Duration::milliseconds(100));
+  stop.store(true, std::memory_order_release);
+  KREQUIRE(wait_for([&] { return running.load(std::memory_order_acquire) == 0; }));
+
+  for (Stint& stint : stints) {
+    KREQUIRE_GT(stint.count, 4u);
+
+    // The first one starts somewhere in the middle of things.
+    const std::span measured{stint.stints_ns.data() + 1, stint.count - 1};
+    std::ranges::sort(measured);
+
+    const std::uint64_t median = measured[measured.size() / 2];
+    KEXPECT_GE(median, SLICE_NS / 4);
+    KEXPECT_LE(median, SLICE_NS * 4);
+  }
+}
+
+// The last thread takes its slice timer's deadline with it. Going off anyway would wake a CPU with
+// nothing to do.
+KTEST(Scheduler, going_idle_stops_the_slice_timer) {
+  if (smp::online_cpus() < 2) {
+    KTEST_SKIP("the test itself is keeping the only CPU busy");
+  }
+
+  const std::uint32_t cpu = last_cpu();
+  const hw::timer::TimerQueue& timers = hw::percpu::cpu_area(cpu)->timers;
+  const hw::timer::Timer& slice_timer = Scheduler::cpu_runqueue(cpu).slice_timer();
+
+  // Two threads take turns, which is what starts it. Their slices are long enough for the
+  // timer to still be waiting when they are done.
+  std::atomic<bool> stop{false};
+  std::atomic<std::uint32_t> running{2};
+  std::array<Stint, 2> stints{Stint{.stop = &stop, .running = &running},
+                              Stint{.stop = &stop, .running = &running}};
+
+  ThreadCreateOptions options = pinned_to(cpu);
+  options.slice_ns = Duration::milliseconds(50).to_ns();
+
+  for (Stint& stint : stints) {
+    const auto created = Thread::spawn_kernel("stint", &measure_stints, &stint, options);
+    KREQUIRE(created.has_value());
+    KREQUIRE(Scheduler::enqueue(*created).has_value());
+  }
+
+  KREQUIRE(wait_for([&] { return slice_timer.is_pending(); }));
+
+  stop.store(true, std::memory_order_release);
+  KREQUIRE(wait_for([&] { return running.load(std::memory_order_acquire) == 0; }));
+
+  KEXPECT(wait_for([&] { return !slice_timer.is_pending(); }, Duration::milliseconds(20)));
+
+  const std::uint64_t wakeups = timers.stats().idle_wakeups;
+  spin_for(Duration::milliseconds(60));
+  KEXPECT_EQ(timers.stats().idle_wakeups, wakeups);
+}
+
 }  // namespace kernel::testing

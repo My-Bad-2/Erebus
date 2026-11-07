@@ -13,13 +13,13 @@ enum class IoType : std::uint8_t {
 };
 
 namespace mmio {
-/// @brief Reads a device register. A single access of exactly `sizeof(T)` bytes.
+/// @brief Reads a device register.
 ///
 /// Device memory is mapped uncacheable, and x86 neither reorders nor speculates UC accesses, so
 /// no fence is needed against other MMIO or against ordinary memory accesses. The asm still
 /// keeps the *compiler* from moving ordinary loads and stores across the access.
 template <std::unsigned_integral T>
-[[nodiscard, gnu::always_inline]] inline T read(const std::uintptr_t addr) noexcept {
+[[nodiscard, gnu::always_inline]] T read(const std::uintptr_t addr) noexcept {
   T val;
   asm volatile("mov %1, %0"
                : "=r"(val)
@@ -28,9 +28,9 @@ template <std::unsigned_integral T>
   return val;
 }
 
-/// @brief Writes a device register. A single access of exactly `sizeof(T)` bytes.
+/// @brief Writes a device register.
 template <std::unsigned_integral T>
-[[gnu::always_inline]] inline void write(const std::uintptr_t addr, const T val) noexcept {
+[[gnu::always_inline]] void write(const std::uintptr_t addr, const T val) noexcept {
   asm volatile("mov %1, %0" : "=m"(*reinterpret_cast<volatile T*>(addr)) : "r"(val) : "memory");
 }
 

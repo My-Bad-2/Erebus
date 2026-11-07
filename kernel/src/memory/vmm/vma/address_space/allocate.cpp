@@ -40,8 +40,15 @@ auto AddressSpace::alloc(const std::size_t size_bytes, const AccessFlags access,
 
   // Object pages are indexed from the start of the VMA, and a stack grows down. Leave enough
   // indices below the initial range for it to reach its maximum size.
-  const std::size_t headroom_pages =
-      has_flag(access, AccessFlags::Stack) ? MAX_STACK_BYTES / bytes_per_page : 0;
+  const bool is_stack = has_flag(access, AccessFlags::Stack);
+  const std::size_t headroom_pages = is_stack ? MAX_STACK_BYTES / bytes_per_page : 0;
+
+  // A user stack also gets the addresses it may grow into, as nothing else placed there could
+  // ever move out of its way. Kernel stacks are not meant to grow at all.
+  const std::size_t growth_gap =
+      is_stack && has_flag(access, AccessFlags::User) && aligned_size < MAX_STACK_BYTES
+          ? MAX_STACK_BYTES - aligned_size
+          : 0;
 
   VMArea* vma = allocate_vma();
   VMObject* obj = VMObject::create(type, page_size, headroom_pages + aligned_size / bytes_per_page);
@@ -63,7 +70,7 @@ auto AddressSpace::alloc(const std::size_t size_bytes, const AccessFlags access,
   Error failure = Error::Success;
   if (hint && !range_is_free(hint, hint + static_cast<VirtualAddress::OffsetType>(aligned_size))) {
     failure = Error::AlreadyMapped;
-  } else if (!hint && !(addr = find_free_gap(aligned_size, bytes_per_page))) {
+  } else if (!hint && !((addr = find_free_gap(aligned_size + growth_gap, bytes_per_page)))) {
     failure = Error::OutOfMemory;
   }
 
@@ -71,6 +78,10 @@ auto AddressSpace::alloc(const std::size_t size_bytes, const AccessFlags access,
     release_vma(vma);
     obj->drop_ref();
     return std::unexpected(failure);
+  }
+
+  if (!hint) {
+    addr += static_cast<VirtualAddress::OffsetType>(growth_gap);
   }
 
   init_vma(vma, addr, aligned_size, access, cache, page_size, type, NUMAPolicy::FirstTouch, pkey);
@@ -115,6 +126,24 @@ std::expected<void, Error> AddressSpace::free(const VirtualAddress addr) noexcep
     return std::unexpected(Error::NotMapped);
   }
 
+  release_vma_locked(vma);
+  return {};
+}
+
+std::expected<void, Error> AddressSpace::free_containing(const VirtualAddress addr) noexcept {
+  utils::ExclusivePreemptGuard guard(m_as_lock);
+
+  VMArea* vma = find_vma(addr);
+  if (vma == nullptr) {
+    return std::unexpected(Error::NotMapped);
+  }
+
+  release_vma_locked(vma);
+  return {};
+}
+
+void AddressSpace::release_vma_locked(VMArea* vma) noexcept {
+  const VirtualAddress addr = vma->start;
   unlink_vma(vma);
   m_vma_tree.erase(addr.value());
 
@@ -125,7 +154,6 @@ std::expected<void, Error> AddressSpace::free(const VirtualAddress addr) noexcep
   }
 
   release_vma(vma);
-  return {};
 }
 
 std::expected<VirtualAddress, Error> AddressSpace::realloc(const VirtualAddress old_addr,
@@ -213,7 +241,7 @@ auto AddressSpace::map_object(VMObject* existing_obj, const std::size_t size_byt
 
   VirtualAddress addr = hint;
   if (hint ? !range_is_free(hint, hint + static_cast<VirtualAddress::OffsetType>(aligned_size))
-           : !(addr = find_free_gap(aligned_size, bytes_per_page))) [[unlikely]] {
+           : !((addr = find_free_gap(aligned_size, bytes_per_page)))) [[unlikely]] {
     release_vma(vma);
     return std::unexpected(hint ? Error::AlreadyMapped : Error::OutOfMemory);
   }
@@ -262,7 +290,7 @@ auto AddressSpace::map_mmio(const PhysicalAddress phys_base, const std::size_t s
 
   VirtualAddress addr = hint;
   if (hint ? !range_is_free(hint, hint + static_cast<VirtualAddress::OffsetType>(aligned_size))
-           : !(addr = find_free_gap(aligned_size, bytes_per_page))) [[unlikely]] {
+           : !((addr = find_free_gap(aligned_size, bytes_per_page)))) [[unlikely]] {
     release_vma(vma);
     return std::unexpected(hint ? Error::AlreadyMapped : Error::OutOfMemory);
   }

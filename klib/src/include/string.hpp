@@ -16,14 +16,14 @@ struct [[gnu::packed, gnu::may_alias]] Unaligned {
 /// @brief Stores an integer at any address, without the aliasing rules getting in the way.
 template <typename T>
   requires std::is_integral_v<T>
-[[gnu::always_inline]] inline void unaligned_store(void* ptr, const T val) noexcept {
+[[gnu::always_inline]] void unaligned_store(void* ptr, const T val) noexcept {
   static_cast<Unaligned<T>*>(ptr)->val = val;
 }
 
 /// @brief Loads an integer from any address, without the aliasing rules getting in the way.
 template <typename T>
   requires std::is_integral_v<T>
-[[nodiscard, gnu::always_inline]] inline T unaligned_load(const void* ptr) noexcept {
+[[nodiscard, gnu::always_inline]] T unaligned_load(const void* ptr) noexcept {
   return static_cast<const Unaligned<T>*>(ptr)->val;
 }
 
@@ -42,7 +42,7 @@ template <std::unsigned_integral T>
 /// @brief Sets bit 7 of exactly the zero bytes of `v`. For when the highest match matters.
 [[nodiscard, gnu::const, gnu::always_inline]] constexpr std::uint64_t zero_bytes(
     const std::uint64_t v) noexcept {
-  constexpr std::uint64_t lows = 0x7F7F'7F7F'7F7F'7F7Full;
+  constexpr std::uint64_t lows = 0x7F7F'7F7F'7F7F'7F7Ful;
   // Adding 0x7F to the low seven bits of a byte carries into bit 7 unless they are all zero, and
   // never into the next byte.
   return ~(((v & lows) + lows) | v | lows);
@@ -51,7 +51,7 @@ template <std::unsigned_integral T>
 /// @brief Copies `c` into every byte of a word.
 [[nodiscard, gnu::const, gnu::always_inline]] constexpr std::uint64_t broadcast_byte(
     const std::uint8_t c) noexcept {
-  return std::uint64_t{c} * 0x0101'0101'0101'0101ull;
+  return std::uint64_t{c} * 0x0101'0101'0101'0101ul;
 }
 
 /// @brief Mask of the `n` lowest bytes of a word, for `n` from 0 to 7.
@@ -84,8 +84,8 @@ template <std::unsigned_integral T>
 
 /// @brief Copies one `T` from `src + offset` to `dest + offset`.
 template <typename T>
-[[gnu::always_inline]] inline void copy_chunk(const std::uintptr_t dest, const std::uintptr_t src,
-                                              const std::size_t offset) noexcept {
+[[gnu::always_inline]] void copy_chunk(const std::uintptr_t dest, const std::uintptr_t src,
+                                       const std::size_t offset) noexcept {
   const auto val = unaligned_load<T>(reinterpret_cast<const void*>(src + offset));
   unaligned_store<T>(reinterpret_cast<void*>(dest + offset), val);
 }
@@ -93,8 +93,8 @@ template <typename T>
 /// @brief Copies one `T` per offset, loading all of them before storing any, so that the copy is
 ///        right however the two ranges overlap.
 template <typename T, typename... Offsets>
-[[gnu::always_inline]] inline void transfer(const std::uintptr_t dest, const std::uintptr_t src,
-                                            const Offsets... offsets) noexcept {
+[[gnu::always_inline]] void transfer(const std::uintptr_t dest, const std::uintptr_t src,
+                                     const Offsets... offsets) noexcept {
   const T snapshot[] = {
       unaligned_load<T>(reinterpret_cast<const void*>(src + static_cast<std::size_t>(offsets)))...};
 
@@ -107,16 +107,15 @@ template <typename T, typename... Offsets>
 /// @brief memcmp() of two differing little-endian words: the difference of their first
 ///        differing bytes in memory order.
 template <std::unsigned_integral T>
-[[nodiscard, gnu::always_inline]] inline int diff_bytes(const T v1, const T v2) noexcept {
+[[nodiscard, gnu::always_inline]] int diff_bytes(const T v1, const T v2) noexcept {
   const auto shift = static_cast<std::uint32_t>(std::countr_zero(static_cast<T>(v1 ^ v2))) & ~7u;
   return static_cast<int>((v1 >> shift) & 0xFF) - static_cast<int>((v2 >> shift) & 0xFF);
 }
 
 /// @brief Compares one `T` at `offset` in both buffers: 0 if equal, else memcmp()'s answer.
 template <std::unsigned_integral T>
-[[nodiscard, gnu::always_inline]] inline int check_chunk(const std::uintptr_t p1,
-                                                         const std::uintptr_t p2,
-                                                         const std::size_t offset) noexcept {
+[[nodiscard, gnu::always_inline]] int check_chunk(const std::uintptr_t p1, const std::uintptr_t p2,
+                                                  const std::size_t offset) noexcept {
   const auto v1 = unaligned_load<T>(reinterpret_cast<const void*>(p1 + offset));
   const auto v2 = unaligned_load<T>(reinterpret_cast<const void*>(p2 + offset));
   return v1 == v2 ? 0 : diff_bytes(v1, v2);
@@ -125,9 +124,9 @@ template <std::unsigned_integral T>
 /// @brief The first byte equal to the low byte of `pattern` within one `T` at `base + offset`,
 ///        or null.
 template <std::unsigned_integral T>
-[[nodiscard, gnu::always_inline]] inline void* find_in_chunk(const std::uintptr_t base,
-                                                             const std::size_t offset,
-                                                             const std::uint64_t pattern) noexcept {
+[[nodiscard, gnu::always_inline]] void* find_in_chunk(const std::uintptr_t base,
+                                                      const std::size_t offset,
+                                                      const std::uint64_t pattern) noexcept {
   const auto v = unaligned_load<T>(reinterpret_cast<const void*>(base + offset));
   if (const T mask = has_zero_byte<T>(static_cast<T>(v ^ static_cast<T>(pattern)))) {
     return reinterpret_cast<void*>(base + offset + (std::countr_zero(mask) / 8));

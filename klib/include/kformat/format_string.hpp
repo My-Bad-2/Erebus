@@ -28,9 +28,7 @@ void compile_error_missing_close_brace();
 [[gnu::error("Unescaped '}' in format string (must be written as '}}')")]]
 void compile_error_unescaped_close_brace();
 
-[[gnu::error(
-    "Number of implicit format placeholders does not match provided "
-    "arguments")]]
+[[gnu::error("Number of implicit format placeholders does not match provided arguments")]]
 void compile_error_implicit_arg_mismatch();
 
 [[gnu::error("Explicit format index out of bounds for provided arguments")]]

@@ -19,9 +19,8 @@ struct Reference {
   std::uint64_t hz_den;
 };
 
-// Three 10 ms windows, median taken. Each window gives up after a bounded number of reads, so
+// Three 10ms windows, median taken. Each window gives up after a bounded number of reads, so
 // a reference counter that does not count fails the calibration instead of hanging the boot.
-// A window takes some 10-20 thousand reads on real hardware; the limit leaves plenty of room.
 std::uint64_t calibrate_tsc(const Reference& ref) noexcept {
   constexpr std::uint64_t WINDOWS_PER_SEC = 100;
   constexpr std::uint64_t READ_LIMIT = 2'000'000;
@@ -155,7 +154,7 @@ void SystemClock::initialize() noexcept {
   const hw::CpuInfo& cpu = *hw::profile_manager.get_current();
   const bool tsc_usable = hw::timer::is_tsc_invariant(cpu);
 
-  // Cheapest first: the CPU or the hypervisor may simply say how fast the TSC runs.
+  // The CPU or the hypervisor may simply say how fast the TSC runs.
   if (tsc_usable) {
     const hw::timer::Result res = hw::timer::probe_hardware_frequencies(cpu);
     s_cached_apic_bus_hz = res.apic_bus_hz;

@@ -7,7 +7,7 @@
 
 namespace kernel::memory::vmm {
 /// @brief What the paging code may rely on. Filled in by early_initialize_hw() and treated as
-///        read-only afterwards; every CPU is assumed to support the same set as the BSP.
+///        read-only afterward; every CPU is assumed to support the same set as the BSP.
 struct PagingFeatures {
   bool nx{false};       ///< No-execute bit (EFER.NXE).
   bool pge{false};      ///< Global pages (CR4.PGE).

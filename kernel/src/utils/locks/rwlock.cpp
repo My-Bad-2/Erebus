@@ -2,10 +2,10 @@
 
 namespace kernel::utils {
 namespace {
-constexpr std::uint32_t WRITER_LOCKED = 1u << 0;
-constexpr std::uint32_t WRITER_WAITING = 1u << 1;
+constexpr std::uint32_t WRITER_LOCKED = 1 << 0;
+constexpr std::uint32_t WRITER_WAITING = 1 << 1;
 constexpr std::uint32_t WRITER_MASK = WRITER_LOCKED | WRITER_WAITING;
-constexpr std::uint32_t READER_INC = 1u << 8;
+constexpr std::uint32_t READER_INC = 1 << 8;
 }  // namespace
 
 void RWLock::read_lock() noexcept {

@@ -2,14 +2,13 @@
 
 #include <string.h>
 
+#include "hal/smp/ipi.hpp"
 #include "hal/smp/percpu.hpp"
 #include "memory/pmm/bootstrap.hpp"
 #include "memory/pmm/router.hpp"
 
 namespace kernel::memory::pmm {
 namespace {
-// Carves memory off the top of one large usable region while the PMM is being built. Nothing
-// it hands out is ever freed; the whole region is simply kept out of the buddy zones.
 struct EarlyBumpAllocator {
   PhysicalAddress bottom{};
   PhysicalAddress top{};
@@ -330,6 +329,38 @@ void free_pages_bulk(const std::span<const PhysicalAddress> addresses,
       free_pages(phys, order);
     }
   }
+}
+
+std::size_t drain_cpu_caches(const std::uint32_t node_id) noexcept {
+  if (node_id >= g_router.get_active_nodes()) [[unlikely]] {
+    return 0;
+  }
+
+  struct Drain {
+    NumaNode* node;
+    std::atomic<std::size_t> pages{0};
+  } drain{.node = &g_router.get_node(node_id)};
+
+  const auto drain_here = [](void* arg) {
+    auto* d = static_cast<Drain*>(arg);
+    std::size_t pages = 0;
+    for (const PageMobility mobility :
+         {PageMobility::Unmovable, PageMobility::Movable, PageMobility::Reclaimable}) {
+      pages += d->node->get_zone(mobility).drain_pcp_local();
+    }
+
+    d->pages.fetch_add(pages, std::memory_order_relaxed);
+  };
+
+  hw::percpu::preempt_disable();
+  (void)hw::ipi::call_others(drain_here, &drain, hw::ipi::Wait::Yes);
+  {
+    utils::IrqDisableGuard irq_guard;
+    drain_here(&drain);
+  }
+  hw::percpu::preempt_enable();
+
+  return drain.pages.load(std::memory_order_relaxed);
 }
 
 void print_stats() noexcept {

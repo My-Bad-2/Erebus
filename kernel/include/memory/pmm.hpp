@@ -78,6 +78,14 @@ void free_pages(PhysicalAddress phys, std::uint8_t order = 0) noexcept;
 /// @brief free_pages() for every entry of @p addresses. Null addresses are skipped.
 void free_pages_bulk(std::span<const PhysicalAddress> addresses, std::uint8_t order = 0) noexcept;
 
+/// @brief Has every CPU give back the blocks it keeps from the zones of node @p node_id.
+///
+/// Any CPU can hold any node's pages, so this is an IPI to all of them. See
+/// MobilityZone::drain_pcp_local().
+/// @pre The calling thread can wait for other CPUs.
+/// @return How many pages the zones got back.
+std::size_t drain_cpu_caches(std::uint32_t node_id) noexcept;
+
 /// @brief Logs per-node, per-zone free memory, fragmentation and watermarks.
 void print_stats() noexcept;
 

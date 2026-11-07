@@ -6,10 +6,9 @@ namespace {
 // The first match among one `T` at each offset, checked in order. Later chunks may overlap
 // earlier ones; a match in the overlap would already have been found.
 template <typename T, typename... Offsets>
-[[gnu::always_inline]] inline void* find_first(const std::uintptr_t base,
-                                               const std::uint64_t pattern,
-                                               const Offsets... offsets) noexcept {
-  void* match = nullptr;
+[[gnu::always_inline]] void* find_first(std::uintptr_t base, std::uint64_t pattern,
+                                        Offsets... offsets) noexcept {
+  void* match;
   (void)(((match = string::find_in_chunk<T>(base, static_cast<std::size_t>(offsets), pattern)) !=
           nullptr) ||
          ...);
@@ -17,7 +16,7 @@ template <typename T, typename... Offsets>
 }
 }  // namespace
 
-void* memchr(const void* ptr, const int ch, const size_t count) noexcept {
+void* memchr(const void* ptr, int ch, std::size_t count) noexcept {
   using string::broadcast_byte;
 
   if (count == 0) [[unlikely]] {

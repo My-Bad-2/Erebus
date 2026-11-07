@@ -9,7 +9,6 @@
 
 namespace kernel::drivers {
 namespace {
-// The HPET register block is 1 KiB (IA-PC HPET 1.0a, 2.3).
 constexpr std::size_t HPET_REGISTER_BYTES = 0x400;
 }  // namespace
 
@@ -50,7 +49,6 @@ std::uint64_t SystemClock::initialize_hpet() noexcept {
   const std::uint8_t rev_id = cap.get_rev_id();
   const std::uint32_t period_fs = cap.get_counter_clk_period_fs();
 
-  // Guard against unpopulated MMIO and spec violations.
   // IA-PC HPET 1.0a requires 0 < period <= 100 ns, i.e. 100,000,000 fs.
   if (rev_id == 0 || rev_id == 0xff || period_fs == 0 || period_fs > 100'000'000) {
     utils::logger::warn("HPET at {:#x} looks bogus (revision {}, period {} fs); ignoring it.\n",
@@ -59,8 +57,8 @@ std::uint64_t SystemClock::initialize_hpet() noexcept {
     return 0;
   }
 
-  // Older HPETs only have a 32-bit main counter, which wraps every few minutes.
-  s_hpet_mask = cap.get_counter_64bit_cap() ? ~0ul : 0xFFFF'FFFFull;
+  s_hpet_mask = cap.get_counter_64bit_cap() ? std::numeric_limits<std::uint64_t>::max()
+                                            : std::numeric_limits<std::uint32_t>::max();
 
   const auto cfg = hpet::GeneralConfig{s_hpet.read<std::uint64_t>(hpet::GENERAL_CONFIG_OFFSET)};
   if (!cfg.get_enable_cnf() || cfg.get_legacy_replacement_cnf()) {
@@ -76,14 +74,11 @@ std::uint64_t SystemClock::read_hpet() noexcept {
 }
 
 bool SystemClock::initialize_pm_timer() noexcept {
-  // uACPI's copy of the FADT has the X_ fields filled in from the legacy ones where the
-  // firmware left them empty.
   acpi_fadt* fadt = nullptr;
   if (uacpi_table_fadt(&fadt) != UACPI_STATUS_OK || !fadt) {
     return false;
   }
 
-  // Hardware-reduced platforms have no fixed hardware, the PM timer included.
   if (fadt->flags & ACPI_HW_REDUCED_ACPI) {
     return false;
   }
@@ -95,7 +90,7 @@ bool SystemClock::initialize_pm_timer() noexcept {
   }
 
   s_pm_timer_port = static_cast<std::uint16_t>(blk.address);
-  s_pm_timer_mask = (fadt->flags & ACPI_TMR_VAL_EXT) ? 0xFFFF'FFFFull : 0xFF'FFFFull;
+  s_pm_timer_mask = (fadt->flags & ACPI_TMR_VAL_EXT) ? 0xFFFF'FFFFul : 0xFF'FFFFul;
   return true;
 }
 

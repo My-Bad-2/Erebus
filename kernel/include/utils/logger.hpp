@@ -138,7 +138,7 @@ constexpr void log(log_loc_str<std::type_identity_t<Args>...> fmt, Args&&... arg
   klib::format_to(buf, fmt.fmt, std::forward<Args>(args)...);
 
   // Ensure the payload is implicitly newline-terminated.
-  std::span<char> active_span = buf.active_span();
+  const std::span<char> active_span = buf.active_span();
   if (!active_span.empty() && active_span.back() != '\n') {
     buf.push('\n');
   }

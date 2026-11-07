@@ -70,8 +70,8 @@ class [[nodiscard]] IrqSaveGuard {
   ~IrqSaveGuard() noexcept {
     m_lock.unlock();
 
-    hw::percpu::preempt_enable();
     hw::irq::restore(m_saved_flags);
+    hw::percpu::preempt_enable();
   }
 
   IrqSaveGuard(const IrqSaveGuard&) = delete;
@@ -112,8 +112,8 @@ class [[nodiscard]] SharedIrqSaveGuard {
 
   ~SharedIrqSaveGuard() noexcept {
     m_lock.read_unlock();
-    hw::percpu::preempt_enable();
     hw::irq::restore(m_saved_flags);
+    hw::percpu::preempt_enable();
   }
 
   SharedIrqSaveGuard(const SharedIrqSaveGuard&) = delete;
@@ -167,8 +167,8 @@ class [[nodiscard]] ExclusiveIrqSaveGuard {
 
   ~ExclusiveIrqSaveGuard() noexcept {
     m_lock.write_unlock();
-    hw::percpu::preempt_enable();
     hw::irq::restore(m_saved_flags);
+    hw::percpu::preempt_enable();
   }
 
   ExclusiveIrqSaveGuard(const ExclusiveIrqSaveGuard&) = delete;
@@ -185,8 +185,8 @@ class [[nodiscard]] IrqDisableGuard {
   }
 
   ~IrqDisableGuard() noexcept {
-    hw::percpu::preempt_enable();
     hw::irq::restore(m_saved_flags);
+    hw::percpu::preempt_enable();
   }
 
   IrqDisableGuard(const IrqDisableGuard&) = delete;

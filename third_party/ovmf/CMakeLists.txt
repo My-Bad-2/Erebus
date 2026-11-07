@@ -5,9 +5,9 @@
 include(FetchContent)
 
 set(EREBUS_OVMF_URL
-    "https://github.com/osdev0/edk2-ovmf-stable-bins/releases/download/20260821T130731Z/edk2-ovmf-bins.tar.xz"
+    "https://github.com/osdev0/edk2-ovmf-stable-bins/releases/download/20261026T212116Z/edk2-ovmf-bins.tar.xz"
     CACHE STRING "Archive of prebuilt OVMF firmware")
-set(EREBUS_OVMF_SHA256 "a70d594690e838569b3a0d3f1b7ac2c8244f32ef8b5f84a4a677beddec954e1e"
+set(EREBUS_OVMF_SHA256 "1619a6884c9380516152c2fe3c73fe1d7851014f3ec6a784b5d7b0324983b4d4"
     CACHE STRING "SHA-256 of that archive")
 
 FetchContent_Declare(ovmf

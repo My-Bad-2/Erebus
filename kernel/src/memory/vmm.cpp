@@ -21,6 +21,7 @@ namespace kernel::memory::vmm {
 namespace {
 AddressSpace* g_kernel_space{nullptr};
 constexpr std::uintptr_t KERNEL_VMA_HEAP_ADDR{0xFFFFC00000000000};
+constinit std::atomic<UserSpaceLookup> g_user_space_lookup{nullptr};
 
 [[nodiscard]] constexpr CacheMode determine_cache_mode(const std::uint64_t limine_type) noexcept {
   switch (limine_type) {
@@ -69,17 +70,28 @@ class PageFaultDispatcher {
   hw::interrupts::InterruptStatus dispatch(const hw::interrupts::Event& event) noexcept {
     using namespace hw::interrupts;
 
-    // TODO: Fault in the current task's address space once there are tasks.
-    AddressSpace* curr_space = kernel_space();
-    if (curr_space == nullptr) [[unlikely]] {
-      return InterruptStatus::Unhandled;
-    }
-
     const auto fault_addr = VirtualAddress{event.payload};
     const PageFaultErrorCode error_code{event.error_code};
 
-    // A reserved-bit violation means corrupted page tables, not something to page in.
-    if (error_code.get_reserved_violation()) [[unlikely]] {
+    // A reserved-bit violation means corrupted page tables, not something to page in. A
+    // protection key or a shadow stack said no to a page that is there, and asking again gets
+    // the same answer: the resolver below would take it for a stale TLB entry and retry forever.
+    if (error_code.get_reserved_violation() || error_code.get_protection_key() ||
+        error_code.get_shadow_stack()) [[unlikely]] {
+      return InterruptStatus::Unhandled;
+    }
+
+    // The upper half is the kernel's, for the kernel only. The lower half is the user's, and only
+    // user code takes faults there: with SMAP, the kernel cannot even look at a page that is.
+    AddressSpace* curr_space = nullptr;
+    if (fault_addr.is_upper_half()) {
+      curr_space = error_code.get_user() ? nullptr : kernel_space();
+    } else if (error_code.get_user()) {
+      const UserSpaceLookup lookup = g_user_space_lookup.load(std::memory_order_acquire);
+      curr_space = lookup != nullptr ? lookup() : nullptr;
+    }
+
+    if (curr_space == nullptr) [[unlikely]] {
       return InterruptStatus::Unhandled;
     }
 
@@ -131,6 +143,10 @@ void map_or_die(PageMap& pagemap, const VirtualAddress virt, const PhysicalAddre
 }  // namespace
 
 AddressSpace* kernel_space() noexcept { return g_kernel_space; }
+
+void set_user_space_lookup(const UserSpaceLookup lookup) noexcept {
+  g_user_space_lookup.store(lookup, std::memory_order_release);
+}
 
 std::expected<VirtualAddress, Error> map_device_registers(const PhysicalAddress phys,
                                                           const std::size_t size) noexcept {

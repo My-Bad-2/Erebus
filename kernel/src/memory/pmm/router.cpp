@@ -66,9 +66,11 @@ void Router::initialize(const std::uint32_t active_nodes, NumaNode** nodes_array
                         if (penalty_a != penalty_b) {
                           return penalty_a < penalty_b;
                         }
+
                         if (a.latency_ns != b.latency_ns) {
                           return a.latency_ns < b.latency_ns;
                         }
+
                         return a.bandwidth_mbps > b.bandwidth_mbps;
                       });
 

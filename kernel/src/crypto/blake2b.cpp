@@ -5,8 +5,7 @@
 
 namespace kernel::crypto {
 namespace {
-// Which message word each step of each round reads (RFC 7693, 2.7). Rounds 10 and 11 repeat
-// rounds 0 and 1.
+// Which message word each step of each round reads (RFC 7693, 2.7).
 constexpr std::uint8_t SIGMA[12][16] = {
     {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
     {14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3},
@@ -22,9 +21,8 @@ constexpr std::uint8_t SIGMA[12][16] = {
     {14, 10, 4, 8, 9, 15, 13, 6, 1, 12, 0, 2, 11, 7, 5, 3},
 };
 
-[[gnu::always_inline]] inline void mix(std::uint64_t (&v)[16], const int a, const int b,
-                                       const int c, const int d, const std::uint64_t x,
-                                       const std::uint64_t y) noexcept {
+[[gnu::always_inline]] void mix(std::uint64_t (&v)[16], int a, int b, int c, int d, std::uint64_t x,
+                                std::uint64_t y) noexcept {
   v[a] = v[a] + v[b] + x;
   v[d] = std::rotr(v[d] ^ v[a], 32);
   v[c] = v[c] + v[d];
@@ -108,7 +106,7 @@ void Blake2b::finalize(const std::span<std::byte> out) noexcept {
     store_le64(digest.data() + 8 * i, m_h[i]);
   }
 
-  const std::size_t n = std::min<std::size_t>(out.size(), m_digest_bytes);
+  const auto n = std::min<std::size_t>(out.size(), m_digest_bytes);
   for (std::size_t i = 0; i < n; ++i) {
     out[i] = digest[i];
   }

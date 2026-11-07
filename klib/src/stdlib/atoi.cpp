@@ -35,8 +35,6 @@ template <typename T>
 }  // namespace
 
 int atoi(const char* str) noexcept { return atoX<int>(str); }
-
 long atol(const char* str) noexcept { return atoX<long>(str); }
-
 long long atoll(const char* str) noexcept { return atoX<long long>(str); }
 }  // namespace klib

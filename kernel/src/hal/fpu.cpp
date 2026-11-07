@@ -9,7 +9,6 @@
 
 namespace kernel::hw::fpu {
 namespace {
-// Bit 63 of XCOMP_BV: the area is in the compacted format.
 constexpr std::uint64_t XCOMP_BV_COMPACTED = 1ul << 63;
 
 struct AreaLayout {
@@ -17,8 +16,6 @@ struct AreaLayout {
   std::size_t size;
 };
 
-// What the BSP worked out in initialize(); read-only from then on. Every CPU uses the same
-// layout, because threads move between them and because the static calls are patched only once.
 constinit AreaLayout g_plain{.mask = 0, .size = XSAVE_HEADER_OFFSET};
 constinit AreaLayout g_amx{.mask = 0, .size = 0};
 constinit bool g_compacted = false;
@@ -31,7 +28,6 @@ constinit bool g_compacted = false;
   return static_cast<std::uint32_t>(mask >> 32);
 }
 
-// Adds up the components of @p mask the way the CPU lays them out.
 [[nodiscard]] std::size_t measure_area(const std::uint64_t mask, const bool compacted) noexcept {
   constexpr std::uint32_t ALIGN_TO_64 = 1u << 1;
 
@@ -159,15 +155,14 @@ REGISTER_STATIC_CALL_ALT_PRIO(restores, detail::cpu_xrstors, 200, Feature::XSS);
 void initialize() noexcept {
   const CpuInfo* cpu = percpu::self()->info;
 
-  // TS is off too: nothing here hands out the FPU lazily, so #NM would only ever be a bug.
+  // We don't handle FPU lazily. Too risky.
   write::cr0(read::cr0().without_em().without_ts().with_mp().with_ne());
 
   CR4 cr4 = read::cr4().with_osfxsr().with_osxmmexcpt();
   cr4.set_osxsave(cpu->has<Feature::XSAVE>());
   write::cr4(cr4);
 
-  // Nothing promises what the firmware left in here. Mask all SIMD exceptions, set rounding to
-  // the nearest.
+  // Mask all SIMD exceptions, set rounding to the nearest.
   const std::uint32_t default_mxcsr = DEFAULT_MXCSR;
   asm volatile(
       "fninit\n\t"
@@ -186,15 +181,17 @@ void initialize() noexcept {
 
   const auto leaf0 = CpuInfo::query(0xD, 0);
   const std::uint64_t supported_xcr0 = (static_cast<std::uint64_t>(leaf0.edx) << 32) | leaf0.eax;
-
-  // Built from nothing, rather than on top of what the firmware left behind: the size of every
-  // save area depends on this. PKRU stays out of it, as Thread switches it with WRPKRU.
-  XCR0 wanted = XCR0{}.with_x87().with_sse().with_avx().with_opmask().with_zmm_hi256();
-  wanted.set_hi16_zmm();
-
   const bool amx = can_fence_tile_data(cpu);
-  wanted.set_xtilecfg(amx);
-  wanted.set_xtiledata(amx);
+
+  const XCR0 wanted = XCR0{}
+                          .with_x87()
+                          .with_sse()
+                          .with_avx()
+                          .with_opmask()
+                          .with_zmm_hi256()
+                          .with_hi16_zmm()
+                          .with_xtilecfg(amx)
+                          .with_xtiledata(amx);
 
   const XCR0 xcr0{wanted.raw() & supported_xcr0};
   write::xcr0(xcr0);

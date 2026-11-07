@@ -15,7 +15,7 @@ std::uint64_t EevdfQueue::virtual_time() const noexcept {
 
 // vruntime <= V with V written out and multiplied through, which needs no division and has no
 // rounding to get wrong: the lowest virtual runtime on a queue is always eligible, exactly.
-bool EevdfQueue::is_eligible_at(const std::uint64_t vruntime) const noexcept {
+bool EevdfQueue::is_eligible_at(std::uint64_t vruntime) const noexcept {
   return static_cast<unsigned __int128>(m_total_weight) * vruntime <= m_weighted_vruntime;
 }
 
@@ -100,7 +100,7 @@ void EevdfQueue::retire_current() noexcept {
   m_current = nullptr;
 }
 
-bool EevdfQueue::charge(const std::uint64_t delta_ns) noexcept {
+bool EevdfQueue::charge(std::uint64_t delta_ns) noexcept {
   if (m_current == nullptr) {
     return false;
   }
@@ -118,9 +118,48 @@ bool EevdfQueue::charge(const std::uint64_t delta_ns) noexcept {
   return true;
 }
 
-void EevdfQueue::yield_current() noexcept {
+void EevdfQueue::yield_current() const noexcept {
   if (m_current != nullptr) {
     m_current->m_vdeadline += m_current->to_virtual(m_current->m_slice_ns);
+  }
+}
+
+// With V fixed, keeping w * (V - v) is keeping what the entity is owed, and the new virtual runtime
+// comes out as V - (V - v) * w / w'. Put that into the average and V does not move:
+//
+//   sum(w * v) + w' * v' - w * v = sum(w * v) + (w' - w) * V   and   W + w' - w
+//
+// are V * W and W with the same (w' - w) * V and (w' - w) added. Nobody on the queue changes from
+// eligible to not or the other way around, up to the rounding of V itself.
+void EevdfQueue::reweight(Entity& entity, const std::uint32_t weight) noexcept {
+  KASSERT(entity.is_queued() || &entity == m_current);
+
+  const bool queued = entity.is_queued();
+  if (queued) {
+    m_tree.erase(entity);
+  }
+
+  const std::uint64_t now = virtual_time();
+  const std::uint32_t old_weight = entity.m_weight;
+
+  m_weighted_vruntime -= static_cast<unsigned __int128>(old_weight) * entity.m_vruntime;
+  m_total_weight -= old_weight;
+
+  const auto old_lag = static_cast<__int128>(now) - entity.m_vruntime;
+  const auto old_left = static_cast<__int128>(entity.m_vdeadline) - entity.m_vruntime;
+
+  entity.set_weight(weight);
+
+  const __int128 lag = old_lag * old_weight / entity.m_weight;
+  const __int128 left = old_left * old_weight / entity.m_weight;
+  const __int128 vruntime = static_cast<__int128>(now) - lag;
+
+  entity.m_vruntime = vruntime > 0 ? static_cast<std::uint64_t>(vruntime) : 0;
+  entity.m_vdeadline = static_cast<std::uint64_t>(entity.m_vruntime + left);
+
+  account_join(entity);
+  if (queued) {
+    m_tree.insert(entity);
   }
 }
 

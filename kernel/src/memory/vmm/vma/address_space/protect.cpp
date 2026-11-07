@@ -124,7 +124,7 @@ auto AddressSpace::unlock_memory(const VirtualAddress addr, const std::size_t si
 auto AddressSpace::evict_page(const VirtualAddress addr) noexcept -> std::expected<void, Error> {
   utils::ExclusivePreemptGuard guard(m_as_lock);
 
-  VMArea* vma = find_vma(addr);
+  const VMArea* vma = find_vma(addr);
   if (!vma) {
     return std::unexpected(Error::NotMapped);
   }

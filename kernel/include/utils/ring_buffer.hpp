@@ -27,7 +27,7 @@ concept RingQueable = std::is_nothrow_move_constructible_v<T> && std::is_nothrow
 /// consumers only contend on their own index, never on each other's. With `MultiConsumer` false
 /// the consumer side needs no atomic read-modify-write at all.
 ///
-/// @tparam PadSlots Give every slot its own cache line, so producers filling neighbouring slots
+/// @tparam PadSlots Give every slot its own cache line, so producers filling neighboring slots
 ///                  do not false-share. Costs a cache line per slot.
 template <RingQueable T, size_t Capacity, bool MultiConsumer, bool PadSlots>
 class RingBuffer {

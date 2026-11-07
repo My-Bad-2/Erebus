@@ -40,22 +40,22 @@ template <std::size_t Offset, typename T>
   if constexpr (sizeof(T) == 8) {
     asm volatile("movq %0, %%gs:%c1"
                  :
-                 : "re"(__builtin_bit_cast(std::uint64_t, value)), "i"(Offset)
+                 : "re"(std::bit_cast<std::uint64_t>(value)), "i"(Offset)
                  : "memory");
   } else if constexpr (sizeof(T) == 4) {
     asm volatile("movl %0, %%gs:%c1"
                  :
-                 : "re"(__builtin_bit_cast(std::uint32_t, value)), "i"(Offset)
+                 : "re"(std::bit_cast<std::uint32_t>(value)), "i"(Offset)
                  : "memory");
   } else if constexpr (sizeof(T) == 2) {
     asm volatile("movw %0, %%gs:%c1"
                  :
-                 : "re"(__builtin_bit_cast(std::uint16_t, value)), "i"(Offset)
+                 : "re"(std::bit_cast<std::uint16_t>(value)), "i"(Offset)
                  : "memory");
   } else if constexpr (sizeof(T) == 1) {
     asm volatile("movb %0, %%gs:%c1"
                  :
-                 : "re"(__builtin_bit_cast(std::uint8_t, value)), "i"(Offset)
+                 : "re"(std::bit_cast<std::uint8_t>(value)), "i"(Offset)
                  : "memory");
   }
 }
@@ -84,6 +84,33 @@ template <std::size_t Offset, std::size_t Size>
   } else if constexpr (Size == 1) {
     asm volatile("decb %%gs:%c0" : : "i"(Offset) : "memory", "cc");
   }
+}
+
+/// @brief Sets bits of a byte. A single instruction, so an interrupt is either before or after it.
+template <std::size_t Offset>
+[[gnu::always_inline]] void set_bits(const std::uint8_t mask) noexcept {
+  asm volatile("orb %1, %%gs:%c0" : : "i"(Offset), "iq"(mask) : "memory", "cc");
+}
+
+/// @brief Clears bits of a byte and says what it held before.
+///
+/// CMPXCHG without a LOCK prefix: this is only about interrupts on this CPU, and those arrive
+/// between instructions. Nothing else writes to a CPU's own area.
+template <std::size_t Offset>
+[[nodiscard, gnu::always_inline]] std::uint8_t fetch_clear_bits(const std::uint8_t mask) noexcept {
+  std::uint8_t old;
+  std::uint8_t next;
+  asm volatile(
+      "movb %%gs:%c[where], %[old]\n"
+      "1:\n"
+      "movb %[old], %[next]\n"
+      "andb %[keep], %[next]\n"
+      "cmpxchgb %[next], %%gs:%c[where]\n"
+      "jne 1b\n"
+      : [old] "=&a"(old), [next] "=&q"(next)
+      : [where] "i"(Offset), [keep] "iq"(static_cast<std::uint8_t>(~mask))
+      : "memory", "cc");
+  return old;
 }
 
 template <std::size_t Offset, std::size_t Size, std::uint32_t Amount>

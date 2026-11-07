@@ -7,9 +7,13 @@
 #include "hal/smp/percpu.hpp"
 #include "hal/smp/smp.hpp"
 #include "memory/memory.hpp"
+#include "memory/pmm/daemon.hpp"
 #include "memory/vmm/vma/vma.hpp"
 #include "patch/static_call.hpp"
+#include "proc/process.hpp"
+#include "sched/reaper.hpp"
 #include "sched/scheduler.hpp"
+#include "sched/workqueue.hpp"
 #include "utils/logger.hpp"
 
 #ifdef EREBUS_KERNEL_TESTS
@@ -26,6 +30,13 @@ namespace kernel {
 #endif
 
   hw::smp::initialize(bsp_stack);
+
+  // The kernel's own threads, now that every CPU can run them.
+  sched::reaper::initialize();
+  sched::workqueue::initialize();
+  memory::pmm::initialize_daemons();
+  proc::initialize();
+
   utils::logger::info("Hello, World!\n");
 
 #ifdef EREBUS_KERNEL_TESTS

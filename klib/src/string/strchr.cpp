@@ -4,14 +4,14 @@
 namespace klib {
 namespace {
 // Pointer to the byte that bit 7 of byte `bit / 8` of the word at `word` flags.
-[[gnu::always_inline]] inline char* byte_at(const std::uintptr_t word, const int bit) noexcept {
+[[gnu::always_inline]] char* byte_at(std::uintptr_t word, int bit) noexcept {
   return reinterpret_cast<char*>(word + static_cast<unsigned>(bit) / 8);
 }
 }  // namespace
 
 // Both functions read aligned words only, so they never touch a page past the terminator.
 
-char* strchr(const char* str, const int ch) noexcept {
+char* strchr(const char* str, int ch) noexcept {
   using string::has_zero_byte;
 
   const std::uint64_t pattern = string::broadcast_byte(static_cast<std::uint8_t>(ch));
@@ -37,7 +37,7 @@ char* strchr(const char* str, const int ch) noexcept {
   return hit_bit <= std::countr_zero(end) ? byte_at(word, hit_bit) : nullptr;
 }
 
-char* strrchr(const char* str, const int ch) noexcept {
+char* strrchr(const char* str, int ch) noexcept {
   using string::zero_bytes;
 
   const std::uint64_t pattern = string::broadcast_byte(static_cast<std::uint8_t>(ch));

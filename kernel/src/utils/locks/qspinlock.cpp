@@ -11,7 +11,7 @@ namespace {
 //   bits  9-10  node index of the CPU at the tail of the queue
 //   bits 11-31  that CPU's ID plus one, so that 0 means "no queue"
 constexpr std::uint32_t LOCKED_VAL = 1u << 0;
-constexpr std::uint32_t LOCKED_MASK = 0xFFu;
+constexpr std::uint32_t LOCKED_MASK = 0xFF;
 constexpr std::uint32_t PENDING_VAL = 1u << 8;
 constexpr std::uint32_t PENDING_MASK = PENDING_VAL;
 constexpr std::uint32_t LOCKED_PENDING_MASK = LOCKED_MASK | PENDING_MASK;
@@ -22,10 +22,7 @@ constexpr std::uint32_t TAIL_CPU_SHIFT = 11;
 static_assert(hw::smp::MAX_CPUS <= QSpinlock::MAX_CPUS, "the tail cannot name every CPU");
 static_assert(QSpinlock::MAX_CPUS == TAIL_MASK >> TAIL_CPU_SHIFT);
 
-// How long a newcomer waits for a pending waiter to finish taking over the lock before it gives
-// up and queues instead.
 constexpr std::uint32_t PENDING_LOOPS = 512;
-
 static_assert(QSpinlock::MAX_NESTING <= 4, "the tail has two bits for the node index");
 
 [[nodiscard]] constexpr std::uint32_t encode_tail(const std::uint32_t cpu,

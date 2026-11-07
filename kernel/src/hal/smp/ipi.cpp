@@ -19,9 +19,7 @@ constexpr std::uint8_t CALL_VECTOR = std::to_underlying(interrupts::InterruptVec
 constexpr std::uint8_t RESCHEDULE_VECTOR =
     std::to_underlying(interrupts::InterruptVector::IpiSchedule);
 
-// Slots per inbox. A full inbox only slows its senders down, so this trades memory for how big a
-// burst a CPU can absorb without anyone waiting.
-constexpr std::uint32_t INBOX_SLOTS = 128;
+constexpr std::uint32_t INBOX_SLOTS = 128;  // Slots per inbox.
 static_assert(std::has_single_bit(INBOX_SLOTS));
 
 // Calls a CPU can have in flight with Wait::No before it has to wait for one to finish.
@@ -35,7 +33,7 @@ static_assert(POSTING_BIAS > smp::MAX_CPUS);
 struct alignas(std::hardware_destructive_interference_size) Request {
   Function fn{nullptr};
   void* arg{nullptr};
-  std::atomic<std::uint32_t> pending{0};  ///< Targets that have not finished yet.
+  std::atomic<std::uint32_t> pending{0};  // Targets that have not finished yet.
 };
 
 // One inbox slot. `seq` says whose turn it is: a sender may fill the slot when it equals the
@@ -68,8 +66,7 @@ void drain(Inbox& box) noexcept {
     const std::uint64_t pos = box.head;
     Slot& slot = box.slots[pos % INBOX_SLOTS];
 
-    // Either empty, or a sender has claimed the slot and is still filling it. That sender sends
-    // an IPI (or finds one on the way) once it is done, so stopping here loses nothing.
+    // Either empty, or a sender has claimed the slot and is still filling it.
     if (slot.seq.load(std::memory_order_acquire) != pos + 1) {
       return;
     }
@@ -107,7 +104,7 @@ void post(const std::uint32_t target, Request* req) noexcept {
         return;
       }
     } else if (lag < 0) {
-      // Full. Its owner may be busy waiting for *us*, so answer our own calls while we wait.
+      // Full. Its owner may be busy waiting for us, so answer our own calls while we wait.
       drain_local();
       cpu_relax();
       pos = box.tail.load(std::memory_order_relaxed);
@@ -118,19 +115,11 @@ void post(const std::uint32_t target, Request* req) noexcept {
   }
 }
 
-// Whether @p target needs an IPI for what was just posted to it.
-//
-// This has to be a read-modify-write. A plain load could see the flag still set by an IPI whose
-// handler has already cleared it and drained the inbox before our slot became visible; the RMW
-// is ordered after our slot write and sees the handler's clear if there was one.
+/// Whether @p target needs an IPI for what was just posted to it.
 [[nodiscard]] bool needs_kick(const std::uint32_t target) noexcept {
   return !g_inboxes[target].kicked.exchange(true, std::memory_order_acq_rel);
 }
 
-// Sends the call IPI to a set of CPUs with as few ICR writes as the APIC mode allows: one per
-// cluster of up to 16 CPUs with x2APIC logical destinations, one per CPU otherwise. Clusters
-// are runs of APIC IDs, and dense IDs follow the firmware's order, which in practice groups
-// them, so collecting consecutive CPUs is enough.
 class Kicker {
   const apic::Lapic& m_lapic;
   const bool m_clustered;
@@ -177,7 +166,6 @@ class Kicker {
 
   while (true) {
     for (Request& req : pool) {
-      // Acquire pairs with the targets' release: they are done reading fn and arg.
       if (req.pending.load(std::memory_order_acquire) == 0) {
         return &req;
       }
@@ -198,8 +186,6 @@ void wait_for(const Request& req) noexcept {
 
 std::uint32_t dispatch(const Selector select, const void* ctx, const Function fn, void* arg,
                        const Wait wait, const bool include_self) noexcept {
-  // Pairs with the fence in smp's go_online(). Either a CPU coming online right now is in the
-  // set we read below, or it comes up after everything we wrote and has nothing stale.
   std::atomic_thread_fence(std::memory_order_seq_cst);
 
   if (!g_inboxes || smp::online_cpus() <= 1) [[unlikely]] {

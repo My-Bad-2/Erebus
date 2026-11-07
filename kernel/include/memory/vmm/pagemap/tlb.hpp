@@ -16,7 +16,7 @@ inline constexpr std::size_t FLUSH_ALL = std::numeric_limits<std::size_t>::max()
 ///
 /// With PCIDs the TLB keeps entries of several address spaces at once, each tagged with a
 /// 12-bit ID, so switching CR3 does not have to throw everything away. PCIDs are a per-CPU
-/// resource here: each CPU hands them out from 1 upwards (0 is left for code that loads CR3
+/// resource here: each CPU hands them out from 1 upward (0 is left for code that loads CR3
 /// directly) and records the assignment in an open-addressed table keyed by
 /// PageMap::generation(). When all 4095 are used up the CPU starts a new *epoch*: it flushes the
 /// whole TLB and treats every existing assignment as stale.
@@ -39,6 +39,7 @@ class PcidManager {
   std::array<Slot, TABLE_SIZE> m_table{};
   std::uint32_t m_curr_epoch{1};
   std::uint16_t m_next_pcid{1};
+  PageMap* m_active{nullptr};  ///< What load() put in CR3 last.
 
   void rollover_epoch() noexcept;
 
@@ -54,6 +55,15 @@ class PcidManager {
 
   /// @brief Switches this CPU to @p pagemap, reusing its PCID if it still has one.
   void load(PageMap* pagemap) noexcept;
+
+  /// @brief The map this CPU has loaded.
+  ///
+  /// Kernel threads run on whatever map was there before them, as they only use the kernel half,
+  /// which is the same in all of them. So this is the map of the last user thread to run here, or
+  /// the kernel's. A switch to a user thread compares against it to skip a CR3 write it does not
+  /// need, and a map that is about to be freed has to get every CPU off it first (see
+  /// ShootdownCoordinator::retire()).
+  [[nodiscard]] PageMap* active() const noexcept { return m_active; }
 
   /// @return The PCID @p pagemap has on this CPU in the current epoch, or 0 if none.
   [[nodiscard]] std::uint16_t get_active_pcid(const PageMap* pagemap) const noexcept;
@@ -106,6 +116,14 @@ class ShootdownCoordinator {
   /// @brief Invalidates the range on this CPU only.
   static void local_invalidate(const PageMap* pmap, VirtualAddress virt, std::size_t size,
                                PageSize stride) noexcept;
+
+  /// @brief Moves every CPU that has @p pmap loaded over to the kernel's map, and waits until they
+  ///        all have, so that the map can be freed.
+  ///
+  /// Nothing that runs on the map may be left by then: no thread of it, and no code that loads it
+  /// by hand. What is left is CPUs that went on to a kernel thread without loading anything.
+  /// @pre The calling thread can wait for other CPUs.
+  static void retire(PageMap* pmap) noexcept;
 
   /// @brief Issues AMD INVLPGB for the range, splitting it to fit the CPU's count limit.
   static void queue_invlpgb(VirtualAddress virt, std::size_t size_bytes, std::uint16_t target_pcid,

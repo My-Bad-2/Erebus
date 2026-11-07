@@ -6,7 +6,7 @@
 namespace klib {
 // Compares a word at a time while neither string is near the end of a page, so that a word read
 // past a terminator cannot fault; byte by byte across page ends and for the last few bytes.
-int strncmp(const char* s1, const char* s2, size_t count) noexcept {
+int strncmp(const char* s1, const char* s2, std::size_t count) noexcept {
   using string::has_zero_byte;
   using string::unaligned_load;
 

@@ -8,9 +8,6 @@ namespace {
 std::optional<drivers::uart::SerialPort> console;
 TicketSpinlock console_lock;
 
-// Interrupt handlers log too, so the console lock must be taken with interrupts off, or one that
-// arrives while its own CPU is printing deadlocks. IrqSaveGuard is no good here: it also counts
-// preemption through GS, and the first messages are printed before GS is set up.
 class [[nodiscard]] ConsoleGuard {
   std::uint64_t m_flags;
 
@@ -26,8 +23,6 @@ class [[nodiscard]] ConsoleGuard {
   ConsoleGuard& operator=(const ConsoleGuard&) = delete;
 };
 
-// Until the firmware's console is known, try COM1. If nothing answers there, stay silent rather
-// than spin on a port that is not there.
 bool console_probed = false;
 
 void ensure_console_init() noexcept {

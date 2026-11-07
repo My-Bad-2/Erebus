@@ -9,14 +9,7 @@
 
 namespace kernel::sched {
 std::uint32_t RunQueue::rt_level(const Thread& thread) noexcept {
-  switch (thread.priority_class()) {
-    case PriorityClass::TestRunner:
-      return 0;
-    case PriorityClass::RealTime:
-      return 1;
-    default:
-      return RT_LEVELS;
-  }
+  return rt_level(thread.priority_class());
 }
 
 void RunQueue::initialize(const std::uint32_t cpu_id, NumaDomain* domain, const std::uint32_t slot,
@@ -174,6 +167,49 @@ bool RunQueue::remove_locked(Thread& thread) noexcept {
   return true;
 }
 
+void RunQueue::set_priority_locked(Thread& thread, const Priority priority) noexcept {
+  const std::uint32_t level = rt_level(priority.priority_class);
+
+  if (&thread == current()) {
+    const bool was_fair = m_fair.current() == &thread;
+
+    if (was_fair && level >= RT_LEVELS) {
+      m_fair.reweight(thread, priority.weight);
+      thread.adopt_priority_class(priority.priority_class);
+      return;
+    }
+
+    if (was_fair) {
+      m_fair.retire_current();
+    }
+
+    thread.adopt_priority(priority);
+
+    if (level >= RT_LEVELS) {
+      m_fair.enqueue(thread);
+      m_fair.set_current(thread);
+    }
+
+    m_running_realtime.store(level < RT_LEVELS, std::memory_order_release);
+    return;
+  }
+
+  if (!thread.on_runqueue()) {
+    thread.adopt_priority(priority);
+    return;
+  }
+
+  if (level >= RT_LEVELS && rt_level(thread) >= RT_LEVELS) {
+    m_fair.reweight(thread, priority.weight);
+    thread.adopt_priority_class(priority.priority_class);
+    return;
+  }
+
+  (void)remove_locked(thread);
+  thread.adopt_priority(priority);
+  (void)enqueue_locked(thread);
+}
+
 void RunQueue::requeue_current_fair() noexcept {
   auto& thread = static_cast<Thread&>(*m_fair.current());
 
@@ -301,7 +337,7 @@ Thread* RunQueue::find_stealable() noexcept {
       budget));
 }
 
-Thread* RunQueue::try_steal(const std::uint32_t enough) noexcept {
+Thread* RunQueue::try_steal(const std::uint32_t enough, const std::uint32_t thief) noexcept {
   if (spare() < enough || !m_lock.try_lock()) {
     return nullptr;
   }
@@ -311,6 +347,8 @@ Thread* RunQueue::try_steal(const std::uint32_t enough) noexcept {
     thread = find_stealable();
     if (thread != nullptr) {
       (void)remove_locked(*thread);
+      thread->mark_migrating();
+      thread->set_cpu_id(thief);
     }
   }
 
@@ -337,7 +375,7 @@ std::size_t RunQueue::drain_dead() noexcept {
   return reaped;
 }
 
-void RunQueue::publish_idle() noexcept {
+void RunQueue::publish_idle() const noexcept {
   if (m_domain != nullptr) {
     m_domain->mark_idle(m_slot);
   }

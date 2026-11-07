@@ -120,6 +120,15 @@ inline constexpr std::uint64_t RFLAGS_IF = 1ull << 9;
 /// HLT everywhere else. Returns with interrupts enabled.
 DECLARE_STATIC_CALL(void, cpu_idle, const std::atomic<std::uint32_t>*);
 
+/// @brief Tells CPU @p cpu, sitting in cpu_idle(), that the word it is waiting on has just changed.
+///
+/// An IPI where the CPU is halted. Nothing at all where cpu_idle() uses MWAIT, as the store has
+/// done the job by then, and an IPI would only come along to wake a CPU that is awake already.
+///
+/// So this is no way to wake an idle CPU for any other reason: for that word to change is what it
+/// takes. ipi::send_reschedule() is for everything else.
+DECLARE_STATIC_CALL(void, kick_idle_cpu, std::uint32_t);
+
 /// @brief Stops every other CPU and halts this one, for good. Where panics end up.
 [[noreturn]] void panic_halt() noexcept;
 
@@ -510,4 +519,8 @@ void initialize() noexcept;
 
 /// @brief Turns on the same features on an AP. Runs before the AP has a GS base.
 void initialize_secondary() noexcept;
+
+/// @brief Whether initialize() turned on CR4.FSGSBASE, which lets user code change its own FS
+///        and GS bases as well.
+[[nodiscard]] bool fsgsbase_enabled() noexcept;
 }  // namespace kernel::hw
