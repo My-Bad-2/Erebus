@@ -1,6 +1,6 @@
 # Erebus
 
-<center>
+<div align="center">
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://www.shieldcn.dev/github/ci/My-Bad-2/Erebus.svg?variant=secondary&amp;mode=dark&amp;font=space-grotesk"><img alt="CI" src="https://www.shieldcn.dev/github/ci/My-Bad-2/Erebus.svg?variant=secondary&amp;mode=light&amp;font=space-grotesk"></picture>
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://www.shieldcn.dev/github/release/My-Bad-2/Erebus.svg?variant=ghost&amp;mode=dark&amp;font=space-grotesk"><img alt="Release" src="https://www.shieldcn.dev/github/release/My-Bad-2/Erebus.svg?variant=ghost&amp;mode=light&amp;font=space-grotesk"></picture>
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://www.shieldcn.dev/github/license/My-Bad-2/Erebus.svg?variant=ghost&amp;mode=dark&amp;font=space-grotesk"><img alt="License" src="https://www.shieldcn.dev/github/license/My-Bad-2/Erebus.svg?variant=ghost&amp;mode=light&amp;font=space-grotesk"></picture>
@@ -10,7 +10,7 @@
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Compiled%20using-CMake-064F8C.svg?logo=cmake&amp;logoColor=fff&amp;variant=ghost&amp;size=default&amp;mode=dark&amp;font=space-grotesk"><img alt="Compiled using CMake" src="https://shieldcn.dev/badge/Compiled%20using-CMake-064F8C.svg?logo=cmake&amp;logoColor=fff&amp;variant=ghost&amp;size=default&amp;mode=light&amp;font=space-grotesk"></picture>
 <br />
 <picture><source media="(prefers-color-scheme: dark)" srcset="https://shieldcn.dev/badge/Runs%20on-hopes%20%26%20dreams-FF69B4.svg?variant=ghost&amp;size=default&amp;mode=dark&amp;font=space-grotesk"><img alt="Hopes &amp; Dreams" src="https://shieldcn.dev/badge/Runs%20on-hopes%20%26%20dreams-FF69B4.svg?variant=ghost&amp;size=default&amp;mode=light&amp;font=space-grotesk"></picture>
-</center>
+</div>
 
 Erebus is a hobby kernel for x86-64 PCs, written in C++.
 
