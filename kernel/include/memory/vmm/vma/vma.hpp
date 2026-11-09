@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -10,6 +11,7 @@
 #include "memory/vmm/pagemap/flags.hpp"
 #include "memory/vmm/pagemap/tlb.hpp"
 #include "utils/bplus_tree.hpp"
+#include "utils/lock.hpp"
 #include "vm_object.hpp"
 
 namespace kernel::memory::vmm {
@@ -81,9 +83,18 @@ struct alignas(std::hardware_destructive_interference_size) VMArea {
 /// @brief A set of non-overlapping VMAs plus the page tables that cache their translations.
 ///
 /// VMAs are kept twice: in a B+ tree keyed by start address, for lookups, and in a sorted doubly
-/// linked list, for walking neighbours. Both are protected by `m_as_lock`. Page faults only need
-/// it shared (the page tables and VM objects synchronise on their own); everything that changes
-/// the set of VMAs takes it exclusively.
+/// linked list, for walking neighbours. Whatever changes either, or the page tables under them, is
+/// a writer and holds a WriteGuard. Whatever only looks holds `m_as_lock` shared (the page tables
+/// and VM objects synchronise on their own), except page faults, the one reader that is on every
+/// CPU at once.
+///
+/// A page fault takes no lock at all as long as the fast path is open: it finds its VMA and
+/// resolves the fault in an RCU read section (utils/rcu/rcu.hpp). A writer closes the fast path,
+/// waits out a grace period, after which every fault that got in has left, and only then takes
+/// `m_as_lock`. Faults that come along meanwhile go the slow way, which waits for the lock, and the
+/// first of them after the writers are done opens the fast path again. So the tree and the VMAs
+/// never meet a reader while they change, and nothing in them has to be safe for one. Faults share
+/// no cache line that anyone writes, and a burst of writers pays one grace period, for the first.
 ///
 /// Anonymous memory is demand paged unless AccessFlags::Populate is given. Demand-paged memory
 /// must not be touched with interrupts disabled: the fault may have to wait for a CPU that is
@@ -108,6 +119,32 @@ class AddressSpace {
 
   PageMap m_pagemap;
   mutable utils::RWLock m_as_lock;
+
+  // Whether page faults may take the fast path; see the class comment. Only a writer, holding
+  // m_writers, closes it, and a slow fault opens it again once no writer is about. It starts out
+  // closed: nobody can be faulting in a new address space, so whatever fills it in need not wait.
+  std::atomic<bool> m_fast_faults{false};
+
+  // Held by a writer from before it closes the fast path until it is done, so that writers take
+  // turns and a fault can tell whether one is about. Faults never wait for it.
+  utils::QSpinlock m_writers{};
+
+  // What every writer holds: m_writers, the fast path closed and waited out, then m_as_lock
+  // exclusively. Preemption is off throughout, as for the lock alone.
+  class [[nodiscard]] WriteGuard {
+   public:
+    explicit WriteGuard(AddressSpace& space) noexcept;
+    ~WriteGuard() noexcept;
+
+    WriteGuard(const WriteGuard&) = delete;
+    WriteGuard& operator=(const WriteGuard&) = delete;
+
+   private:
+    AddressSpace& m_space;
+  };
+
+  // Opens the fast path, unless a writer is about. @pre m_as_lock is held shared.
+  void open_fast_faults() noexcept;
 
   // Where find_free_gap() hands out addresses: [start, limit), next try at bump.
   struct Region {
@@ -142,6 +179,8 @@ class AddressSpace {
 
   [[nodiscard]] auto expand_stack_locked(VirtualAddress fault_addr) noexcept
       -> std::expected<VMArea*, Error>;
+  // @pre Writers are kept out: m_as_lock is held, or the fast path was open in the caller's read
+  //      section (see handle_page_fault()).
   [[nodiscard]] auto resolve_vma_fault_locked(VMArea* vma, VirtualAddress fault_addr,
                                               AccessFlags fault_type) noexcept
       -> std::expected<void, Error>;
@@ -239,7 +278,11 @@ class AddressSpace {
   [[nodiscard]] auto evict_page(VirtualAddress addr) noexcept -> std::expected<void, Error>;
 
   /// @brief Resolves a page fault, growing a stack VMA if the address sits right below one.
-  /// @return An error if the access is not allowed or the address is not mapped by any VMA.
+  ///
+  /// Takes no lock while no writer is about; see the class comment. Growing a stack is a writer,
+  /// which waits for read sections to end, so it cannot be done from inside one.
+  /// @return An error if the access is not allowed or the address is not mapped by any VMA, and
+  ///         DeadlockDetected for a stack that would have to grow inside a read section.
   [[nodiscard]] auto handle_page_fault(VirtualAddress fault_addr, AccessFlags fault_type) noexcept
       -> std::expected<void, Error>;
 

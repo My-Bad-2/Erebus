@@ -1,4 +1,6 @@
+#include "hal/smp/percpu.hpp"
 #include "memory/vmm/vma/vma.hpp"
+#include "utils/rcu/rcu.hpp"
 
 namespace kernel::memory::vmm {
 namespace {
@@ -119,8 +121,21 @@ std::expected<void, Error> AddressSpace::resolve_vma_fault_locked(
 
 std::expected<void, Error> AddressSpace::handle_page_fault(const VirtualAddress fault_addr,
                                                            const AccessFlags fault_type) noexcept {
+  // The fast path, without a lock. A writer waits for every fault that found it open before it
+  // changes anything, so the tree, the VMA and its flags stay as they are until this is over.
+  {
+    utils::rcu::ReadGuard rcu;
+    if (m_fast_faults.load(std::memory_order_acquire)) [[likely]] {
+      if (VMArea* vma = find_vma(fault_addr)) [[likely]] {
+        return resolve_vma_fault_locked(vma, fault_addr, fault_type);
+      }
+    }
+  }
+
+  // A writer is about, or the address is in no VMA, though it may be right below a stack.
   {
     utils::SharedPreemptGuard shared_guard(m_as_lock);
+    open_fast_faults();
 
     if (VMArea* vma = find_vma(fault_addr)) [[likely]] {
       return resolve_vma_fault_locked(vma, fault_addr, fault_type);
@@ -137,8 +152,14 @@ std::expected<void, Error> AddressSpace::handle_page_fault(const VirtualAddress 
     }
   }
 
-  // Growing changes the VMA, which needs the lock exclusively.
-  utils::ExclusivePreemptGuard exclusive_guard(m_as_lock);
+  // Growing changes the VMA, which takes a writer, and a writer waits out the read sections there
+  // are. In one, it would be waiting for itself. The stacks that grow are user stacks, whose faults
+  // come from user code, which is never in one.
+  if (hw::percpu::in_rcu_read()) [[unlikely]] {
+    return std::unexpected(Error::DeadlockDetected);
+  }
+
+  WriteGuard guard{*this};
 
   const auto stack = expand_stack_locked(fault_addr);
   if (!stack) {

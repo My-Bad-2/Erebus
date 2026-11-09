@@ -11,6 +11,7 @@
 #include "memory/pmm/bootstrap.hpp"
 #include "memory/shrinker.hpp"
 #include "utils/logger.hpp"
+#include "utils/rcu/rcu.hpp"
 
 namespace kernel::memory::heap {
 namespace {
@@ -32,8 +33,10 @@ KmemCache* g_meta_node_array = nullptr;
 
 KmemCache* g_kmalloc_caches[NUM_KMALLOC_CACHES] = {nullptr};
 
+// Every cache there is, for shrinks, which walk it in RCU read sections. The lock only keeps the
+// writers, create() and destroy(), out of each other's way.
 constinit utils::QSpinlock g_cache_list_lock{};
-KmemCache* g_cache_list = nullptr;
+constinit std::atomic<KmemCache*> g_cache_list{nullptr};
 
 std::size_t shrink_heap(const std::uint32_t node_id, void*) noexcept {
   return shrink_node(node_id);
@@ -161,10 +164,21 @@ void initialize() noexcept {
   register_shrinker(g_heap_shrinker);
 }
 
+template <typename Fn>
+void KmemCache::for_each_cache(Fn&& fn) noexcept {
+  for (KmemCache* cache = g_cache_list.load(std::memory_order_acquire); cache != nullptr;
+       cache = cache->m_next_cache.load(std::memory_order_acquire)) {
+    fn(*cache);
+  }
+}
+
 void KmemCache::add_to_cache_list(KmemCache* cache) noexcept {
   utils::PreemptGuard guard{g_cache_list_lock};
-  cache->m_next_cache = g_cache_list;
-  g_cache_list = cache;
+
+  // Linked in before it is published, with a release, so a shrink that finds it finds all of it.
+  cache->m_next_cache.store(g_cache_list.load(std::memory_order_relaxed),
+                            std::memory_order_relaxed);
+  g_cache_list.store(cache, std::memory_order_release);
 }
 
 std::expected<KmemCache*, Error> KmemCache::create(const std::uint32_t obj_size,
@@ -223,17 +237,24 @@ std::expected<KmemCache*, Error> KmemCache::create(const std::uint32_t obj_size,
 }
 
 void KmemCache::destroy() noexcept {
-  // Off the list first, so that no shrink starts on what is about to go away. One that has it
-  // already holds the list, so taking the lock is waiting for that to end.
+  // Off the list first, so that no shrink starts on what is about to go away. A shrink that is at
+  // it goes on from it to the rest, so its own link stays as it is.
   {
     utils::PreemptGuard guard{g_cache_list_lock};
-    for (KmemCache** link = &g_cache_list; *link != nullptr; link = &(*link)->m_next_cache) {
-      if (*link == this) {
-        *link = m_next_cache;
+    std::atomic<KmemCache*>* link = &g_cache_list;
+    for (KmemCache* at = link->load(std::memory_order_relaxed); at != nullptr;
+         at = link->load(std::memory_order_relaxed)) {
+      if (at == this) {
+        link->store(m_next_cache.load(std::memory_order_relaxed), std::memory_order_release);
         break;
       }
+
+      link = &at->m_next_cache;
     }
   }
+
+  // A shrink that found it is in a read section that started before it was taken off.
+  utils::rcu::synchronize();
 
   utils::IrqDisableGuard irq_guard;
 
@@ -691,10 +712,10 @@ void KmemCache::flush_cpu_partials_of(void* cache) noexcept {
 }
 
 void KmemCache::flush_every_cpu_partial(void*) noexcept {
-  // Whoever sent this holds the list of caches until every CPU is done, so it cannot change.
-  for (KmemCache* cache = g_cache_list; cache != nullptr; cache = cache->m_next_cache) {
-    cache->flush_cpu_partials_local();
-  }
+  // A section of its own, though an IPI is dispatched in one and the sender is in one too: this
+  // also runs on the sender's CPU, called directly.
+  utils::rcu::ReadGuard rcu;
+  for_each_cache([](KmemCache& cache) { cache.flush_cpu_partials_local(); });
 }
 
 std::size_t KmemCache::trim_node(const std::uint32_t node_id) noexcept {
@@ -745,15 +766,14 @@ std::size_t shrink_node(const std::uint32_t node_id) noexcept {
     return 0;
   }
 
-  utils::PreemptGuard guard{g_cache_list_lock};
+  // The whole of it in one read section: a cache that is destroyed meanwhile waits for it, and
+  // one that is made meanwhile may or may not be trimmed, which is just as good.
+  utils::rcu::ReadGuard rcu;
 
   run_on_node_cpus(node_id, &KmemCache::flush_every_cpu_partial, nullptr);
 
   std::size_t pages = 0;
-  for (KmemCache* cache = g_cache_list; cache != nullptr; cache = cache->m_next_cache) {
-    pages += cache->trim_node(node_id);
-  }
-
+  KmemCache::for_each_cache([&](KmemCache& cache) { pages += cache.trim_node(node_id); });
   return pages;
 }
 

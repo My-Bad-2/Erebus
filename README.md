@@ -105,10 +105,10 @@ cmake --workflow --preset check                # configure, build and test in on
 A run looks like this:
 
 ```text
-ktest: running 588 tests on 4 CPUs
+ktest: running 620 tests on 4 CPUs
 ktest: pass Maths.alignment (0 ms)
 ...
-ktest: 575 passed, 0 failed, 6 skipped
+ktest: 613 passed, 0 failed, 7 skipped
 ktest: ALL PASSED
 ```
 

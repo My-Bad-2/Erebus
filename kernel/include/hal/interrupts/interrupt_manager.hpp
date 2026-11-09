@@ -6,8 +6,7 @@
 
 #include "interrupts.hpp"
 #include "sched/dpc.hpp"
-#include "utils/linked_list.hpp"
-#include "utils/lock.hpp"
+#include "utils/rcu/rcu_ptr.hpp"
 
 namespace kernel::hw::apic {
 class IoApicController;
@@ -27,7 +26,9 @@ using DpcCallback = sched::Dpc::Callback;
 ///        InterruptManager::set_user_fault_handler().
 using UserFaultHandler = void (*)(const Event& event) noexcept;
 
-class InterruptRegistration : public utils::SListNode<InterruptRegistration> {
+/// @brief A handler on a vector, and what it defers. The caller owns it, and it has to stay where
+///        it is from register_handler() until unregister_handler() has returned.
+class InterruptRegistration {
   friend class InterruptManager;
 
  public:
@@ -47,26 +48,36 @@ class InterruptRegistration : public utils::SListNode<InterruptRegistration> {
   Callback m_callback{nullptr};
   void* m_ctx{nullptr};
   sched::Dpc m_dpc;
+
+  // The next handler on the same vector. Interrupts follow it without a lock, so once this one is
+  // unlinked it keeps pointing on to the rest until unregister_handler() is done waiting.
+  utils::rcu::Ptr<InterruptRegistration> m_next{};
+  bool m_registered{false};  ///< Under the update lock, to catch a registration made twice.
 };
 
+/// @brief Who handles each vector, and the way every interrupt and exception gets to them.
+///
+/// Every interrupt and every exception looks its handlers up here, on every CPU at once, while
+/// handlers come and go a handful of times per boot. So looking up takes no lock: the handlers of
+/// a vector are a list that interrupts walk in an RCU read section (utils/rcu/rcu.hpp). Updates
+/// take the one lock there is, which no interrupt ever touches, and a handler that is taken off
+/// waits out a grace period before the caller gets it back.
+///
+/// Interrupt handlers run inside that read section, which is what lets unregister_handler() wait
+/// for the calls that are still going on. It costs them nothing, as they could not sleep anyway.
+/// They may take locks and wait for other CPUs, as TLB shootdowns do, shared vector or not.
+/// Exception handlers are called after it instead: a page fault may sleep.
 class InterruptManager {
-  struct alignas(std::hardware_destructive_interference_size) VectorSlot {
-    utils::QSpinlock lock;
-
-    Callback direct_callback;
-    sched::Dpc* direct_dpc;
-    void* direct_ctx;
-    utils::SList<InterruptRegistration> list;
-
+  // Not a cache line each: interrupts only read these, and packed they take a third of the cache.
+  struct VectorSlot {
+    utils::rcu::Ptr<InterruptRegistration> handlers;  ///< The newest first.
     bool is_level_triggered;
     apic::IoApicController* ioapic_controller;
 
+    // Spelled out, as s_slots cannot use default member initializers of a class nested in the one
+    // it is a member of.
     constexpr VectorSlot() noexcept
-        : direct_callback(nullptr),
-          direct_dpc(nullptr),
-          direct_ctx(nullptr),
-          is_level_triggered(false),
-          ioapic_controller(nullptr) {}
+        : handlers(nullptr), is_level_triggered(false), ioapic_controller(nullptr) {}
   };
 
   static inline std::array<VectorSlot, IDT_SIZE> s_slots{};
@@ -76,19 +87,22 @@ class InterruptManager {
   static void handle_nmi(const Event& event) noexcept;
 
  public:
-  static void initialize() noexcept {
-    for (auto& slot : s_slots) {
-      slot.list.clear();
-    }
-  }
-
   static void set_eoi_strategy(std::uint8_t vector, bool is_lvl,
                                apic::IoApicController* controller = nullptr) noexcept;
+
+  /// @brief Adds @p reg to the handlers of @p vector. Interrupts call it from now on, before the
+  ///        handlers that were there already.
+  /// @pre @p reg is not registered on any vector.
   static void register_handler(std::uint8_t vector, InterruptRegistration* reg) noexcept;
 
-  /// @brief Takes a handler off a vector, and waits for what it deferred to be over.
+  /// @brief Takes a handler off a vector, then waits for every call to it that is still going on
+  ///        and for what it deferred. After that, @p reg is the caller's again.
+  ///
+  /// The one thing it cannot wait for is an exception handler that is already running, as those
+  /// run outside the read section. Nothing takes one off.
   /// @pre The calling thread can sleep, and @p reg is registered on @p vector.
   static void unregister_handler(std::uint8_t vector, InterruptRegistration* reg) noexcept;
+
   static void route_event(const Event& event) noexcept;
 
   /// @brief Sets what is done about an exception from ring 3 that no handler took care of.

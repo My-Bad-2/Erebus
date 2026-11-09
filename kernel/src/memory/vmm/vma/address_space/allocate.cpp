@@ -64,7 +64,7 @@ auto AddressSpace::alloc(const std::size_t size_bytes, const AccessFlags access,
     return std::unexpected(Error::OutOfMemory);
   }
 
-  utils::ExclusivePreemptGuard guard(m_as_lock);
+  WriteGuard guard{*this};
 
   VirtualAddress addr = hint;
   Error failure = Error::Success;
@@ -119,7 +119,7 @@ auto AddressSpace::alloc(const std::size_t size_bytes, const AccessFlags access,
 }
 
 std::expected<void, Error> AddressSpace::free(const VirtualAddress addr) noexcept {
-  utils::ExclusivePreemptGuard guard(m_as_lock);
+  WriteGuard guard{*this};
 
   VMArea* vma = nullptr;
   if (!m_vma_tree.get(addr.value(), vma)) {
@@ -131,7 +131,7 @@ std::expected<void, Error> AddressSpace::free(const VirtualAddress addr) noexcep
 }
 
 std::expected<void, Error> AddressSpace::free_containing(const VirtualAddress addr) noexcept {
-  utils::ExclusivePreemptGuard guard(m_as_lock);
+  WriteGuard guard{*this};
 
   VMArea* vma = find_vma(addr);
   if (vma == nullptr) {
@@ -158,7 +158,7 @@ void AddressSpace::release_vma_locked(VMArea* vma) noexcept {
 
 std::expected<VirtualAddress, Error> AddressSpace::realloc(const VirtualAddress old_addr,
                                                            const std::size_t new_size) noexcept {
-  utils::ExclusivePreemptGuard guard(m_as_lock);
+  WriteGuard guard{*this};
 
   VMArea* vma = nullptr;
   if (!m_vma_tree.get(old_addr.value(), vma)) {
@@ -237,7 +237,7 @@ auto AddressSpace::map_object(VMObject* existing_obj, const std::size_t size_byt
     return std::unexpected(Error::OutOfMemory);
   }
 
-  utils::ExclusivePreemptGuard guard(m_as_lock);
+  WriteGuard guard{*this};
 
   VirtualAddress addr = hint;
   if (hint ? !range_is_free(hint, hint + static_cast<VirtualAddress::OffsetType>(aligned_size))
@@ -286,7 +286,7 @@ auto AddressSpace::map_mmio(const PhysicalAddress phys_base, const std::size_t s
     return std::unexpected(Error::OutOfMemory);
   }
 
-  utils::ExclusivePreemptGuard guard(m_as_lock);
+  WriteGuard guard{*this};
 
   VirtualAddress addr = hint;
   if (hint ? !range_is_free(hint, hint + static_cast<VirtualAddress::OffsetType>(aligned_size))
@@ -338,7 +338,7 @@ auto AddressSpace::create_alias(const VirtualAddress src_addr, const std::size_t
     return std::unexpected(Error::OutOfMemory);
   }
 
-  utils::ExclusivePreemptGuard guard(m_as_lock);
+  WriteGuard guard{*this};
 
   const VirtualAddress alias_addr = find_free_gap(size_bytes, PAGE_SIZE);
   if (!alias_addr) [[unlikely]] {

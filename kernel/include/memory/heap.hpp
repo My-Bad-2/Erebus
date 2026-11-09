@@ -26,12 +26,13 @@
 /// Slabs nobody uses are not given back at once: a node keeps a few empty ones for the next
 /// burst, and each CPU a few partial ones. Under memory pressure the reclaim daemon wants those
 /// back, which is what shrink_node() is for. Every cache is on one list for it, so a shrink can
-/// get to all of them; see memory/shrinker.hpp for how the daemon gets to the heap.
-
+/// get to all of them; see memory/shrinker.hpp for how the daemon gets to the heap. Shrinks walk
+/// that list in an RCU read section, so caches can be made and destroyed while one is going on.
 #pragma once
 
 #include <string.h>
 
+#include <atomic>
 #include <cstdint>
 #include <expected>
 #include <new>
@@ -98,7 +99,10 @@ struct alignas(std::hardware_destructive_interference_size) NodeCache {
 class alignas(std::hardware_destructive_interference_size) KmemCache {
   std::span<CpuCache> m_cpu_caches;
   std::span<NodeCache> m_node_caches;
-  KmemCache* m_next_cache{nullptr};  ///< The next one on the list of every cache.
+  /// The next one on the list of every cache. Shrinks follow it in an RCU read section, so a
+  /// cache that was taken off keeps pointing on to the rest until destroy() is done waiting. A
+  /// plain atomic, not an rcu::Ptr: utils/rcu includes this header, so this one cannot include it.
+  std::atomic<KmemCache*> m_next_cache{nullptr};
 
   void (*m_ctor)(void*);
 
@@ -130,6 +134,10 @@ class alignas(std::hardware_destructive_interference_size) KmemCache {
   [[nodiscard]] std::size_t trim_node(std::uint32_t node_id) noexcept;
 
   static void add_to_cache_list(KmemCache* cache) noexcept;
+
+  // Calls @p fn on every cache there is. @pre In an RCU read section. Only heap.cpp uses it.
+  template <typename Fn>
+  static void for_each_cache(Fn&& fn) noexcept;
 
   friend std::size_t shrink_node(std::uint32_t node_id) noexcept;
   friend void initialize() noexcept;
@@ -168,8 +176,10 @@ class alignas(std::hardware_destructive_interference_size) KmemCache {
       void (*ctor)(void*) = nullptr) noexcept;
 
   /// @brief Returns every slab to the PMM and frees the cache itself.
+  ///
+  /// Waits for a grace period first, for any shrink that found the cache on the list.
   /// @pre No CPU is using the cache any more. Objects still allocated are leaked (and reported).
-  ///      Interrupts are on, as for create().
+  ///      The caller is not in an RCU read section, which that would wait for.
   void destroy() noexcept;
 
   /// @brief Gives every slab of NUMA node @p node_id that has no objects in use back to the PMM.

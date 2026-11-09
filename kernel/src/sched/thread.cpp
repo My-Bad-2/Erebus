@@ -19,6 +19,7 @@
 #include "utils/lock.hpp"
 #include "utils/logger.hpp"
 #include "utils/maths.hpp"
+#include "utils/rcu/rcu.hpp"
 
 namespace kernel::sched {
 namespace {
@@ -592,7 +593,7 @@ auto Thread::request_amx_context() noexcept -> std::expected<void, Error> {
   const std::uint64_t mask = hw::fpu::state_mask(true);
   klib::memset(*area, 0, size);
 
-  void* old_area = nullptr;
+  void* old_area;
   {
     // A switch to this thread, or away from it, must see all of this or none of it.
     utils::IrqDisableGuard irq_guard{};
@@ -709,6 +710,7 @@ Thread* current() noexcept { return hw::percpu::current_thread(); }
 
 void switch_to(Thread* prev, Thread* next, const SwitchReason reason) noexcept {
   KASSERT(prev && next);
+  utils::rcu::note_quiescent_state();
   if (prev == next) {
     return;
   }

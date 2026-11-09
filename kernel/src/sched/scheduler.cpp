@@ -14,6 +14,7 @@
 #include "sched/reaper.hpp"
 #include "utils/lock.hpp"
 #include "utils/logger.hpp"
+#include "utils/rcu/rcu.hpp"
 
 namespace kernel::sched {
 namespace {
@@ -437,6 +438,7 @@ void Scheduler::idle_step() noexcept {
       (void)rq.slice_timer().cancel();
       hw::percpu::timers().prepare_for_idle();
 
+      utils::rcu::note_quiescent_state();
       hw::cpu_idle(rq.idle_word());
       return;
     }

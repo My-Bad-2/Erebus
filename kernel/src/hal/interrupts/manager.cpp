@@ -3,11 +3,17 @@
 #include "hal/smp/percpu.hpp"
 #include "hal/smp/smp.hpp"
 #include "sched/scheduler.hpp"
+#include "utils/assert.hpp"
 #include "utils/lock.hpp"
 #include "utils/logger.hpp"
+#include "utils/rcu/rcu.hpp"
 
 namespace kernel::hw::interrupts {
 namespace {
+// Keeps register_handler() and unregister_handler() out of each other's way. Interrupts never
+// take it: they only read, in RCU read sections.
+constinit utils::QSpinlock g_update_lock{};
+
 [[nodiscard]] constexpr const char* to_string(const EventClass category) noexcept {
   switch (category) {
     case EventClass::Interrupt:
@@ -64,46 +70,45 @@ void InterruptManager::set_eoi_strategy(const std::uint8_t vector, const bool is
 
 void InterruptManager::register_handler(const std::uint8_t vector,
                                         InterruptRegistration* reg) noexcept {
-  auto& [lock, direct_callback, direct_dpc, direct_ctx, list, lvl_triggered, ioapic] =
-      s_slots[vector];
+  KASSERT(reg != nullptr);
+  utils::IrqSaveGuard guard{g_update_lock};
+  KASSERT(!reg->m_registered);
+  reg->m_registered = true;
 
-  utils::IrqSaveGuard guard(lock);
-
-  const bool was_empty = list.empty();
-  list.push_front(*reg);
-
-  if (was_empty) [[likely]] {
-    direct_callback = reg->m_callback;
-    direct_dpc = reg->deferred_call();
-    direct_ctx = reg->m_ctx;
-  } else {
-    direct_callback = nullptr;
-  }
+  // Linked in before it is published, and the store that publishes it is a release, so an
+  // interrupt that finds it finds all of it.
+  utils::rcu::Ptr<InterruptRegistration>& head = s_slots[vector].handlers;
+  reg->m_next.store(head.load_writer_locked());
+  head.store(reg);
 }
 
 void InterruptManager::unregister_handler(const std::uint8_t vector,
                                           InterruptRegistration* reg) noexcept {
-  auto& [lock, direct_callback, direct_dpc, direct_ctx, list, lvl_triggered, ioapic] =
-      s_slots[vector];
+  KASSERT(percpu::can_sleep());
 
   {
-    utils::IrqSaveGuard guard(lock);
-    list.remove(*reg);
+    utils::IrqSaveGuard guard{g_update_lock};
+    KASSERT(reg->m_registered);
 
-    direct_callback = nullptr;
-
-    const auto it = list.begin();
-    if (it != list.end()) {
-      auto next = it;
-      ++next;
-
-      if (next == list.end()) {
-        direct_callback = it->m_callback;
-        direct_dpc = it->deferred_call();
-        direct_ctx = it->m_ctx;
+    utils::rcu::Ptr<InterruptRegistration>* link = &s_slots[vector].handlers;
+    for (InterruptRegistration* at = link->load_writer_locked(); at != reg;
+         at = link->load_writer_locked()) {
+      if (at == nullptr) [[unlikely]] {
+        utils::logger::fatal("Interrupts: unregistering a handler vector {} does not have\n",
+                             vector);
       }
+
+      link = &at->m_next;
     }
+
+    // An interrupt that is at it right now goes on from it to the rest, so its own link stays.
+    link->store(reg->m_next.load_writer_locked());
+    reg->m_registered = false;
   }
+
+  // Every interrupt that could still see it, and every call to it, is in a read section that
+  // started before it was unlinked.
+  utils::rcu::synchronize();
 
   // No new interrupt gets to it from here on, so this ends.
   reg->m_dpc.flush();
@@ -118,49 +123,28 @@ void InterruptManager::route_event(const Event& event) noexcept {
     }
 
     percpu::hardirq_enter();
-    auto& slot = s_slots[event.vector];
+    const VectorSlot& slot = s_slots[event.vector];
 
     bool handled = false;
     bool yield = false;
 
-    // A single handler is called without the slot lock, so the same vector can be handled on
-    // every CPU at once and the handler is free to take locks or wait for other CPUs (TLB
-    // shootdowns do). Registration happens at init time; a snapshot is all that is needed.
-    Callback callback;
-    sched::Dpc* dpc;
-    void* ctx;
+    // The handlers run in the read section, so that unregister_handler() can wait for them. It
+    // ends before the deferred calls and the scheduler get their turn below.
     {
-      utils::NakedGuard guard(slot.lock);
-      callback = slot.direct_callback;
-      dpc = slot.direct_dpc;
-      ctx = slot.direct_ctx;
-    }
+      utils::rcu::ReadGuard rcu;
+      for (InterruptRegistration* reg = slot.handlers.load(rcu); reg != nullptr;
+           reg = reg->m_next.load(rcu)) {
+        const InterruptStatus status = reg->m_callback(event, reg->m_ctx);
 
-    if (callback != nullptr) [[likely]] {
-      const InterruptStatus status = callback(event, ctx);
-
-      if (status == InterruptStatus::ScheduleDPC && dpc != nullptr) [[unlikely]] {
-        (void)dpc->queue();
-        handled = true;
-      } else {
-        handled = status != InterruptStatus::Unhandled;
-        yield = status == InterruptStatus::YieldRequested;
-      }
-    } else {
-      // Shared vectors walk the list, which needs the lock.
-      utils::NakedGuard guard(slot.lock);
-      for (auto& reg : slot.list) {
-        const InterruptStatus status = reg.m_callback(event, reg.m_ctx);
-
-        if (sched::Dpc* deferred = reg.deferred_call();
+        if (sched::Dpc* deferred = reg->deferred_call();
             status == InterruptStatus::ScheduleDPC && deferred != nullptr) [[unlikely]] {
           (void)deferred->queue();
           handled = true;
           continue;
         }
 
-        handled |= (status != InterruptStatus::Unhandled);
-        yield |= (status == InterruptStatus::YieldRequested);
+        handled |= status != InterruptStatus::Unhandled;
+        yield |= status == InterruptStatus::YieldRequested;
       }
     }
 
@@ -172,8 +156,8 @@ void InterruptManager::route_event(const Event& event) noexcept {
       }
     }
 
-    if (!handled && slot.list.empty()) [[unlikely]] {
-      // Spurious interrupt
+    if (!handled) [[unlikely]] {
+      // Spurious, or for a handler that has just gone.
     }
 
     if (yield) [[unlikely]] {
@@ -202,19 +186,16 @@ void InterruptManager::route_event(const Event& event) noexcept {
 }
 
 void InterruptManager::handle_exception(const Event& event) noexcept {
-  // Never run the handler under the slot lock: page faults happen on every CPU at once, may
-  // nest, and may have to wait for other CPUs (to shoot down TLB entries), any of which would
-  // deadlock against a lock held across the call.
+  // Only the lookup is in a read section, and the handler is called after it: a page fault may
+  // sleep, and may happen inside a read section already. Exception handlers stay registered for
+  // good, so what was read stays good.
   Callback callback = nullptr;
   void* ctx = nullptr;
   {
-    auto& slot = s_slots[event.vector];
-    utils::NakedGuard guard(slot.lock);
-
-    const auto it = slot.list.begin();
-    if (it != slot.list.end()) {
-      callback = it->m_callback;
-      ctx = it->m_ctx;
+    utils::rcu::ReadGuard rcu;
+    if (const InterruptRegistration* reg = s_slots[event.vector].handlers.load(rcu)) {
+      callback = reg->m_callback;
+      ctx = reg->m_ctx;
     }
   }
 

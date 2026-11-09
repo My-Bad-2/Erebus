@@ -1,10 +1,12 @@
 // What reclaim can get back without taking anything from anyone: empty slabs, cached pages and
 // stacks, and the shrinker list that leads the daemons to all of it.
+#include <array>
 #include <atomic>
 #include <chrono.hpp>
 #include <cstdint>
 
 #include "../sched/support.hpp"
+#include "drivers/clock.hpp"
 #include "hal/smp/percpu.hpp"
 #include "ktest.hpp"
 #include "memory/heap.hpp"
@@ -14,6 +16,7 @@
 #include "memory/shrinker.hpp"
 #include "sched/reaper.hpp"
 #include "sched/sleep.hpp"
+#include "utils/logger.hpp"
 
 namespace kernel::testing {
 namespace {
@@ -130,6 +133,80 @@ KTEST(Reclaim, the_whole_heap_shrinks_at_once) {
   memory::heap::kfree(fresh);
 
   KEXPECT_EQ(memory::heap::shrink_node(memory::pmm::g_topology.active_nodes()), 0u);
+}
+
+// Caches made and destroyed on one CPU while every other CPU shrinks the whole heap, over and over.
+// Shrinks walk the list of caches without a lock, so destroying a cache has to wait for every
+// shrink that may have found it, or that shrink trims a cache that is gone. Each cache gets a few
+// empty slabs first, so a shrink has something to do in it.
+KTEST_ALL_CPUS(Reclaim, caches_come_and_go_while_the_heap_shrinks, cpu) {
+  constexpr Duration RUN = Duration::milliseconds(300);
+  constexpr std::uint32_t PER_CACHE = 64;
+  static std::atomic<bool> stop{false};
+  static std::atomic<std::uint64_t> made{0};
+  static std::atomic<std::uint64_t> shrinks{0};
+
+  if (cpu == 0) {
+    stop.store(false);
+    made.store(0);
+    shrinks.store(0);
+  }
+
+  sync_cpus();
+
+  if (cpu == 0) {
+    const klib::TimePoint end = drivers::SystemClock::now() + RUN;
+    std::uint64_t local_made = 0;
+    while (drivers::SystemClock::now() < end) {
+      const auto cache =
+          KmemCache::create(128 + 64 * static_cast<std::uint32_t>(local_made % 8), 8);
+      if (!cache.has_value()) {
+        KEXPECT(cache.has_value());
+        break;
+      }
+
+      std::array<void*, PER_CACHE> objects{};
+      for (void*& object : objects) {
+        const auto got = (*cache)->alloc();
+        object = got ? *got : nullptr;
+      }
+
+      for (void* object : objects) {
+        if (object != nullptr) {
+          (*cache)->free(object);
+        }
+      }
+
+      (*cache)->destroy();
+      ++local_made;
+
+      // Alone, this CPU shrinks too, which at least goes through every step.
+      if (cpu_count() == 1) {
+        (void)memory::heap::shrink_node(here());
+      }
+    }
+
+    made.store(local_made, std::memory_order_relaxed);
+    stop.store(true, std::memory_order_release);
+  } else {
+    std::uint64_t local_shrinks = 0;
+    while (!stop.load(std::memory_order_acquire)) {
+      (void)memory::heap::shrink_node(here());
+      ++local_shrinks;
+    }
+
+    shrinks.fetch_add(local_shrinks, std::memory_order_relaxed);
+  }
+
+  sync_cpus();
+
+  if (cpu == 0) {
+    KEXPECT_GT(made.load(), 10u);
+    utils::logger::info("Reclaim: {} caches made and destroyed under {} shrinks\n", made.load(),
+                        shrinks.load());
+  }
+
+  sync_cpus();
 }
 
 // Pages freed on a CPU wait in its cache, where the zone does not count them. A drain gives them

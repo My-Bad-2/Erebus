@@ -1,11 +1,50 @@
 #include "crypto/random.hpp"
 #include "hal/smp/percpu.hpp"
 #include "memory/vmm/vma/vma.hpp"
+#include "utils/assert.hpp"
+#include "utils/rcu/rcu.hpp"
 
 namespace kernel::memory::vmm {
 namespace {
 constexpr bool enable_aslr = true;
 }  // namespace
+
+AddressSpace::WriteGuard::WriteGuard(AddressSpace& space) noexcept : m_space(space) {
+  // The grace period below would wait for the caller's own read section. Interrupt handlers are
+  // in one, so they cannot change an address space either.
+  KASSERT(!hw::percpu::in_rcu_read());
+
+  hw::percpu::preempt_disable();
+  m_space.m_writers.lock();
+
+  // Faults that found the fast path open may be anywhere in the tree and the VMAs, or halfway
+  // through mapping a page the way a VMA said before this changes it. Closing it keeps new ones
+  // out, and the grace period waits for the ones that got in. synchronize() fences before it
+  // looks at the readers, so a fault either sees it closed or is waited for.
+  if (m_space.m_fast_faults.load(std::memory_order_relaxed)) {
+    m_space.m_fast_faults.store(false, std::memory_order_relaxed);
+    utils::rcu::synchronize();
+  }
+
+  m_space.m_as_lock.write_lock();
+}
+
+AddressSpace::WriteGuard::~WriteGuard() noexcept {
+  m_space.m_as_lock.write_unlock();
+  m_space.m_writers.unlock();
+  hw::percpu::preempt_enable();
+}
+
+void AddressSpace::open_fast_faults() noexcept {
+  // A writer that holds m_writers has closed it, or found it closed, and goes on as if it were, so
+  // it stays closed for that one. A writer that takes m_writers after this finds it open and
+  // waits for the faults that got in. What writers did before is in place: their unlock, and the
+  // release here, come before any fault that finds it open.
+  if (!m_fast_faults.load(std::memory_order_relaxed) && m_writers.try_lock()) {
+    m_fast_faults.store(true, std::memory_order_release);
+    m_writers.unlock();
+  }
+}
 
 VMArea* AddressSpace::allocate_vma() noexcept {
   const auto mem = s_vma_cache->alloc();
@@ -308,8 +347,10 @@ AddressSpace::~AddressSpace() noexcept {
 }
 
 std::expected<void, Error> AddressSpace::clone_into(AddressSpace& child) noexcept {
-  utils::ExclusivePreemptGuard parent_guard(m_as_lock);
-  utils::ExclusivePreemptGuard child_guard{child.m_as_lock};
+  // The child first: it is new, so nothing can be faulting in it, and its guard waits for no one.
+  // The parent's grace period then holds up no one who wants the child.
+  WriteGuard child_guard{child};
+  WriteGuard parent_guard{*this};
 
   std::size_t vma_count = 0;
   for (const VMArea* vma = m_vma_list_head; vma; vma = vma->next_vma) {

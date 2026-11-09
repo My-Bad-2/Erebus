@@ -12,7 +12,7 @@ std::expected<void, Error> AddressSpace::protect(const VirtualAddress addr,
     return {};
   }
 
-  utils::ExclusivePreemptGuard guard(m_as_lock);
+  WriteGuard guard{*this};
 
   const VirtualAddress end_addr = addr + static_cast<VirtualAddress::OffsetType>(size_bytes);
   const auto first = isolate_range(addr, end_addr);
@@ -53,7 +53,7 @@ std::expected<void, Error> AddressSpace::lock_memory(const VirtualAddress addr,
     return {};
   }
 
-  utils::ExclusivePreemptGuard guard(m_as_lock);
+  WriteGuard guard{*this};
 
   const VirtualAddress end_addr = addr + static_cast<VirtualAddress::OffsetType>(size_bytes);
   const auto first = isolate_range(addr, end_addr);
@@ -103,7 +103,7 @@ auto AddressSpace::unlock_memory(const VirtualAddress addr, const std::size_t si
     return {};
   }
 
-  utils::ExclusivePreemptGuard guard(m_as_lock);
+  WriteGuard guard{*this};
 
   const VirtualAddress end_addr = addr + static_cast<VirtualAddress::OffsetType>(size_bytes);
   const auto first = isolate_range(addr, end_addr);
@@ -122,7 +122,7 @@ auto AddressSpace::unlock_memory(const VirtualAddress addr, const std::size_t si
 }
 
 auto AddressSpace::evict_page(const VirtualAddress addr) noexcept -> std::expected<void, Error> {
-  utils::ExclusivePreemptGuard guard(m_as_lock);
+  WriteGuard guard{*this};
 
   const VMArea* vma = find_vma(addr);
   if (!vma) {

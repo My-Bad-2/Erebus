@@ -83,6 +83,11 @@ struct alignas(std::hardware_destructive_interference_size) PerCpu {
 
   alignas(std::hardware_destructive_interference_size) CpuContext context{0};
 
+  /// The CPU's side of RCU: how deep it is in read sections, in the low byte, and above that how
+  /// many outermost ones it has finished. Only this CPU writes it, and remote CPUs only read it,
+  /// to tell whether a reader they have to wait for is done yet. See utils/rcu/rcu.hpp.
+  std::uint64_t rcu_reader{0};
+
   // Queue nodes for QSpinlock waiters, one per nesting level. Remote CPUs write to these when
   // they queue behind us, so they get a cache line to themselves.
   alignas(std::hardware_destructive_interference_size)
@@ -139,8 +144,8 @@ inline constexpr std::size_t MCE_BYTE = CTX_BASE + 5;
 
 // Bytes 1-5 of the context: the preemption count and every interrupt nesting count. Byte 0 holds
 // the AST flags and bytes 6-7 are unused.
-inline constexpr std::uint64_t CTX_BLOCKERS = 0x0000'FFFF'FFFF'FF00ull;
-inline constexpr std::uint64_t CTX_AST_MASK = 0xFFull;
+inline constexpr std::uint64_t CTX_BLOCKERS = 0x0000'FFFF'FFFF'FF00ul;
+inline constexpr std::uint64_t CTX_AST_MASK = 0xFFul;
 
 /// @brief AST flag: the scheduler wants to look at what this CPU should be running.
 inline constexpr std::uint8_t AST_NEED_RESCHED = 1u << 0;
@@ -228,6 +233,49 @@ void preempt_schedule() noexcept;
 [[nodiscard, gnu::always_inline]] inline bool in_mce() noexcept {
   return gs::read<MCE_BYTE, std::uint8_t>() > 0;
 }
+
+// The RCU read side. What PerCpu::rcu_reader means, and why entering takes a locked instruction,
+// is in utils/rcu/rcu.hpp; use rcu::ReadGuard rather than these.
+inline constexpr std::size_t RCU_READER = offsetof(PerCpu, rcu_reader);
+
+/// @brief The part of PerCpu::rcu_reader that counts nested read sections.
+inline constexpr std::uint64_t RCU_DEPTH_MASK = 0xFF;
+
+/// @brief What finishing an outermost read section adds to PerCpu::rcu_reader.
+inline constexpr std::uint64_t RCU_SECTION_DONE = RCU_DEPTH_MASK + 1;
+
+/// @brief Enters a read section: no preemption, and one more level of nesting.
+///
+/// The increment is a locked instruction, so a full barrier: the loads of the section cannot be
+/// done before the rest of the system can see that this CPU is reading. It is also a single
+/// instruction, so an interrupt sees it done or not done, never halfway.
+[[gnu::always_inline]] inline void rcu_read_lock() noexcept {
+  preempt_disable();
+  asm volatile("lock incq %%gs:%c0" : /* No Output */ : "i"(RCU_READER) : "memory", "cc");
+}
+
+/// @brief Leaves a read section. The outermost one also counts as finished.
+///
+/// The load and the update are two instructions. An interrupt in between can only run read
+/// sections of its own, which leave the word as they found it, so what was loaded still holds.
+/// Preemption comes back the usual way: a reschedule that came up in the section happens here.
+[[gnu::always_inline]] inline void rcu_read_unlock() noexcept {
+  const std::uint64_t word = gs::read<RCU_READER, std::uint64_t>();
+  if ((word & RCU_DEPTH_MASK) == 1) {
+    gs::add<RCU_READER, 8, static_cast<std::uint32_t>(RCU_SECTION_DONE - 1)>();
+  } else {
+    gs::dec<RCU_READER, 8>();
+  }
+
+  preempt_enable();
+}
+
+/// @brief How many read sections the calling CPU is in, one inside the other.
+[[nodiscard, gnu::always_inline]] inline std::uint32_t rcu_depth() noexcept {
+  return static_cast<std::uint32_t>(gs::read<RCU_READER, std::uint64_t>() & RCU_DEPTH_MASK);
+}
+
+[[nodiscard, gnu::always_inline]] inline bool in_rcu_read() noexcept { return rcu_depth() != 0; }
 
 /// @brief Whether the CPU is handling any interrupt, exception-like NMI/#MC included.
 [[nodiscard, gnu::always_inline]] inline bool in_interrupt() noexcept {

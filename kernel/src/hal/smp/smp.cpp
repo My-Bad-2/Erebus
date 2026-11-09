@@ -25,6 +25,7 @@
 #include "sched/thread.hpp"
 #include "utils/logger.hpp"
 #include "utils/maths.hpp"
+#include "utils/rcu/rcu.hpp"
 
 namespace kernel::hw::smp {
 namespace detail {
@@ -596,6 +597,7 @@ void initialize(const memory::VirtualAddress bsp_stack_top) noexcept {
   timer::initialize();
 
   sched::Thread::initialize_subsystem();
+  utils::rcu::initialize();
   adopt_boot_stack(bsp);
   sched::Scheduler::initialize();
 

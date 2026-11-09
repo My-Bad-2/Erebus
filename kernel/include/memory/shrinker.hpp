@@ -7,16 +7,20 @@
 ///
 /// The registry is what keeps the daemon in the memory layer while the caches it empties live in
 /// the layers above it: they come to the daemon, so the daemon never has to know about them.
+///
+/// A daemon walks the registry in a read section of a sleepable RCU domain (utils/rcu/srcu.hpp)
+/// and calls each shrinker from inside it, as shrinkers sleep. So the walk takes no lock, however
+/// long the calls take, and a shrinker that is taken off waits until no walk can still call it.
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
 
-#include "utils/linked_list.hpp"
+#include "utils/rcu/rcu_ptr.hpp"
 
 namespace kernel::memory {
 /// @brief Something that can give memory back on request. See the file comment.
-class Shrinker : public utils::SListNode<Shrinker> {
+class Shrinker {
  public:
   /// @brief Gives back whatever the owner can spare that came from NUMA node @p node_id.
   ///
@@ -31,22 +35,24 @@ class Shrinker : public utils::SListNode<Shrinker> {
   Shrinker& operator=(const Shrinker&) = delete;
 
  private:
-  friend std::size_t run_shrinkers(std::uint32_t node_id) noexcept;
+  friend void register_shrinker(Shrinker& shrinker) noexcept;
   friend void unregister_shrinker(Shrinker& shrinker) noexcept;
+  friend std::size_t run_shrinkers(std::uint32_t node_id) noexcept;
 
   Callback m_callback;
   void* m_context;
 
-  // How many daemons are in the callback right now, under the registry's lock. It keeps the
-  // shrinker on the list for them, and unregister_shrinker() waits for it.
-  std::uint32_t m_running{0};
+  // The next one in the registry. Walks follow it without a lock, so one that was taken off keeps
+  // pointing on to the rest until unregister_shrinker() is done waiting.
+  utils::rcu::Ptr<Shrinker> m_next{};
 };
 
 /// @brief Lets reclaim call @p shrinker from now on. It must stay put until it is unregistered.
 void register_shrinker(Shrinker& shrinker) noexcept;
 
-/// @brief Takes @p shrinker off the list, and waits for every call to it that is still going on.
-/// @pre The caller is not one of those calls, and can sleep.
+/// @brief Takes @p shrinker off the list, and waits for every walk of it that might still call
+///        the shrinker. After that it is the caller's again.
+/// @pre The caller can sleep, and is not a shrinker: a walk would be waiting for itself.
 void unregister_shrinker(Shrinker& shrinker) noexcept;
 
 /// @brief Asks every shrinker for memory of node @p node_id.

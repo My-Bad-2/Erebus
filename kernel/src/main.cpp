@@ -62,7 +62,6 @@ extern "C" void _start() noexcept {
   if (auto res = patch::StaticCallPatcher::apply_patches(); !res) {
     utils::logger::fatal("Failed to apply static call patches: error {:#x}\n", res.error());
   }
-
   const auto bsp_rsp = memory::vmm::kernel_space()->alloc(
       KSTACK_SIZE, memory::vmm::AccessFlags::Read | memory::vmm::AccessFlags::Write |
                        memory::vmm::AccessFlags::Stack | memory::vmm::AccessFlags::Populate);
