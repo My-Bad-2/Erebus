@@ -46,6 +46,10 @@
 #include "utils/linked_list.hpp"
 #include "utils/locks/locks.hpp"
 
+namespace kernel::core::ipc {
+class ThreadIpcContext;
+}
+
 namespace kernel::proc {
 class Process;
 }
@@ -306,6 +310,7 @@ class alignas(std::hardware_destructive_interference_size) Thread
   DestroyHookFn m_on_destroy{nullptr};
   void* m_destroy_cookie{nullptr};
   proc::Process* m_process{nullptr};
+  core::ipc::ThreadIpcContext* m_ipc{nullptr};  ///< See ipc_context().
   std::uint32_t m_preferred_numa_node{NO_PREFERENCE};
 
   // Where a user thread starts in ring 3, and its stack there, in its process's address space.
@@ -656,6 +661,15 @@ class alignas(std::hardware_destructive_interference_size) Thread
     m_on_destroy = hook;
     m_destroy_cookie = cookie;
   }
+
+  /// @brief The destroy hook set so far, for whoever sets one of its own and calls this one on.
+  [[nodiscard]] DestroyHookFn destroy_hook() const noexcept { return m_on_destroy; }
+  [[nodiscard]] void* destroy_cookie() const noexcept { return m_destroy_cookie; }
+
+  /// @brief The thread's side of IPC, if it has one (see core/ipc/endpoint.hpp). Set before the
+  ///        thread runs, by whoever gives it one, and only ever used by the thread itself.
+  [[nodiscard]] core::ipc::ThreadIpcContext* ipc_context() const noexcept { return m_ipc; }
+  void set_ipc_context(core::ipc::ThreadIpcContext* ctx) noexcept { m_ipc = ctx; }
 
   [[nodiscard]] constexpr memory::VirtualAddress saved_rsp() const noexcept { return m_rsp; }
   [[nodiscard]] constexpr memory::VirtualAddress* saved_rsp_ptr() noexcept { return &m_rsp; }

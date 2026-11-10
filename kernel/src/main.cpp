@@ -1,4 +1,5 @@
 #include "boot/boot.hpp"
+#include "core/cap.hpp"
 #include "crypto/random.hpp"
 #include "drivers/acpi.hpp"
 #include "drivers/clock.hpp"
@@ -34,6 +35,7 @@ namespace kernel {
   // The kernel's own threads, now that every CPU can run them.
   sched::reaper::initialize();
   sched::workqueue::initialize();
+  core::ipc::initialize();
   memory::pmm::initialize_daemons();
   proc::initialize();
 

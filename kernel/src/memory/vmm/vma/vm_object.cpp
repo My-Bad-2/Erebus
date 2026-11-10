@@ -117,7 +117,9 @@ std::expected<PhysicalAddress, Error> VMObject::get_page(const std::size_t page_
     return *page;
   }
 
-  if (m_type != VMAType::Anonymous) {
+  // Memory nobody wrote yet is zeroes, private or shared. Files and devices have pages of their
+  // own, which nothing fills in yet.
+  if (m_type != VMAType::Anonymous && m_type != VMAType::SharedIPC) {
     return std::unexpected(Error::NotImplemented);
   }
 

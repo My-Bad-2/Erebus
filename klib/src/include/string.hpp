@@ -41,7 +41,7 @@ template <std::unsigned_integral T>
 
 /// @brief Sets bit 7 of exactly the zero bytes of `v`. For when the highest match matters.
 [[nodiscard, gnu::const, gnu::always_inline]] constexpr std::uint64_t zero_bytes(
-    const std::uint64_t v) noexcept {
+    std::uint64_t v) noexcept {
   constexpr std::uint64_t lows = 0x7F7F'7F7F'7F7F'7F7Ful;
   // Adding 0x7F to the low seven bits of a byte carries into bit 7 unless they are all zero, and
   // never into the next byte.
@@ -50,13 +50,13 @@ template <std::unsigned_integral T>
 
 /// @brief Copies `c` into every byte of a word.
 [[nodiscard, gnu::const, gnu::always_inline]] constexpr std::uint64_t broadcast_byte(
-    const std::uint8_t c) noexcept {
+    std::uint8_t c) noexcept {
   return std::uint64_t{c} * 0x0101'0101'0101'0101ul;
 }
 
 /// @brief Mask of the `n` lowest bytes of a word, for `n` from 0 to 7.
 [[nodiscard, gnu::const, gnu::always_inline]] constexpr std::uint64_t low_bytes(
-    const std::uint32_t n) noexcept {
+    std::uint32_t n) noexcept {
   return (std::uint64_t{1} << (n * 8)) - 1;
 }
 

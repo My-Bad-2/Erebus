@@ -19,6 +19,14 @@
 /// this when the last thread is destroyed rather than when it exits is what makes it safe: by
 /// then, no thread can be on its way through the address space any more.
 ///
+/// ### References
+///
+/// Code outside the tree that keeps a process, a capability to it say, holds a reference with
+/// retain(). The memory stays until the last one goes, however the process ended: such a holder
+/// finds it Dead, with no address space, and nothing to do to it. The address space itself is
+/// borrowed with acquire_address_space(), and goes when the process is done and the last
+/// borrower has given it back.
+///
 /// ### Locks
 ///
 /// Each process has a lock for its threads and its state. Parents and children change under one
@@ -100,6 +108,16 @@ class alignas(std::hardware_destructive_interference_size) Process
                                   const sched::UserThreadCreateOptions& opts = {}) noexcept
       -> std::expected<sched::Thread*, Error>;
 
+  /// @brief What spawn_thread() runs on the new thread before it may run: the last moment anything
+  ///        about it can be set up without racing it. An error ends the thread then and there.
+  using ThreadSetup = std::expected<void, Error> (*)(sched::Thread& thread, void* context) noexcept;
+
+  /// @brief spawn_thread(), with @p setup run on the thread first.
+  [[nodiscard]] auto spawn_thread(std::string_view name, memory::VirtualAddress entry,
+                                  std::uint64_t arg, const sched::UserThreadCreateOptions& opts,
+                                  ThreadSetup setup, void* setup_context) noexcept
+      -> std::expected<sched::Thread*, Error>;
+
   /// @brief Makes a child with a copy of this address space, private memory shared copy-on-write,
   ///        and starts one thread in it at @p entry.
   ///
@@ -150,6 +168,20 @@ class alignas(std::hardware_destructive_interference_size) Process
   /// @brief What exit() was given. Meaningful once the process is exiting.
   [[nodiscard]] int exit_status() const noexcept { return m_exit_status; }
 
+  /// @brief Keeps the process's memory until release(). @pre The caller has a reference already,
+  ///        or got the process from somewhere that keeps it alive, its tree say.
+  void retain() noexcept { m_refs.fetch_add(1, std::memory_order_relaxed); }
+
+  /// @brief Lets go of a reference. The last one frees the process, which is Dead by then.
+  void release() noexcept;
+
+  /// @brief Borrows the address space, which stays until release_address_space(), however the
+  ///        process ends meanwhile. @return Null for one that is done, or process 0.
+  [[nodiscard]] memory::vmm::AddressSpace* acquire_address_space() noexcept;
+
+  /// @brief Gives back what acquire_address_space() lent.
+  void release_address_space() noexcept { m_space_users.fetch_sub(1, std::memory_order_release); }
+
  private:
   Process() noexcept = default;
   ~Process() noexcept = default;
@@ -161,6 +193,9 @@ class alignas(std::hardware_destructive_interference_size) Process
   static void finish_later(void* process) noexcept;
   void finish() noexcept;
   void discard() noexcept;
+
+  // Takes the address space away, waits for whoever borrowed it, and destroys it.
+  void destroy_address_space() noexcept;
   [[nodiscard]] bool reap_locked(ProcessId target, int* out_status, ProcessId& found,
                                  Process*& zombie) noexcept;
   [[nodiscard]] bool has_child_locked(ProcessId target) const noexcept;
@@ -169,7 +204,9 @@ class alignas(std::hardware_destructive_interference_size) Process
 
   ProcessId m_pid{KERNEL_PID};
   std::atomic<ProcessState> m_state{ProcessState::Running};
-  memory::vmm::AddressSpace* m_address_space{nullptr};
+  memory::vmm::AddressSpace* m_address_space{nullptr};  ///< Taken away under m_lock.
+  std::atomic<std::uint32_t> m_space_users{0};          ///< See acquire_address_space().
+  std::atomic<std::uint32_t> m_refs{1};                 ///< The tree's, and retain()'s.
   int m_exit_status{0};
 
   // Threads, and the state changes that have to agree with them, under m_lock.

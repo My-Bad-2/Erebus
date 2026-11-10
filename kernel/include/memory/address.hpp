@@ -37,6 +37,7 @@ class PhysicalAddress {
   explicit PhysicalAddress(T*) = delete;
 
   [[nodiscard]] constexpr ValueType value() const noexcept { return m_address; }
+  [[nodiscard]] constexpr bool is_null() const noexcept { return m_address == 0; }
 
   explicit operator std::uint64_t() const noexcept { return m_address; }
 

@@ -16,7 +16,8 @@ enum class VMAType : std::uint8_t;
 
 /// @brief A sparse array of physical pages, indexed by page offset.
 ///
-/// Anonymous objects allocate a zeroed page the first time an offset is touched. Copy-on-write
+/// Anonymous and shared IPC objects allocate a zeroed page the first time an offset is touched.
+/// Copy-on-write
 /// is built from shadow objects: forking a private mapping gives both sides a fresh, empty
 /// shadow whose parent is the original object. Reads fall through the chain to the first object
 /// that has the page; the first write copies it into the writer's own shadow. The original

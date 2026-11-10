@@ -41,7 +41,7 @@ void on_user_fault(const hw::interrupts::Event& event) noexcept {
   process->exit(EXIT_FAULT);
 }
 
-void destroy_address_space(memory::vmm::AddressSpace* space) noexcept {
+void free_address_space(memory::vmm::AddressSpace* space) noexcept {
   if (space != nullptr) {
     std::destroy_at(space);
     memory::heap::kfree(space);
@@ -69,9 +69,40 @@ Process* Process::allocate(const std::string_view name) noexcept {
 }
 
 void Process::free(Process* process) noexcept {
+  // The tree is done with it. Whoever else holds a reference finds it Dead from here on.
   process->m_state.store(ProcessState::Dead, std::memory_order_release);
-  process->~Process();
-  g_process_cache->free(process);
+  process->release();
+}
+
+void Process::release() noexcept {
+  if (m_refs.fetch_sub(1, std::memory_order_acq_rel) == 1) {
+    this->~Process();
+    g_process_cache->free(this);
+  }
+}
+
+memory::vmm::AddressSpace* Process::acquire_address_space() noexcept {
+  utils::IrqSaveGuard guard{m_lock};
+  if (m_address_space != nullptr) {
+    m_space_users.fetch_add(1, std::memory_order_acquire);
+  }
+
+  return m_address_space;
+}
+
+void Process::destroy_address_space() noexcept {
+  memory::vmm::AddressSpace* space;
+  {
+    utils::IrqSaveGuard guard{m_lock};
+    space = std::exchange(m_address_space, nullptr);
+  }
+
+  // Nobody borrows it from here on; those who did have it for a moment more.
+  while (m_space_users.load(std::memory_order_acquire) != 0) {
+    sched::Scheduler::yield();
+  }
+
+  free_address_space(space);
 }
 
 auto Process::create(const std::string_view name, Process* parent) noexcept
@@ -108,7 +139,7 @@ auto Process::create(const std::string_view name, Process* parent) noexcept
   }
 
   if (!adopted) {
-    destroy_address_space(process->m_address_space);
+    free_address_space(std::exchange(process->m_address_space, nullptr));
     free(process);
     return std::unexpected(Error::InvalidState);
   }
@@ -119,6 +150,13 @@ auto Process::create(const std::string_view name, Process* parent) noexcept
 auto Process::spawn_thread(const std::string_view name, const memory::VirtualAddress entry,
                            const std::uint64_t arg,
                            const sched::UserThreadCreateOptions& opts) noexcept
+    -> std::expected<sched::Thread*, Error> {
+  return spawn_thread(name, entry, arg, opts, nullptr, nullptr);
+}
+
+auto Process::spawn_thread(const std::string_view name, const memory::VirtualAddress entry,
+                           const std::uint64_t arg, const sched::UserThreadCreateOptions& opts,
+                           const ThreadSetup setup, void* const setup_context) noexcept
     -> std::expected<sched::Thread*, Error> {
   // The thread counts from here on, so the address space stays while it is being made, whatever
   // exit() does in the meantime.
@@ -150,6 +188,14 @@ auto Process::spawn_thread(const std::string_view name, const memory::VirtualAdd
 
   sched::Thread* thread = *created;
   thread->set_destroy_hook(&on_thread_destroyed, this);
+
+  // Destroying it takes care of the count, as below.
+  if (setup != nullptr) {
+    if (const auto ready = setup(*thread, setup_context); !ready) {
+      (void)sched::Thread::destroy(thread);
+      return std::unexpected(ready.error());
+    }
+  }
 
   bool refused;
   {
@@ -257,7 +303,7 @@ void Process::finish_later(void* process) noexcept { static_cast<Process*>(proce
 void Process::finish() noexcept {
   // The last thread is destroyed, so nothing can be in the address space any more, and nothing
   // can come along and start a new one.
-  destroy_address_space(std::exchange(m_address_space, nullptr));
+  destroy_address_space();
 
   utils::SList<Process, ProcessChildTag> orphans_done;
   bool free_self = false;
@@ -303,7 +349,7 @@ void Process::discard() noexcept {
     (void)m_parent->m_children.remove(*this);
   }
 
-  destroy_address_space(std::exchange(m_address_space, nullptr));
+  destroy_address_space();
   free(this);
 }
 
