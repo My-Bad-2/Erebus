@@ -25,6 +25,7 @@ enable_testing()
 add_subdirectory(third_party)
 add_subdirectory(klib)
 add_subdirectory(kernel)
+add_subdirectory(user)
 add_subdirectory(tests)
 
 # ------------------------------------------------------------------------------
@@ -38,6 +39,7 @@ add_uefi_iso(os_iso
     "${LIMINE_DIR}/BOOTX64.EFI" EFI/BOOT/BOOTX64.EFI
     "${PROJECT_SOURCE_DIR}/misc/limine.conf" boot/limine/limine.conf
     "$<TARGET_FILE:kernel>" boot/kernel.elf
+    "$<TARGET_FILE:user>" boot/user.elf
 )
 
 add_qemu_targets(qemu
@@ -56,6 +58,7 @@ add_uefi_iso(test_iso
     "${LIMINE_DIR}/BOOTX64.EFI" EFI/BOOT/BOOTX64.EFI
     "${PROJECT_SOURCE_DIR}/misc/limine.conf" boot/limine/limine.conf
     "$<TARGET_FILE:kernel_test>" boot/kernel.elf
+    "$<TARGET_FILE:user>" boot/user.elf
 )
 
 add_kernel_test_targets(
@@ -78,7 +81,10 @@ add_doxygen_docs(docs
     "${PROJECT_SOURCE_DIR}/tests/framework"
     EXCLUDE
     "${PROJECT_SOURCE_DIR}/kernel/include/boot/limine.h"
+    "${PROJECT_SOURCE_DIR}/kernel/include/boot/elf.h"
     INCLUDE_PATH
     "${PROJECT_SOURCE_DIR}/kernel/include"
     "${PROJECT_SOURCE_DIR}/klib/include"
+    "${PROJECT_SOURCE_DIR}/user/include"
+    "${PROJECT_SOURCE_DIR}/user/src"
 )

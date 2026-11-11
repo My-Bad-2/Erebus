@@ -13,6 +13,7 @@ extern volatile limine_memmap_request memmap_request;
 extern volatile limine_mp_request mp_request;
 extern volatile limine_executable_address_request executable_address_request;
 extern volatile limine_executable_file_request executable_file_request;
+extern volatile limine_module_request module_request;
 
 /// @brief Halts with a message unless Limine supports @ref BASE_REVISION and answered every
 ///        required request.

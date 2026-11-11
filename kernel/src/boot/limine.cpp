@@ -56,6 +56,15 @@ volatile limine_executable_file_request executable_file_request = {
     .response = nullptr,
 };
 
+[[gnu::used, gnu::section(".limine_requests")]]
+volatile limine_module_request module_request = {
+    .id = LIMINE_MODULE_REQUEST_ID,
+    .revision = 0,
+    .response = nullptr,
+    .internal_module_count = 0,
+    .internal_modules = nullptr,
+};
+
 void validate() noexcept {
   if (!LIMINE_BASE_REVISION_SUPPORTED(base_revision)) [[unlikely]] {
     utils::logger::fatal("Boot: the bootloader does not support Limine base revision {}.\n",

@@ -6,10 +6,6 @@
 # with its own build of main.cpp and the tests.
 # ==============================================================================
 
-# The boot-time self-tests these enabled are now tests of the test kernel.
-unset(EREBUS_MM_SELFTEST CACHE)
-unset(EREBUS_SMP_SELFTEST CACHE)
-
 # ------------------------------------------------------------------------------
 # build_info.hpp: name, version and the commit it was configured from
 # ------------------------------------------------------------------------------

@@ -102,6 +102,29 @@ target_link_options(erebus_kernel_abi INTERFACE
 )
 
 # ------------------------------------------------------------------------------
+# erebus::user_abi
+# ------------------------------------------------------------------------------
+add_library(erebus_user_abi INTERFACE)
+add_library(erebus::user_abi ALIAS erebus_user_abi)
+
+# A static executable at a fixed address, which the kernel's ELF loader maps as it is. The red
+# zone stays: every way from ring 3 into the kernel switches stacks first, so nothing ever writes
+# below the user stack pointer behind user code's back.
+target_link_libraries(erebus_user_abi INTERFACE erebus::freestanding)
+target_compile_options(erebus_user_abi INTERFACE
+        -mcmodel=small
+        -fno-pie
+)
+target_link_options(erebus_user_abi INTERFACE
+        -no-pie
+        LINKER:-z,noexecstack
+        LINKER:-z,max-page-size=0x1000
+        LINKER:-z,separate-code
+        LINKER:-static
+        LINKER:--no-dynamic-linker
+)
+
+# ------------------------------------------------------------------------------
 # erebus::warnings
 # ------------------------------------------------------------------------------
 add_library(erebus_warnings INTERFACE)

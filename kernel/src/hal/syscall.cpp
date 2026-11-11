@@ -40,11 +40,17 @@ constexpr std::size_t USER_STACK_SLOT = offsetof(PerCpu, syscall_scratch);
 // SYSCALL loads CS from the base in IA32_STAR and SS from the entry after it. SYSRET loads SS from
 // the entry after its base and CS from the one after that, which is why user data comes before
 // user code in the GDT.
+//
+// SYSRET's base carries RPL 3. Intel CPUs force it to 3 in both selectors anyway, but AMD CPUs take
+// SS's from the base as it is, and user code would run with an SS of RPL 0. Nothing minds in
+// 64-bit mode until the first interrupt from ring 3 pushes that SS, and the IRET back refuses it
+// with a #GP, in ring 0, after SWAPGS has already put the user's GS back.
 constexpr std::uint16_t SYSCALL_BASE = std::to_underlying(gdt::Selector::KernelCode);
-constexpr std::uint16_t SYSRET_BASE = std::to_underlying(gdt::Selector::KernelData);
+constexpr std::uint16_t SYSRET_BASE =
+    std::to_underlying(gdt::with_rpl(gdt::Selector::KernelData, gdt::PrivilegeLevel::Ring3));
 static_assert(SYSCALL_BASE + 8 == std::to_underlying(gdt::Selector::KernelData));
-static_assert(SYSRET_BASE + 8 == std::to_underlying(gdt::Selector::UserData));
-static_assert(SYSRET_BASE + 16 == std::to_underlying(gdt::Selector::UserCode));
+static_assert(SYSRET_BASE + 8 == user::DATA_SELECTOR, "SS after SYSRET, RPL 3 and all");
+static_assert(SYSRET_BASE + 16 == user::CODE_SELECTOR, "CS after SYSRET, RPL 3 and all");
 
 // What SYSCALL clears, which is whatever would change how kernel code runs: TF would single-step
 // it, IF would let an interrupt in before there is a kernel stack, DF would run string
