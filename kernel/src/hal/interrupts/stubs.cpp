@@ -2,42 +2,9 @@
 #include "hal/interrupts/interrupt_manager.hpp"
 #include "hal/interrupts/interrupts.hpp"
 #include "hal/user.hpp"
+#include "register_asm.hpp"
 #include "sched/scheduler.hpp"
 #include "utils/logger.hpp"
-
-#define ASM_PUSH_ALL_REGISTERS \
-  "pushq %%rax\n\t"            \
-  "pushq %%rbx\n\t"            \
-  "pushq %%rcx\n\t"            \
-  "pushq %%rdx\n\t"            \
-  "pushq %%rsi\n\t"            \
-  "pushq %%rdi\n\t"            \
-  "pushq %%rbp\n\t"            \
-  "pushq %%r8\n\t"             \
-  "pushq %%r9\n\t"             \
-  "pushq %%r10\n\t"            \
-  "pushq %%r11\n\t"            \
-  "pushq %%r12\n\t"            \
-  "pushq %%r13\n\t"            \
-  "pushq %%r14\n\t"            \
-  "pushq %%r15\n\t"
-
-#define ASM_POP_ALL_REGISTERS \
-  "popq %%r15\n\t"            \
-  "popq %%r14\n\t"            \
-  "popq %%r13\n\t"            \
-  "popq %%r12\n\t"            \
-  "popq %%r11\n\t"            \
-  "popq %%r10\n\t"            \
-  "popq %%r9\n\t"             \
-  "popq %%r8\n\t"             \
-  "popq %%rbp\n\t"            \
-  "popq %%rdi\n\t"            \
-  "popq %%rsi\n\t"            \
-  "popq %%rdx\n\t"            \
-  "popq %%rcx\n\t"            \
-  "popq %%rbx\n\t"            \
-  "popq %%rax\n\t"
 
 namespace kernel::hw::interrupts {
 namespace {
@@ -50,6 +17,12 @@ constexpr std::size_t NMI_PERCPU_SLOT =
 static_assert(SAVED_REGISTERS_BYTES == 15 * sizeof(std::uint64_t));
 
 constexpr std::uint32_t IA32_GS_BASE = 0xC0000101;
+
+// The vector FRED gives SYSCALL; SYSENTER's is 2.
+constexpr std::uint8_t FRED_SYSCALL_VECTOR = 1;
+
+// Bit 1 of a #GP error code: the selector part is an IDT vector.
+constexpr std::uint16_t IDT_ERROR_CODE = 1u << 1;
 }  // namespace
 
 [[gnu::naked, gnu::used]] void legacy_isr_common() noexcept {
@@ -212,7 +185,8 @@ consteval auto generate_legacy_stubs(std::index_sequence<Is...>) {
     event.category = EventClass::Interrupt;
   }
 
-  // Syscalls are handled by a separate branch
+  // System calls never come this way: SYSCALL has an entry of its own (hal/syscall.hpp), and every
+  // gate refuses INT n from ring 3.
   return event;
 }
 
@@ -229,6 +203,14 @@ consteval auto generate_legacy_stubs(std::index_sequence<Is...>) {
       .gprs = &frame->gprs,
   };
 
+  // What the IDT gives INT n, INT3 and INTO from ring 3, as all of its gates are DPL 0: a #GP that
+  // names the vector. FRED has no gates to check, so it is up to us to give the same.
+  const auto refuse_from_user = [&event] {
+    event.category = EventClass::Exception;
+    event.error_code = static_cast<std::uint16_t>((event.vector << 3) | IDT_ERROR_CODE);
+    event.vector = std::to_underlying(InterruptVector::GeneralProtectionFault);
+  };
+
   switch (frame->event_info.get_type()) {
     case fred::EventType::ExternalInterrupt:
       event.category = EventClass::Interrupt;
@@ -237,13 +219,29 @@ consteval auto generate_legacy_stubs(std::index_sequence<Is...>) {
       event.category = EventClass::NMI;
       break;
     case fred::EventType::HardwareException:
-    case fred::EventType::SoftwareException:
-    case fred::EventType::PrivSoftwareException:
+    case fred::EventType::PrivSoftwareException:  // INT1, which no gate stops either
       event.category = EventClass::Exception;
       break;
-    case fred::EventType::OtherEvent:         // syscall / sysenter
+    case fred::EventType::SoftwareException:  // INT3 and INTO
+      if (event.cpl == EventCpl::Ring3) {
+        refuse_from_user();
+      } else {
+        event.category = EventClass::Exception;
+      }
+      break;
     case fred::EventType::SoftwareInterrupt:  // INT n
-      event.category = EventClass::Syscall;
+      refuse_from_user();
+      break;
+    case fred::EventType::OtherEvent:
+      // SYSCALL from 64-bit code is a system call. SYSENTER, and SYSCALL from compatibility mode,
+      // get the #UD they would get without FRED, as there is nowhere for them to go.
+      if (event.vector == FRED_SYSCALL_VECTOR && frame->event_info.get_long_mode()) [[likely]] {
+        event.category = EventClass::Syscall;
+      } else {
+        event.category = EventClass::Exception;
+        event.vector = std::to_underlying(InterruptVector::InvalidOpcode);
+        event.error_code = 0;
+      }
       break;
     default:
       event.category = EventClass::Unknown;

@@ -156,6 +156,9 @@ class AddressSpace {
   Region m_heap_region;
   Region m_mmap_region;
 
+  // What memory filled in on demand here counts against. See set_quota().
+  QuotaRef m_quota{};
+
   [[nodiscard]] static VMArea* allocate_vma() noexcept;
   static void release_vma(VMArea* vma) noexcept;
 
@@ -200,10 +203,23 @@ class AddressSpace {
 
   [[nodiscard]] PageMap& pagemap() noexcept { return m_pagemap; }
 
+  /// @brief Has the memory this address space fills in on demand count against @p quota, null for
+  ///        nothing, which is what the kernel's own gets.
+  ///
+  /// It is a commitment that counts, not a page in use: a new range all of it at once, a stack
+  /// what it grows by when it does, and after a fork each copy-on-write side all it could come
+  /// to copy. Each object holds what it was charged until it is gone. Device memory and
+  /// existing objects mapped here count against whatever they did before, if anything.
+  /// @pre Nothing was allocated yet.
+  void set_quota(Quota* const quota) noexcept { m_quota = QuotaRef::share(quota); }
+
+  [[nodiscard]] Quota* quota() const noexcept { return m_quota.get(); }
+
   /// @brief Reserves (and with Populate, backs) a new anonymous range.
   /// @param size_bytes Rounded up to @p page_size.
   /// @param hint       Exact address to use, or null to let the address space pick one.
-  /// @return The start of the range. AlreadyMapped if @p hint overlaps an existing VMA.
+  /// @return The start of the range. AlreadyMapped if @p hint overlaps an existing VMA,
+  ///         QuotaExceeded if the range would take the quota past its limit.
   [[nodiscard]] auto alloc(std::size_t size_bytes, AccessFlags access,
                            CacheMode cache = CacheMode::WriteBack,
                            PageSize page_size = PageSize::Size4K, VMAType type = VMAType::Anonymous,
@@ -227,7 +243,10 @@ class AddressSpace {
   /// @brief Changes the read/write/execute permissions of a range spanning one or more VMAs.
   ///
   /// The range must be fully covered by VMAs and aligned to their page size. VMAs are split at
-  /// the edges as needed and merged again with identical neighbours afterwards.
+  /// the edges as needed and merged again with identical neighbours afterwards. Only anonymous
+  /// memory can gain a permission; anything else can only lose them.
+  /// @return AccessDenied, with nothing changed, for a permission a VMA that is not anonymous
+  ///         does not have.
   [[nodiscard]] auto protect(VirtualAddress addr, std::size_t size_bytes,
                              AccessFlags new_flags) noexcept -> std::expected<void, Error>;
 
@@ -250,7 +269,9 @@ class AddressSpace {
   ///
   /// All allocations happen before anything is changed, so on failure both address spaces are
   /// exactly as they were. On success private VMAs on both sides point at new, empty shadow
-  /// objects of the original and the parent's pages are write-protected.
+  /// objects of the original and the parent's pages are write-protected. Each shadow counts the
+  /// whole range against its side's quota (see set_quota()).
+  /// @return OutOfMemory, or QuotaExceeded if either side has no room for its shadows.
   [[nodiscard]] auto clone_into(AddressSpace& child) noexcept -> std::expected<void, Error>;
 
   /// @brief Maps an existing VM object, sharing its pages with every other mapping of it.

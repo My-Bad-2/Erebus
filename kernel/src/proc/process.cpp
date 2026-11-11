@@ -109,6 +109,24 @@ auto Process::create(const std::string_view name, Process* parent) noexcept
     -> std::expected<Process*, Error> {
   Process* const owner = parent != nullptr ? parent : current_process();
 
+  // The tree's quota, or a new tree's. Process 0 has none to share.
+  memory::QuotaRef quota = owner->m_quota.get() != nullptr
+                               ? memory::QuotaRef::share(owner->m_quota.get())
+                               : memory::QuotaRef::adopt(memory::Quota::create_tree());
+
+  if (quota.get() == nullptr) [[unlikely]] {
+    return std::unexpected(Error::OutOfMemory);
+  }
+
+  // What the process takes before it does anything: itself, its address space, and the table at
+  // the top of its page tables. It counts for as long as the process is around.
+  constexpr std::size_t FOOTPRINT =
+      sizeof(Process) + sizeof(memory::vmm::AddressSpace) + memory::PAGE_SIZE;
+  auto footprint = memory::QuotaCharge::take(quota.get(), FOOTPRINT);
+  if (!footprint) [[unlikely]] {
+    return std::unexpected(footprint.error());
+  }
+
   Process* process = allocate(name);
   void* space_memory =
       memory::heap::kmalloc(sizeof(memory::vmm::AddressSpace), alignof(memory::vmm::AddressSpace));
@@ -121,9 +139,13 @@ auto Process::create(const std::string_view name, Process* parent) noexcept
     return std::unexpected(Error::OutOfMemory);
   }
 
+  process->m_quota = std::move(quota);
+  process->m_footprint = std::move(*footprint);
+
   process->m_address_space =
       std::construct_at(static_cast<memory::vmm::AddressSpace*>(space_memory),
                         memory::VirtualAddress{USER_SPACE_BASE});
+  process->m_address_space->set_quota(process->m_quota.get());
 
   bool adopted = false;
   {
@@ -158,19 +180,40 @@ auto Process::spawn_thread(const std::string_view name, const memory::VirtualAdd
                            const std::uint64_t arg, const sched::UserThreadCreateOptions& opts,
                            const ThreadSetup setup, void* const setup_context) noexcept
     -> std::expected<sched::Thread*, Error> {
-  // The thread counts from here on, so the address space stays while it is being made, whatever
-  // exit() does in the meantime.
-  {
-    utils::IrqSaveGuard guard{m_lock};
-    if (m_address_space == nullptr ||
-        m_state.load(std::memory_order_relaxed) != ProcessState::Running) {
-      return std::unexpected(Error::InvalidState);
-    }
-
-    m_live_threads.fetch_add(1, std::memory_order_relaxed);
+  if (const auto reserved = reserve_thread(); !reserved) {
+    return std::unexpected(reserved.error());
   }
 
-  const auto created = sched::Thread::create_user(name, this, entry, arg, opts);
+  return launch_thread(sched::Thread::create_user(name, this, entry, arg, opts), setup,
+                       setup_context);
+}
+
+auto Process::spawn_thread_copy(const std::string_view name, const hw::user::ResumeFrame& at,
+                                const ThreadSetup setup, void* const setup_context) noexcept
+    -> std::expected<sched::Thread*, Error> {
+  if (const auto reserved = reserve_thread(); !reserved) {
+    return std::unexpected(reserved.error());
+  }
+
+  return launch_thread(sched::Thread::create_user_copy(name, this, at), setup, setup_context);
+}
+
+std::expected<void, Error> Process::reserve_thread() noexcept {
+  // The thread counts from here on, so the address space stays while it is being made, whatever
+  // exit() does in the meantime.
+  utils::IrqSaveGuard guard{m_lock};
+  if (m_address_space == nullptr ||
+      m_state.load(std::memory_order_relaxed) != ProcessState::Running) {
+    return std::unexpected(Error::InvalidState);
+  }
+
+  m_live_threads.fetch_add(1, std::memory_order_relaxed);
+  return {};
+}
+
+auto Process::launch_thread(const std::expected<sched::Thread*, Error> created,
+                            const ThreadSetup setup, void* const setup_context) noexcept
+    -> std::expected<sched::Thread*, Error> {
   if (!created) {
     bool last;
     {
@@ -215,8 +258,7 @@ auto Process::spawn_thread(const std::string_view name, const memory::VirtualAdd
   return thread;
 }
 
-auto Process::fork(const std::string_view name, const memory::VirtualAddress entry,
-                   const std::uint64_t arg, const sched::UserThreadCreateOptions& opts) noexcept
+auto Process::fork_address_space(const std::string_view name) noexcept
     -> std::expected<Process*, Error> {
   if (m_address_space == nullptr) {
     return std::unexpected(Error::InvalidState);
@@ -232,7 +274,42 @@ auto Process::fork(const std::string_view name, const memory::VirtualAddress ent
     return std::unexpected(cloned.error());
   }
 
-  if (const auto thread = (*child)->spawn_thread(name, entry, arg, opts); !thread) {
+  return *child;
+}
+
+auto Process::fork(const std::string_view name, const memory::VirtualAddress entry,
+                   const std::uint64_t arg, const sched::UserThreadCreateOptions& opts,
+                   const ThreadSetup setup, void* const setup_context) noexcept
+    -> std::expected<Process*, Error> {
+  const auto child = fork_address_space(name);
+  if (!child) {
+    return child;
+  }
+
+  if (const auto thread = (*child)->spawn_thread(name, entry, arg, opts, setup, setup_context);
+      !thread) {
+    (*child)->discard();
+    return std::unexpected(thread.error());
+  }
+
+  return *child;
+}
+
+auto Process::fork_here(const std::string_view name, const hw::user::ResumeFrame& at,
+                        const ThreadSetup setup, void* const setup_context) noexcept
+    -> std::expected<Process*, Error> {
+  if (sched::current()->process() != this) [[unlikely]] {
+    return std::unexpected(Error::InvalidState);
+  }
+
+  // The address space is copied first, with the calling thread's stack as it is now, and the
+  // thread that carries on in the child takes everything else from the caller right after.
+  const auto child = fork_address_space(name);
+  if (!child) {
+    return child;
+  }
+
+  if (const auto thread = (*child)->spawn_thread_copy(name, at, setup, setup_context); !thread) {
     (*child)->discard();
     return std::unexpected(thread.error());
   }

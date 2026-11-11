@@ -20,7 +20,23 @@ std::expected<void, Error> AddressSpace::protect(const VirtualAddress addr,
     return std::unexpected(first.error());
   }
 
+  // Memory that is not the address space's own, a shared object or a device, may lose permissions
+  // but never gain them: whoever mapped it decided how far it goes, with a capability that is not
+  // here to be asked again. Checked for the whole range first, so that a refusal changes nothing.
   VMArea* last = nullptr;
+  bool gains_on_foreign = false;
+  for (VMArea* vma = *first; vma && vma->start < end_addr; vma = vma->next_vma) {
+    const AccessFlags gained = new_flags & PROTECTION_FLAGS & ~vma->flags.get_access();
+    gains_on_foreign |= gained != AccessFlags::None && vma->flags.get_type() != VMAType::Anonymous;
+    last = vma;
+  }
+
+  if (gains_on_foreign) [[unlikely]] {
+    coalesce_range(last, addr);
+    return std::unexpected(Error::AccessDenied);
+  }
+
+  last = nullptr;
   std::expected<void, Error> result{};
 
   for (VMArea* vma = *first; vma && vma->start < end_addr; vma = vma->next_vma) {

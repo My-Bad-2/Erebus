@@ -8,6 +8,7 @@
 
 #include "../sched/support.hpp"
 #include "drivers/clock.hpp"
+#include "hal/user.hpp"
 #include "ktest.hpp"
 #include "sched/sleep.hpp"
 
@@ -215,5 +216,29 @@ KTEST(Process, comes_and_goes_many_times) {
     KEXPECT(proc::kernel_process()->wait_child(pids[i], &status).has_value());
     KEXPECT_EQ(status, static_cast<int>(i));
   }
+}
+
+// A copy of a thread is of the thread that asks, in ring 3, into a process forked from its own:
+// a kernel thread has nothing to copy, and no place outside user space can be carried on from.
+KTEST(Process, only_a_user_thread_is_copied_and_only_from_user_space) {
+  const auto created = Process::create("copied");
+  KREQUIRE(created.has_value());
+
+  hw::user::ResumeFrame at{};
+  at.rip = 0x400000;
+  at.rsp = 0x500000;
+  at.rflags = hw::user::INITIAL_RFLAGS;
+  KEXPECT(sched::Thread::create_user_copy("copy", *created, at).error() == Error::InvalidState);
+  KEXPECT((*created)->fork_here("copy", at).error() == Error::InvalidState);
+
+  at.rip = 0xffff'8000'0000'0000ul;
+  KEXPECT(sched::Thread::create_user_copy("copy", *created, at).error() == Error::InvalidArgument);
+  at.rip = 0x400000;
+  at.rsp = 0x0000'8000'0000'0000ul;
+  KEXPECT(sched::Thread::create_user_copy("copy", *created, at).error() == Error::InvalidArgument);
+
+  KEXPECT_EQ((*created)->live_threads(), 0u);
+  (*created)->exit(0);
+  KEXPECT(proc::kernel_process()->wait_child((*created)->pid()).has_value());
 }
 }  // namespace kernel::testing

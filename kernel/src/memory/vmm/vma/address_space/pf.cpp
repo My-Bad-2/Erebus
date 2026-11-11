@@ -4,7 +4,6 @@
 
 namespace kernel::memory::vmm {
 namespace {
-// A racing fault on another CPU may have installed the same translation first.
 [[nodiscard]] std::expected<void, Error> tolerate_race(
     const std::expected<void, Error>& res) noexcept {
   if (!res && res.error() != Error::AlreadyMapped) {
@@ -42,8 +41,16 @@ auto AddressSpace::expand_stack_locked(VirtualAddress fault_addr) noexcept
     return std::unexpected(Error::StackOverflow);
   }
 
+  // A stack counts what it grows by, when it grows, rather than all it may grow to from the start:
+  // most never come near it. Past the quota the fault fails, as it would past the limit above.
+  const std::size_t growth_bytes = growth_pages * bytes_per_page;
+  if (const auto charged = stack->vm_object->commit_more(growth_bytes); !charged) [[unlikely]] {
+    return std::unexpected(charged.error());
+  }
+
   // Insert under the new key before dropping the old one; only the insert can fail.
   if (!m_vma_tree.insert(new_start.value(), stack)) [[unlikely]] {
+    stack->vm_object->commit_less(growth_bytes);
     return std::unexpected(Error::OutOfMemory);
   }
 

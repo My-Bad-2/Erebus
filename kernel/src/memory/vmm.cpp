@@ -108,7 +108,7 @@ class PageFaultDispatcher {
     // The fault arrives with interrupts off. Resolving it can mean waiting for the address
     // space lock, and whoever holds that may be waiting for this CPU to answer a TLB
     // shootdown, so give the faulting context its interrupts back while we work.
-    const bool reenable = (event.rflags & hw::irq::RFLAGS_IF) != 0;
+    const bool reenable = hw::RFlags{event.rflags}.get_interrupt_flag();
     if (reenable) {
       hw::irq::enable();
     }

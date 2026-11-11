@@ -14,6 +14,40 @@ PhysicalAddress g_mixed[512];
 std::uint8_t g_orders[512];
 }  // namespace
 
+// What the PMM says it has is fixed, adds up over the nodes, and covers what it hands out. A block
+// too big for the per-CPU caches comes straight out of the zones, so the free count shows it, give
+// or take what other CPUs do meanwhile.
+KTEST(Pmm, knows_how_much_memory_there_is) {
+  const memory::pmm::MemoryInfo before = memory::pmm::memory_info();
+  KEXPECT(before.total_pages > 0);
+  KEXPECT_EQ(before.total_pages, memory::pmm::total_pages());
+  KEXPECT_EQ(memory::pmm::total_bytes(), before.total_pages * memory::PAGE_SIZE);
+  KEXPECT(before.free_pages <= before.total_pages);
+  KEXPECT_EQ(before.used_pages(), before.total_pages - before.free_pages);
+
+  std::uint64_t nodes_total = 0;
+  for (std::uint32_t node = 0; node < memory::pmm::node_count(); ++node) {
+    const memory::pmm::MemoryInfo info = memory::pmm::node_memory_info(node);
+    KEXPECT(info.total_pages > 0);
+    KEXPECT(info.free_pages <= info.total_pages);
+    nodes_total += info.total_pages;
+  }
+
+  KEXPECT_EQ(nodes_total, before.total_pages);
+  KEXPECT_EQ(memory::pmm::node_memory_info(memory::pmm::node_count()).total_pages, 0u);
+
+  constexpr std::uint8_t ORDER = 10;
+  constexpr std::uint64_t BLOCK = std::uint64_t{1} << ORDER;
+  const auto block = memory::pmm::alloc_pages(PageMobility::Movable, ORDER);
+  KREQUIRE(block.has_value());
+  const memory::pmm::MemoryInfo during = memory::pmm::memory_info();
+  KEXPECT_EQ(during.total_pages, before.total_pages);
+  KEXPECT(during.free_pages + BLOCK / 2 <= before.free_pages);
+
+  memory::pmm::free_pages(*block, ORDER);
+  KEXPECT(memory::pmm::memory_info().free_pages + BLOCK / 2 >= before.free_pages);
+}
+
 KTEST(Pmm, hands_out_distinct_order_zero_pages) {
   // Each page holds its own address; a page handed out twice would be overwritten.
   for (PhysicalAddress& page : g_pages) {

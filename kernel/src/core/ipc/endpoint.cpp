@@ -5,6 +5,7 @@
 
 #include "core/ipc/notification.hpp"
 #include "hal/smp/percpu.hpp"
+#include "proc/process.hpp"
 #include "sched/scheduler.hpp"
 #include "utils/assert.hpp"
 
@@ -56,7 +57,10 @@ ThreadIpcContext::ThreadIpcContext(CSpace* const cspace, IpcBuffer* const buffer
 
 ThreadIpcContext::ThreadIpcContext(sched::Thread* const thread, CSpace* const cspace,
                                    IpcBuffer* const buffer) noexcept
-    : m_thread(thread), m_cspace(CapRef<CSpace>::share(cspace)), m_buffer(buffer) {}
+    : m_thread(thread),
+      m_cspace(CapRef<CSpace>::share(cspace)),
+      m_buffer(buffer),
+      m_kernel_buffer(buffer) {}
 
 ThreadIpcContext::~ThreadIpcContext() noexcept {
   KASSERT(m_queued_on == nullptr);
@@ -432,7 +436,11 @@ std::expected<CapId, Error> Endpoint::save_reply(ThreadIpcContext& ctx) noexcept
     return std::unexpected(Error::NotFound);
   }
 
-  auto reply = Reply::create(*ctx.m_reply_to);
+  // It counts against the saver, whose CSpace it sits in until it is used or deleted: a server
+  // that saves replies and never gets round to them pays for that itself.
+  const proc::Process* const process = ctx.m_thread->process();
+  auto reply =
+      Reply::create_charged(process != nullptr ? process->quota() : nullptr, *ctx.m_reply_to);
   if (!reply) [[unlikely]] {
     return std::unexpected(reply.error());
   }

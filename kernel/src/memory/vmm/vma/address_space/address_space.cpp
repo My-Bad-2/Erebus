@@ -1,5 +1,6 @@
 #include "crypto/random.hpp"
 #include "hal/smp/percpu.hpp"
+#include "hal/user.hpp"
 #include "memory/vmm/vma/vma.hpp"
 #include "utils/assert.hpp"
 #include "utils/rcu/rcu.hpp"
@@ -10,17 +11,11 @@ constexpr bool enable_aslr = true;
 }  // namespace
 
 AddressSpace::WriteGuard::WriteGuard(AddressSpace& space) noexcept : m_space(space) {
-  // The grace period below would wait for the caller's own read section. Interrupt handlers are
-  // in one, so they cannot change an address space either.
   KASSERT(!hw::percpu::in_rcu_read());
 
   hw::percpu::preempt_disable();
   m_space.m_writers.lock();
 
-  // Faults that found the fast path open may be anywhere in the tree and the VMAs, or halfway
-  // through mapping a page the way a VMA said before this changes it. Closing it keeps new ones
-  // out, and the grace period waits for the ones that got in. synchronize() fences before it
-  // looks at the readers, so a fault either sees it closed or is waited for.
   if (m_space.m_fast_faults.load(std::memory_order_relaxed)) {
     m_space.m_fast_faults.store(false, std::memory_order_relaxed);
     utils::rcu::synchronize();
@@ -36,10 +31,6 @@ AddressSpace::WriteGuard::~WriteGuard() noexcept {
 }
 
 void AddressSpace::open_fast_faults() noexcept {
-  // A writer that holds m_writers has closed it, or found it closed, and goes on as if it were, so
-  // it stays closed for that one. A writer that takes m_writers after this finds it open and
-  // waits for the faults that got in. What writers did before is in place: their unlock, and the
-  // release here, come before any fault that finds it open.
   if (!m_fast_faults.load(std::memory_order_relaxed) && m_writers.try_lock()) {
     m_fast_faults.store(true, std::memory_order_release);
     m_writers.unlock();
@@ -66,6 +57,14 @@ VMArea* AddressSpace::find_vma(const VirtualAddress addr) const noexcept {
 bool AddressSpace::range_is_free(const VirtualAddress start,
                                  const VirtualAddress end) const noexcept {
   if (end <= start) {
+    return false;
+  }
+
+  if (m_heap_region.start.is_upper_half()) {
+    if (start.value() < 0 - hw::user::lower_half_end()) {
+      return false;
+    }
+  } else if (end.value() > hw::user::user_space_end()) {
     return false;
   }
 
@@ -347,8 +346,8 @@ AddressSpace::~AddressSpace() noexcept {
 }
 
 std::expected<void, Error> AddressSpace::clone_into(AddressSpace& child) noexcept {
-  // The child first: it is new, so nothing can be faulting in it, and its guard waits for no one.
-  // The parent's grace period then holds up no one who wants the child.
+  // It is new, so nothing can be faulting in it, and its guard waits for no one. The parent's grace
+  // period then holds up no one who wants the child.
   WriteGuard child_guard{child};
   WriteGuard parent_guard{*this};
 
@@ -361,7 +360,7 @@ std::expected<void, Error> AddressSpace::clone_into(AddressSpace& child) noexcep
     return {};
   }
 
-  // Phase 1: allocate everything the clone needs while leaving the parent untouched. The new
+  // Allocate everything the clone needs while leaving the parent untouched. The new
   // parent-side shadows are parked here, by VMA index, until the commit.
   auto* parent_shadows = static_cast<VMObject**>(heap::kmalloc(sizeof(VMObject*) * vma_count));
   if (!parent_shadows) [[unlikely]] {
@@ -370,7 +369,7 @@ std::expected<void, Error> AddressSpace::clone_into(AddressSpace& child) noexcep
 
   std::fill_n(parent_shadows, vma_count, nullptr);
 
-  const auto abort = [&]() -> std::expected<void, Error> {
+  const auto abort = [&](const Error error = Error::OutOfMemory) -> std::expected<void, Error> {
     for (VMArea* c = child.m_vma_list_head; c;) {
       VMArea* next = c->next_vma;
       [[maybe_unused]] auto _ = child.m_pagemap.unmap_range(c->start, c->size_bytes());
@@ -392,7 +391,7 @@ std::expected<void, Error> AddressSpace::clone_into(AddressSpace& child) noexcep
     }
 
     heap::kfree(parent_shadows);
-    return std::unexpected(Error::OutOfMemory);
+    return std::unexpected(error);
   };
 
   std::size_t idx = 0;
@@ -441,11 +440,21 @@ std::expected<void, Error> AddressSpace::clone_into(AddressSpace& child) noexcep
       continue;
     }
 
+    // Either side may come to copy every page of the range, so each shadow counts all of it,
+    // against its own side's quota. The original keeps what it counted: its pages stay for as
+    // long as either shadow does.
+    auto child_commit = QuotaCharge::take(child.m_quota.get(), curr->size_bytes());
+    auto parent_commit = QuotaCharge::take(m_quota.get(), curr->size_bytes());
+    if (!child_commit || !parent_commit) [[unlikely]] {
+      return abort(!child_commit ? child_commit.error() : parent_commit.error());
+    }
+
     VMObject* child_shadow = curr->vm_object->create_shadow_clone();
     if (!child_shadow) [[unlikely]] {
       return abort();
     }
 
+    child_shadow->adopt_commit(std::move(*child_commit));
     child_vma->vm_object = child_shadow;
     child_vma->flags.set_access(access | AccessFlags::CopyOnWrite);
 
@@ -453,9 +462,11 @@ std::expected<void, Error> AddressSpace::clone_into(AddressSpace& child) noexcep
     if (!parent_shadows[idx]) [[unlikely]] {
       return abort();
     }
+
+    parent_shadows[idx]->adopt_commit(std::move(*parent_commit));
   }
 
-  // Phase 2: commit. Nothing below can fail. The original object becomes read-only for both
+  // Commit. Nothing below can fail. The original object becomes read-only for both
   // sides, so every writable translation of it in the parent has to go.
   idx = 0;
   for (VMArea* curr = m_vma_list_head; curr; curr = curr->next_vma, ++idx) {

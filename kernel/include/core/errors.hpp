@@ -24,6 +24,7 @@ enum class Error : std::uint32_t {
   StackOverflow = 0x2006,
   PageFault = 0x2007,
   MemoryProtectionFault = 0x2008,
+  QuotaExceeded = 0x2009,
 
   // Synchronization
   CasFailed = 0x3001,

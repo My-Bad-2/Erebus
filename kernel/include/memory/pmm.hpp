@@ -86,6 +86,45 @@ void free_pages_bulk(std::span<const PhysicalAddress> addresses, std::uint8_t or
 /// @return How many pages the zones got back.
 std::size_t drain_cpu_caches(std::uint32_t node_id) noexcept;
 
+/// @brief How much RAM there is and how much of it is free, in pages.
+struct MemoryInfo {
+  std::uint64_t total_pages{0};  ///< Usable RAM the PMM manages, free or not.
+  /// Free in the buddy zones. Per-CPU caches and frees on their way back from other nodes hold a
+  /// few more, so this is a lower bound, and out of date as soon as it is read.
+  std::uint64_t free_pages{0};
+
+  [[nodiscard]] constexpr std::uint64_t total_bytes() const noexcept {
+    return total_pages * PAGE_SIZE;
+  }
+
+  [[nodiscard]] constexpr std::uint64_t free_bytes() const noexcept {
+    return free_pages * PAGE_SIZE;
+  }
+
+  /// @brief What is not free. Never negative, though the two counts are read at different times.
+  [[nodiscard]] constexpr std::uint64_t used_pages() const noexcept {
+    return free_pages < total_pages ? total_pages - free_pages : 0;
+  }
+};
+
+/// @brief Every usable page of RAM the PMM was given at boot, in use or not.
+///
+/// Firmware, the kernel image, the bootloader's leftovers and bad memory are not in it. Zero
+/// before initialize(), and the same from then on, so a single load.
+[[nodiscard]] std::uint64_t total_pages() noexcept;
+
+/// @brief total_pages(), in bytes.
+[[nodiscard]] inline std::uint64_t total_bytes() noexcept { return total_pages() * PAGE_SIZE; }
+
+/// @brief How many NUMA nodes there are. Nodes are numbered from 0.
+[[nodiscard]] std::uint32_t node_count() noexcept;
+
+/// @brief MemoryInfo of the whole machine.
+[[nodiscard]] MemoryInfo memory_info() noexcept;
+
+/// @brief MemoryInfo of NUMA node @p node_id, or nothing for a node there is not.
+[[nodiscard]] MemoryInfo node_memory_info(std::uint32_t node_id) noexcept;
+
 /// @brief Logs per-node, per-zone free memory, fragmentation and watermarks.
 void print_stats() noexcept;
 

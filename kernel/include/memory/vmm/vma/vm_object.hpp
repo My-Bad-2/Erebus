@@ -7,6 +7,7 @@
 
 #include "memory/heap.hpp"
 #include "memory/pmm.hpp"
+#include "memory/quota.hpp"
 #include "memory/vmm/pagemap/flags.hpp"
 #include "ref_counter.hpp"
 #include "utils/hashmap.hpp"
@@ -39,6 +40,9 @@ class VMObject {
   // a handful of shards is enough.
   struct PhysToken {};
   utils::FastHashMap<std::uint64_t, PhysToken, 4> m_pages;
+
+  // For an object made for user code: all it may come to hold, counted until it is gone.
+  QuotaCharge m_commit{};
 
   static inline heap::KmemCache* s_cache = nullptr;
 
@@ -80,6 +84,19 @@ class VMObject {
 
   /// @brief Allows offsets up to @p new_max_pages. Never shrinks.
   void expand_max_pages(std::size_t new_max_pages) noexcept;
+
+  /// @brief Counts what the object may come to hold against a quota, with @p charge, until the
+  ///        object goes. Pages come on demand, so this is all of them, from the start.
+  void adopt_commit(QuotaCharge&& charge) noexcept { m_commit = std::move(charge); }
+
+  /// @brief Charges @p bytes more to the object's quota, if it has one, for growing.
+  /// @return QuotaExceeded, with nothing charged, past the limit.
+  [[nodiscard]] std::expected<void, Error> commit_more(const std::size_t bytes) noexcept {
+    return m_commit.grow(bytes);
+  }
+
+  /// @brief Gives back @p bytes of what commit_more() took, for growth that did not happen.
+  void commit_less(const std::size_t bytes) noexcept { m_commit.shrink(bytes); }
 
   [[nodiscard]] VMObject* shadow_parent() const noexcept { return m_shadow_parent; }
   [[nodiscard]] PageSize page_size() const noexcept { return m_page_size; }

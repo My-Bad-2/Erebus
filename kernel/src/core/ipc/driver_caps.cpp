@@ -220,8 +220,8 @@ std::expected<CapRef<MmioRegion>, Error> MmioRegion::create(memory::PhysicalAddr
 }
 
 std::expected<CapRef<MmioRegion>, Error> MmioRegion::derive(
-    CapRights rights, std::size_t offset, std::size_t size,
-    memory::vmm::CacheMode cache) const noexcept {
+    CapRights rights, std::size_t offset, std::size_t size, memory::vmm::CacheMode cache,
+    memory::Quota* const quota) const noexcept {
   if (!has_rights(rights, CapRights::Mint)) [[unlikely]] {
     return std::unexpected(Error::AccessDenied);
   }
@@ -235,7 +235,7 @@ std::expected<CapRef<MmioRegion>, Error> MmioRegion::derive(
     return std::unexpected(Error::InvalidAlignment);
   }
 
-  return TypedCapObject::create(m_base + offset, size, cache);
+  return TypedCapObject::create_charged(quota, m_base + offset, size, cache);
 }
 
 std::expected<memory::VirtualAddress, Error> MmioRegion::map_into(
@@ -409,20 +409,36 @@ SharedVmObject::SharedVmObject(memory::vmm::VMObject* const object, std::size_t 
 SharedVmObject::~SharedVmObject() noexcept { m_object->drop_ref(); }
 
 std::expected<CapRef<SharedVmObject>, Error> SharedVmObject::create(
-    std::size_t size, memory::vmm::PageSize page_size) noexcept {
+    std::size_t size, memory::vmm::PageSize page_size, memory::Quota* const quota) noexcept {
   const std::size_t page_bytes = memory::vmm::get_page_bytes(page_size);
   if (size == 0 || size > ~std::size_t{0} - page_bytes) [[unlikely]] {
     return std::unexpected(Error::InvalidArgument);
   }
 
+  // Charged before anything is allocated, so that a process past its quota cannot have the kernel
+  // hold even a moment's worth more for it.
   const std::size_t pages = utils::maths::align_up(size, page_bytes) / page_bytes;
+  const std::size_t committed = pages * page_bytes;
+  if (committed > ~std::size_t{0} - sizeof(memory::vmm::VMObject)) [[unlikely]] {
+    return std::unexpected(Error::InvalidArgument);
+  }
+
+  auto commit = memory::QuotaCharge::take(quota, sizeof(memory::vmm::VMObject) + committed);
+  if (!commit) [[unlikely]] {
+    return std::unexpected(commit.error());
+  }
+
   memory::vmm::VMObject* object =
       memory::vmm::VMObject::create(memory::vmm::VMAType::SharedIPC, page_size, pages);
   if (object == nullptr) [[unlikely]] {
     return std::unexpected(Error::OutOfMemory);
   }
 
-  auto shared = TypedCapObject::create(object, 0, pages, false);
+  // The pages go with the VM object, which slices and mappings keep alive after this one is gone,
+  // so it is the one that holds their charge.
+  object->adopt_commit(std::move(*commit));
+
+  auto shared = TypedCapObject::create_charged(quota, object, 0, pages, false);
   if (!shared) [[unlikely]] {
     object->drop_ref();
   }
@@ -447,7 +463,8 @@ std::expected<CapRef<SharedVmObject>, Error> SharedVmObject::wrap(memory::vmm::V
 }
 
 std::expected<CapRef<SharedVmObject>, Error> SharedVmObject::derive(
-    CapRights rights, std::size_t first_page, std::size_t pages) const noexcept {
+    CapRights rights, std::size_t first_page, std::size_t pages,
+    memory::Quota* const quota) const noexcept {
   if (!has_rights(rights, CapRights::Mint)) [[unlikely]] {
     return std::unexpected(Error::AccessDenied);
   }
@@ -458,7 +475,8 @@ std::expected<CapRef<SharedVmObject>, Error> SharedVmObject::derive(
   }
 
   m_object->add_ref();
-  auto slice = TypedCapObject::create(m_object, m_first_page + first_page, pages, true);
+  auto slice =
+      TypedCapObject::create_charged(quota, m_object, m_first_page + first_page, pages, true);
   if (!slice) [[unlikely]] {
     m_object->drop_ref();
   }
@@ -475,13 +493,38 @@ std::expected<void, Error> SharedVmObject::resize(CapRights rights, std::size_t 
     return std::unexpected(Error::InvalidState);
   }
 
-  if (pages <= this->pages() || m_first_page > ~std::size_t{0} - pages) [[unlikely]] {
+  if (m_first_page > ~std::size_t{0} - pages) [[unlikely]] {
     return std::unexpected(Error::InvalidArgument);
   }
 
-  m_object->expand_max_pages(m_first_page + pages);
-  m_pages.store(pages, std::memory_order_release);
-  return {};
+  // The pages added count against whatever the object's pages count against, from before the
+  // window lets anyone at them. Two resizes may race: the larger one wins, and the other gives
+  // back what it charged.
+  const std::size_t page_bytes = memory::vmm::get_page_bytes(m_object->page_size());
+  std::size_t current = m_pages.load(std::memory_order_acquire);
+  while (true) {
+    if (pages <= current) [[unlikely]] {
+      return std::unexpected(Error::InvalidArgument);
+    }
+
+    const std::size_t added = pages - current;
+    if (added > ~std::size_t{0} / page_bytes) [[unlikely]] {
+      return std::unexpected(Error::InvalidArgument);
+    }
+
+    if (const auto charged = m_object->commit_more(added * page_bytes); !charged) [[unlikely]] {
+      return charged;
+    }
+
+    // Raising the object's limit first is harmless if this loses: the window bounds every use.
+    m_object->expand_max_pages(m_first_page + pages);
+    if (m_pages.compare_exchange_strong(current, pages, std::memory_order_acq_rel,
+                                        std::memory_order_acquire)) {
+      return {};
+    }
+
+    m_object->commit_less(added * page_bytes);
+  }
 }
 
 std::expected<memory::VirtualAddress, Error> SharedVmObject::map_into(

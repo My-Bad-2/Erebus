@@ -37,6 +37,9 @@ class alignas(std::hardware_destructive_interference_size) NumaNode {
 
   MobilityZone m_zones[3];
 
+  // Pages handed to the zones at boot. Written only then, by the BSP, before anyone reads it.
+  std::uint64_t m_managed_pages{0};
+
  public:
   explicit NumaNode(const std::uint32_t id, const MemoryTier tier,
                     const std::uint32_t bandwidth_mbps, const std::uint32_t latency_ns) noexcept
@@ -57,6 +60,26 @@ class alignas(std::hardware_destructive_interference_size) NumaNode {
   [[nodiscard]] std::uint32_t get_latency() const noexcept { return m_latency_ns; }
   [[nodiscard]] MobilityZone& get_zone(const PageMobility m) noexcept {
     return m_zones[std::to_underlying(m)];
+  }
+
+  [[nodiscard]] const MobilityZone& get_zone(const PageMobility m) const noexcept {
+    return m_zones[std::to_underlying(m)];
+  }
+
+  /// @brief The RAM of the node the PMM manages, free or not. Fixed once the PMM is up.
+  [[nodiscard]] std::uint64_t managed_pages() const noexcept { return m_managed_pages; }
+
+  /// @brief Counts @p pages more as the node's. Only while the PMM hands RAM to the zones.
+  void add_managed_pages(const std::uint64_t pages) noexcept { m_managed_pages += pages; }
+
+  /// @brief What the node's zones have free. See pmm::MemoryInfo for what that leaves out.
+  [[nodiscard]] std::uint64_t free_pages() const noexcept {
+    std::uint64_t free = 0;
+    for (const MobilityZone& zone : m_zones) {
+      free += zone.get_free_pages();
+    }
+
+    return free;
   }
 
   /// @brief Allocates from this node only, stealing from sibling zones if necessary.

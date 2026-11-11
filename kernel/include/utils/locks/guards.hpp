@@ -57,7 +57,7 @@ class [[nodiscard]] PreemptGuard {
 template <BasicLockable LockType>
 class [[nodiscard]] IrqSaveGuard {
   LockType& m_lock;
-  std::uint64_t m_saved_flags;
+  hw::RFlags m_saved_flags;
 
  public:
   explicit IrqSaveGuard(LockType& lock) noexcept : m_lock(lock) {
@@ -100,7 +100,7 @@ class [[nodiscard]] SharedPreemptGuard {
 template <SharedLockable LockType>
 class [[nodiscard]] SharedIrqSaveGuard {
   LockType& m_lock;
-  std::uint64_t m_saved_flags;
+  hw::RFlags m_saved_flags;
 
  public:
   explicit SharedIrqSaveGuard(LockType& lock) noexcept : m_lock(lock) {
@@ -155,7 +155,7 @@ class [[nodiscard]] ExclusivePreemptGuard {
 template <ExclusiveLockable LockType>
 class [[nodiscard]] ExclusiveIrqSaveGuard {
   LockType& m_lock;
-  std::uint64_t m_saved_flags;
+  hw::RFlags m_saved_flags;
 
  public:
   explicit ExclusiveIrqSaveGuard(LockType& lock) noexcept : m_lock(lock) {
@@ -176,7 +176,7 @@ class [[nodiscard]] ExclusiveIrqSaveGuard {
 };
 
 class [[nodiscard]] IrqDisableGuard {
-  std::uint64_t m_saved_flags;
+  hw::RFlags m_saved_flags;
 
  public:
   explicit IrqDisableGuard() noexcept {

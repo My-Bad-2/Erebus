@@ -1,3 +1,4 @@
+#include "core/syscall/syscall.hpp"
 #include "hal/apic/ioapic.hpp"
 #include "hal/interrupts/interrupt_manager.hpp"
 #include "hal/smp/percpu.hpp"
@@ -23,7 +24,7 @@ constinit utils::QSpinlock g_update_lock{};
     case EventClass::NMI:
       return "NMI (Non-Maskable)";
     case EventClass::Syscall:
-      return "System Call (SYSCALL/SYSENTER/INT n)";
+      return "System Call (SYSCALL)";
     default:
       return "Unknown";
   }
@@ -176,12 +177,22 @@ void InterruptManager::route_event(const Event& event) noexcept {
     return;
   }
 
+  // FRED's way in for SYSCALL. The kernel makes no system calls, so one from ring 0 is a bug.
+  if (event.category == EventClass::Syscall) {
+    if (event.cpl != EventCpl::Ring3 || event.gprs == nullptr) [[unlikely]] {
+      dump_event(event);
+      utils::logger::fatal("Interrupts: system call from ring 0 at {:#x}\n", event.rip);
+    }
+
+    core::syscall::handle(*event.gprs,
+                          {.rip = event.rip, .rsp = event.rsp, .rflags = event.rflags});
+    return;
+  }
+
   if (event.category == EventClass::Exception) [[unlikely]] {
     handle_exception(event);
   } else if (event.category == EventClass::NMI) [[unlikely]] {
     handle_nmi(event);
-  } else if (event.category == EventClass::Syscall) [[unlikely]] {
-    // Dispatch syscalls
   }
 }
 

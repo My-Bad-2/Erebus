@@ -103,10 +103,11 @@ class alignas(16) MmioRegion final : public TypedCapObject<MmioRegion, CapType::
       memory::PhysicalAddress base, std::size_t size,
       memory::vmm::CacheMode cache = memory::vmm::CacheMode::Uncacheable) noexcept;
 
-  /// @brief A region for part of this one, @p size bytes from @p offset. Takes Mint.
+  /// @brief A region for part of this one, @p size bytes from @p offset, counted against
+  ///        @p quota if there is one. Takes Mint.
   [[nodiscard]] std::expected<CapRef<MmioRegion>, Error> derive(
-      CapRights rights, std::size_t offset, std::size_t size,
-      memory::vmm::CacheMode cache) const noexcept;
+      CapRights rights, std::size_t offset, std::size_t size, memory::vmm::CacheMode cache,
+      memory::Quota* quota = nullptr) const noexcept;
 
   /// @brief Maps @p length bytes from @p offset (0: to the end) into @p space. Takes Read; Write
   ///        makes it writable.
@@ -197,20 +198,27 @@ class alignas(16) SharedVmObject final : public TypedCapObject<SharedVmObject, C
   ~SharedVmObject() noexcept;
 
   /// @brief A new object of @p size bytes, rounded up to whole pages.
+  /// @param quota What it counts against, if anything: itself and all of its pages, for as long
+  ///              as anything maps them or has a window onto them.
+  /// @return QuotaExceeded if the quota has no room for that.
   [[nodiscard]] static std::expected<CapRef<SharedVmObject>, Error> create(
-      std::size_t size, memory::vmm::PageSize page_size = memory::vmm::PageSize::Size4K) noexcept;
+      std::size_t size, memory::vmm::PageSize page_size = memory::vmm::PageSize::Size4K,
+      memory::Quota* quota = nullptr) noexcept;
 
   /// @brief A window onto @p pages pages of @p object from @p first_page, which takes a reference
   ///        of its own.
   [[nodiscard]] static std::expected<CapRef<SharedVmObject>, Error> wrap(
       memory::vmm::VMObject& object, std::size_t first_page, std::size_t pages) noexcept;
 
-  /// @brief A window onto @p pages pages of this one, from @p first_page. Takes Mint.
+  /// @brief A window onto @p pages pages of this one, from @p first_page, counted against
+  ///        @p quota if there is one. The pages count against what they did already. Takes Mint.
   [[nodiscard]] std::expected<CapRef<SharedVmObject>, Error> derive(
-      CapRights rights, std::size_t first_page, std::size_t pages) const noexcept;
+      CapRights rights, std::size_t first_page, std::size_t pages,
+      memory::Quota* quota = nullptr) const noexcept;
 
-  /// @brief Makes the window @p pages long. Only grows, and not a part of another. Takes Write and
-  ///        Manage.
+  /// @brief Makes the window @p pages long. Only grows, and not a part of another. The pages added
+  ///        count against the quota the object's pages do. Takes Write and Manage.
+  /// @return QuotaExceeded if there is no room for them.
   [[nodiscard]] std::expected<void, Error> resize(CapRights rights, std::size_t pages) noexcept;
 
   /// @brief Maps @p pages pages from @p first_page (0 pages: to the end) into @p space, with

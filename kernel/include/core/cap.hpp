@@ -18,6 +18,10 @@
 ///    told (on_unreachable()), even though references may remain: an endpoint wakes the threads
 ///    that wait on it, which nobody could ever reach otherwise.
 ///
+/// An object made for user code also counts against a memory::Quota (see memory/quota.hpp), for
+/// what it takes, from create_charged() until it is gone. An object that grows, a CSpace, charges
+/// what it grows by to the same quota, and can fail to grow when there is no room left.
+///
 /// ### Revocation
 ///
 /// A capability made by CSpace::insert() is the original. Copies and mints of it, and of those, are
@@ -36,6 +40,7 @@
 
 #include "core/errors.hpp"
 #include "memory/heap.hpp"
+#include "memory/quota.hpp"
 #include "utils/assert.hpp"
 
 namespace kernel::core::ipc {
@@ -201,11 +206,30 @@ class alignas(16) CapObject {
   ///        its destructor in a kernel thread. Fine from any context but an NMI.
   void release_ref() noexcept;
 
+  /// @brief The quota the object counts against, or null for one the kernel made for itself.
+  [[nodiscard]] memory::Quota* charged_to() const noexcept { return m_charge.quota(); }
+
+  /// @brief How much of it the object counts, so far.
+  [[nodiscard]] std::size_t charged() const noexcept { return m_charge.bytes(); }
+
  protected:
   constexpr CapObject(const CapType type, const Hook destroy, const Hook unreachable) noexcept
       : m_type(type), m_destroy(destroy), m_unreachable(unreachable) {}
 
+  // Gives back whatever the object was charged, as it is about to be freed.
   ~CapObject() noexcept = default;
+
+  /// @brief Takes over @p charge, which the object then holds until it is gone.
+  void adopt_charge(memory::QuotaCharge&& charge) noexcept { m_charge = std::move(charge); }
+
+  /// @brief Charges @p bytes more to the object's quota, for an object that grows. Always fine for
+  ///        one without a quota. @return QuotaExceeded, with nothing charged, past the limit.
+  [[nodiscard]] std::expected<void, Error> charge_more(const std::size_t bytes) noexcept {
+    return m_charge.grow(bytes);
+  }
+
+  /// @brief Gives back @p bytes of what charge_more() took, for growth that did not happen.
+  void uncharge(const std::size_t bytes) noexcept { m_charge.shrink(bytes); }
 
  private:
   friend class CSpace;
@@ -236,6 +260,7 @@ class alignas(16) CapObject {
   Hook m_destroy;
   Hook m_unreachable;
   CapObject* m_next_dead{nullptr};  ///< On the list of objects waiting to be destroyed.
+  memory::QuotaCharge m_charge{};   ///< What the object takes, for user code that made it.
 };
 
 /// @brief An owned reference to a CapObject, let go of when this goes. Move-only.
@@ -333,6 +358,25 @@ class TypedCapObject : public CapObject {
 
     return CapRef<Derived>::adopt(
         std::construct_at(static_cast<Derived*>(memory), std::forward<Args>(args)...));
+  }
+
+  /// @brief create(), with the object counted against @p quota until it is gone. Null for none,
+  ///        which is what objects the kernel makes for itself get.
+  /// @return QuotaExceeded, with nothing made, if the quota has no room for it.
+  template <typename... Args>
+  [[nodiscard]] static std::expected<CapRef<Derived>, Error> create_charged(
+      memory::Quota* const quota, Args&&... args) noexcept {
+    auto charge = memory::QuotaCharge::take(quota, sizeof(Derived));
+    if (!charge) [[unlikely]] {
+      return std::unexpected(charge.error());
+    }
+
+    auto made = create(std::forward<Args>(args)...);
+    if (made) [[likely]] {
+      (*made)->adopt_charge(std::move(*charge));
+    }
+
+    return made;
   }
 };
 

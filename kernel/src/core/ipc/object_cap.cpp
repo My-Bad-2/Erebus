@@ -12,7 +12,8 @@ struct SpawnSetup {
   CSpace* cspace;
   Endpoint* fault_endpoint;
   std::uint64_t fault_badge;
-  CapRef<ThreadCap> result;
+  memory::VirtualAddress user_buffer{};  ///< Where the thread's user code keeps its IpcBuffer.
+  CapRef<ThreadCap> result{};
 };
 
 std::expected<void, Error> attach_spawned(sched::Thread& thread, void* context) noexcept {
@@ -27,13 +28,23 @@ std::expected<void, Error> attach_spawned(sched::Thread& thread, void* context) 
                                           setup.fault_badge);
   }
 
+  // Before the thread runs, nothing else is in its context, as set_user_buffer() wants.
+  if (!setup.user_buffer.is_null()) {
+    (*attached)->ipc_context().set_user_buffer(setup.user_buffer);
+  }
+
   setup.result = std::move(*attached);
   return {};
 }
 }  // namespace
 
 ThreadCap::ThreadCap(sched::Thread& thread, CSpace* const cspace) noexcept
-    : m_thread(&thread), m_tid(thread.tid()), m_ipc(&thread, cspace, &m_buffer) {}
+    : m_thread(&thread), m_tid(thread.tid()), m_ipc(&thread, cspace, &m_buffer) {
+  // User code says where its own buffer is before it can use this one (see set_user_buffer()).
+  if (!thread.is_kthread()) {
+    m_ipc.set_user_buffer(memory::VirtualAddress{});
+  }
+}
 
 ThreadCap::~ThreadCap() noexcept {
   // The thread is gone: it held a reference until then.
@@ -45,7 +56,9 @@ ThreadCap::~ThreadCap() noexcept {
 
 std::expected<CapRef<ThreadCap>, Error> ThreadCap::attach(sched::Thread& thread,
                                                           CSpace* const cspace) noexcept {
-  auto cap = create(thread, cspace);
+  // A user thread's counts against its process's tree, with the rest of what the thread takes.
+  const proc::Process* const process = thread.process();
+  auto cap = create_charged(process != nullptr ? process->quota() : nullptr, thread, cspace);
   if (!cap) [[unlikely]] {
     return cap;
   }
@@ -268,13 +281,27 @@ std::expected<CapRef<ProcessCap>, Error> ProcessCap::wrap(proc::Process& process
   CapRef<CSpace> space;
   if (cspace != nullptr) {
     space = CapRef<CSpace>::share(cspace);
-  } else if (auto made = CSpace::create()) [[likely]] {
+  } else if (auto made = CSpace::create_charged(process.quota())) [[likely]] {
     space = std::move(*made);
   } else {
     return std::unexpected(made.error());
   }
 
-  return TypedCapObject::create(process, std::move(space));
+  return TypedCapObject::create_charged(process.quota(), process, std::move(space));
+}
+
+std::expected<CapRef<ThreadCap>, Error> ThreadCap::spawn_user(
+    proc::Process& process, CSpace* const cspace, const std::string_view name,
+    const memory::VirtualAddress entry, const std::uint64_t arg,
+    const sched::UserThreadCreateOptions& opts, Endpoint* const fault_endpoint,
+    const std::uint64_t fault_badge) noexcept {
+  SpawnSetup setup{.cspace = cspace, .fault_endpoint = fault_endpoint, .fault_badge = fault_badge};
+  const auto thread = process.spawn_thread(name, entry, arg, opts, &attach_spawned, &setup);
+  if (!thread) [[unlikely]] {
+    return std::unexpected(thread.error());
+  }
+
+  return std::move(setup.result);
 }
 
 std::expected<CapRef<ThreadCap>, Error> ProcessCap::spawn_thread(
@@ -284,21 +311,87 @@ std::expected<CapRef<ThreadCap>, Error> ProcessCap::spawn_thread(
     return std::unexpected(Error::AccessDenied);
   }
 
-  SpawnSetup setup{.cspace = m_cspace.get(), .fault_endpoint = nullptr, .fault_badge = 0};
   CapRef<Endpoint> fault_endpoint;
+  std::uint64_t fault_badge;
   {
     Guard guard{m_lock};
     fault_endpoint = CapRef<Endpoint>::share(m_fault_endpoint);
-    setup.fault_badge = m_fault_badge;
+    fault_badge = m_fault_badge;
   }
 
-  setup.fault_endpoint = fault_endpoint.get();
-  const auto thread = m_process->spawn_thread(name, entry, arg, opts, &attach_spawned, &setup);
-  if (!thread) [[unlikely]] {
-    return std::unexpected(thread.error());
+  return ThreadCap::spawn_user(*m_process, m_cspace.get(), name, entry, arg, opts,
+                               fault_endpoint.get(), fault_badge);
+}
+
+std::expected<CapRef<ProcessCap>, Error> ProcessCap::fork_from(
+    proc::Process& parent, const std::string_view name, const memory::VirtualAddress entry,
+    const std::uint64_t arg, const sched::UserThreadCreateOptions& opts,
+    Endpoint* const fault_endpoint, const std::uint64_t fault_badge) noexcept {
+  // The child's CSpace comes first: its thread gets it before it may run, and with it the IPC
+  // context every thread of a ProcessCap has. It counts against the tree's quota, which the child
+  // shares (see proc::Process::create()).
+  auto cspace = CSpace::create_charged(parent.quota());
+  if (!cspace) [[unlikely]] {
+    return std::unexpected(cspace.error());
   }
 
-  return std::move(setup.result);
+  SpawnSetup setup{
+      .cspace = cspace->get(), .fault_endpoint = fault_endpoint, .fault_badge = fault_badge};
+  const auto child = parent.fork(name, entry, arg, opts, &attach_spawned, &setup);
+  if (!child) [[unlikely]] {
+    return std::unexpected(child.error());
+  }
+
+  return wrap_forked(**child, *cspace->get(), fault_endpoint, fault_badge);
+}
+
+std::expected<CapRef<ProcessCap>, Error> ProcessCap::fork_here(
+    proc::Process& parent, const std::string_view name, const hw::user::ResumeFrame& at,
+    const ThreadIpcContext& caller, Endpoint* const fault_endpoint,
+    const std::uint64_t fault_badge) noexcept {
+  // The child carries on as the caller was, so it has the caller's capabilities, under the IDs it
+  // knows them by, before its thread may run.
+  auto cspace = CSpace::create_charged(parent.quota());
+  if (!cspace) [[unlikely]] {
+    return std::unexpected(cspace.error());
+  }
+
+  if (caller.cspace() != nullptr) {
+    if (const auto copied = caller.cspace()->copy_into(**cspace); !copied) [[unlikely]] {
+      return std::unexpected(copied.error());
+    }
+  }
+
+  // And its IpcBuffer, which the address space has a copy of where it was.
+  SpawnSetup setup{.cspace = cspace->get(),
+                   .fault_endpoint = fault_endpoint,
+                   .fault_badge = fault_badge,
+                   .user_buffer = caller.user_buffer()};
+  const auto child = parent.fork_here(name, at, &attach_spawned, &setup);
+  if (!child) [[unlikely]] {
+    return std::unexpected(child.error());
+  }
+
+  return wrap_forked(**child, *cspace->get(), fault_endpoint, fault_badge);
+}
+
+std::expected<CapRef<ProcessCap>, Error> ProcessCap::wrap_forked(
+    proc::Process& child, CSpace& cspace, Endpoint* const fault_endpoint,
+    const std::uint64_t fault_badge) noexcept {
+  auto cap = wrap(child, &cspace);
+  if (!cap) [[unlikely]] {
+    child.exit(proc::EXIT_FAULT);
+    return cap;
+  }
+
+  // Nobody else has the new capability yet, so no lock.
+  if (fault_endpoint != nullptr) {
+    fault_endpoint->add_ref();
+    (*cap)->m_fault_endpoint = fault_endpoint;
+    (*cap)->m_fault_badge = fault_badge;
+  }
+
+  return cap;
 }
 
 std::expected<CapRef<ProcessCap>, Error> ProcessCap::fork(
@@ -314,25 +407,15 @@ std::expected<CapRef<ProcessCap>, Error> ProcessCap::fork(
     return std::unexpected(Error::InvalidState);
   }
 
-  const auto child = m_process->fork(name, entry, arg, opts);
-  if (!child) [[unlikely]] {
-    return std::unexpected(child.error());
+  CapRef<Endpoint> fault_endpoint;
+  std::uint64_t fault_badge;
+  {
+    Guard guard{m_lock};
+    fault_endpoint = CapRef<Endpoint>::share(m_fault_endpoint);
+    fault_badge = m_fault_badge;
   }
 
-  auto cap = wrap(**child);
-  if (!cap) [[unlikely]] {
-    (*child)->exit(proc::EXIT_FAULT);
-    return cap;
-  }
-
-  Guard guard{m_lock};
-  if (m_fault_endpoint != nullptr) {
-    m_fault_endpoint->add_ref();
-    (*cap)->m_fault_endpoint = m_fault_endpoint;
-    (*cap)->m_fault_badge = m_fault_badge;
-  }
-
-  return cap;
+  return fork_from(*m_process, name, entry, arg, opts, fault_endpoint.get(), fault_badge);
 }
 
 std::expected<void, Error> ProcessCap::terminate(CapRights rights, int status) const noexcept {
@@ -356,6 +439,17 @@ std::expected<proc::ProcessId, Error> ProcessCap::wait_child(CapRights rights,
   }
 
   return m_process->wait_child(target, status);
+}
+
+std::expected<proc::ProcessId, Error> ProcessCap::wait_child_for(const CapRights rights,
+                                                                 const proc::ProcessId target,
+                                                                 const klib::Duration timeout,
+                                                                 int* const status) const noexcept {
+  if (!has_rights(rights, CapRights::Read)) [[unlikely]] {
+    return std::unexpected(Error::AccessDenied);
+  }
+
+  return m_process->wait_child_for(target, timeout, status);
 }
 
 std::expected<void, Error> ProcessCap::set_fault_endpoint(CapRights rights,
@@ -437,6 +531,21 @@ std::expected<memory::VirtualAddress, Error> ProcessCap::map_mmio(
   }
 
   return held->object->map_into(*loan.get(), held->rights, offset, length, true, hint);
+}
+
+std::expected<void, Error> ProcessCap::protect(
+    const CapRights rights, const memory::VirtualAddress address, const std::size_t size,
+    const memory::vmm::AccessFlags access) const noexcept {
+  if (!has_rights(rights, CapRights::Write | CapRights::Manage)) [[unlikely]] {
+    return std::unexpected(Error::AccessDenied);
+  }
+
+  const SpaceLoan loan{*m_process};
+  if (loan.get() == nullptr) [[unlikely]] {
+    return std::unexpected(Error::InvalidState);
+  }
+
+  return loan.get()->protect(address, size, access);
 }
 
 std::expected<void, Error> ProcessCap::unmap(CapRights rights,

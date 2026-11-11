@@ -293,7 +293,7 @@ void Scheduler::prepare_to_block() noexcept { current()->set_state(ThreadState::
 void Scheduler::cancel_block() noexcept { current()->set_state(ThreadState::Running); }
 
 void Scheduler::switch_away(const PickMode mode) noexcept {
-  const std::uint64_t flags = hw::irq::save();
+  const hw::RFlags flags = hw::irq::save();
   hw::percpu::preempt_disable();
 
   RunQueue& rq = hw::percpu::runqueue();

@@ -108,6 +108,7 @@ class BPlusTree {
   struct NoGuard {
     explicit constexpr NoGuard(const NullLock&) noexcept {}
   };
+
   using ReadGuard =
       std::conditional_t<std::is_same_v<Lock, NullLock>, NoGuard, SharedPreemptGuard<Lock>>;
   using WriteGuard =

@@ -79,6 +79,13 @@ struct alignas(std::hardware_destructive_interference_size) PerCpu {
   /// it when it changes. Nothing to begin with, so the first user thread always does.
   std::uint64_t user_gs_base{~0ul};
 
+  /// Top of the kernel stack of the user thread the CPU runs: SYSCALL switches to it. The TSS
+  /// holds the same for interrupts, at an offset that straddles a cache line. See hal/syscall.hpp.
+  std::uint64_t syscall_stack{0};
+
+  /// Where SYSCALL keeps the user's stack pointer until it has a stack to push it on.
+  std::uint64_t syscall_scratch{0};
+
   gdt::GlobalDescriptorTable gdt_table{};
 
   alignas(std::hardware_destructive_interference_size) CpuContext context{0};

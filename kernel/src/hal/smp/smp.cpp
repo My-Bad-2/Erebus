@@ -15,6 +15,7 @@
 #include "hal/interrupts/interrupts.hpp"
 #include "hal/smp/ipi.hpp"
 #include "hal/smp/percpu.hpp"
+#include "hal/syscall.hpp"
 #include "hal/timer/timer.hpp"
 #include "memory/heap.hpp"
 #include "memory/memory.hpp"
@@ -393,6 +394,7 @@ void bring_up_local(PerCpu* cpu) noexcept {
   CpuEntry& e = g_cpus[cpu->topology.get_cpu_id()];
 
   interrupts::initialize(cpu->stack_top, cpu->gdt_table.interrupt_stack(gdt::NMI_IST));
+  syscall::initialize();
 
   cpu->lapic.initialize(g_lapic_mmio, true);
   if (apic::io_apic_manager.supports_directed_eoi()) {

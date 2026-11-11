@@ -7,6 +7,7 @@
 #include "memory/address.hpp"
 #include "memory/heap.hpp"
 #include "memory/pmm.hpp"
+#include "memory/quota.hpp"
 #include "memory/vmm.hpp"
 
 namespace kernel::memory {
@@ -19,5 +20,6 @@ void initialize() {
   pmm::initialize(memmap, total_cpus);
   heap::initialize();
   vmm::initialize(memmap);
+  Quota::initialize_root();
 }
 }  // namespace kernel::memory

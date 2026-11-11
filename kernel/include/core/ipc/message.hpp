@@ -109,19 +109,13 @@ struct alignas(64) Message {
 
 static_assert(sizeof(Message) == 64);
 
-/// @brief A thread's place for what does not fit in a Message. Kernel memory, for now: there is no
-///        system call layer yet to copy one in from user space.
+/// @brief A thread's place for what does not fit in a Message. The one IPC uses is kernel memory;
+///        user code keeps one laid out the same way, and system calls copy the part a message
+///        uses between the two (see ThreadIpcContext::user_buffer()).
 struct alignas(64) IpcBuffer {
-  /// Message words 6 to 62.
   std::array<std::uint64_t, MsgTag::MAX_OVERFLOW_WORDS> overflow_words{};
-
-  /// Outgoing capability transfer descriptors set by the sender before `send()`/`call()`.
   std::array<CapTransferItem, MsgTag::MAX_EXTRA_CAPS> send_caps{};
-
-  /// Incoming capability handles populated by the kernel in the receiver's `CSpace`.
   std::array<CapId, MsgTag::MAX_EXTRA_CAPS> recv_caps{};
-
-  /// Number of capabilities successfully installed in `recv_caps` during the last receive.
   std::uint8_t received_cap_count{0};
 };
 }  // namespace kernel::core::ipc

@@ -42,12 +42,42 @@ DECLARE_STATIC_CALL(void, cpu_relax_impl, std::uint32_t, std::uint64_t);
   cpu_relax_impl(state, delay);
 }
 
+/// @brief RFLAGS. Bit 1 is reserved and always reads as set, so a value made from nothing is not
+///        one the CPU would ever hold, which is fine for a mask.
+class RFlags {
+  std::uint64_t m_data{0};
+
+ public:
+  constexpr RFlags() noexcept = default;
+  constexpr explicit RFlags(const std::uint64_t data) noexcept : m_data(data) {}
+
+  [[nodiscard]] constexpr std::uint64_t raw() const noexcept { return m_data; }
+
+  BF_BIT_RW(carry_flag, 0)
+  BF_BIT_RW(parity_flag, 2)
+  BF_BIT_RW(auxiliary_flag, 4)
+  BF_BIT_RW(zero_flag, 6)
+  BF_BIT_RW(sign_flag, 7)
+  BF_BIT_RW(trap_flag, 8)
+  BF_BIT_RW(interrupt_flag, 9)
+  BF_BIT_RW(direction_flag, 10)
+  BF_BIT_RW(overflow_flag, 11)
+  BF_RW(std::uint8_t, io_privilege_level, 12, 2)
+  BF_BIT_RW(nested_task, 14)
+  BF_BIT_RW(resume_flag, 16)
+  BF_BIT_RW(virtual_8086_mode, 17)
+  BF_BIT_RW(alignment_check, 18)
+  BF_BIT_RW(virtual_interrupt_flag, 19)
+  BF_BIT_RW(virtual_interrupt_pending, 20)
+  BF_BIT_RW(id_flag, 21)
+};
+
 namespace irq {
 [[gnu::always_inline]] inline void disable() noexcept { asm volatile("cli" ::: "memory"); }
 
 [[gnu::always_inline]] inline void enable() noexcept { asm volatile("sti" ::: "memory"); }
 
-[[gnu::always_inline]] inline std::uint64_t read_flags() noexcept {
+[[gnu::always_inline]] inline RFlags read_flags() noexcept {
   std::uint64_t rflags;
   asm volatile(
       "pushfq\n\t"
@@ -55,25 +85,25 @@ namespace irq {
       : "=r"(rflags)
       : /* No Input */
       : "memory");
-  return rflags;
+  return RFlags{rflags};
 }
 
-[[gnu::always_inline]] inline void write_flags(const std::uint64_t flags) noexcept {
+[[gnu::always_inline]] inline void write_flags(const RFlags flags) noexcept {
   asm volatile(
       "pushq %0\n\t"
       "popfq"
       : /* No Output */
-      : "r"(flags)
+      : "r"(flags.raw())
       : "cc", "memory");
 }
 
-inline constexpr std::uint64_t RFLAGS_IF = 1ull << 9;
-
-[[gnu::always_inline]] inline bool is_enabled() noexcept { return (read_flags() & RFLAGS_IF) != 0; }
+[[gnu::always_inline]] inline bool is_enabled() noexcept {
+  return read_flags().get_interrupt_flag();
+}
 
 /// @brief Disables interrupts and returns the state to hand to restore().
-[[nodiscard, gnu::always_inline]] inline std::uint64_t save() noexcept {
-  const std::uint64_t flags = read_flags();
+[[nodiscard, gnu::always_inline]] inline RFlags save() noexcept {
+  const RFlags flags = read_flags();
   disable();
   return flags;
 }
@@ -82,8 +112,8 @@ inline constexpr std::uint64_t RFLAGS_IF = 1ull << 9;
 ///
 /// Cheaper than writing RFLAGS back, since POPF is microcoded, and it leaves the other flags
 /// alone (AC in particular, which SMAP code toggles on purpose).
-[[gnu::always_inline]] inline void restore(const std::uint64_t flags) noexcept {
-  if (flags & RFLAGS_IF) {
+[[gnu::always_inline]] inline void restore(const RFlags flags) noexcept {
+  if (flags.get_interrupt_flag()) {
     enable();
   }
 }

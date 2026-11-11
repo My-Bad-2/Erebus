@@ -9,7 +9,7 @@ std::optional<drivers::uart::SerialPort> console;
 TicketSpinlock console_lock;
 
 class [[nodiscard]] ConsoleGuard {
-  std::uint64_t m_flags;
+  hw::RFlags m_flags;
 
  public:
   ConsoleGuard() noexcept : m_flags(hw::irq::save()) { console_lock.lock(); }

@@ -45,6 +45,7 @@
 
 #include "core/errors.hpp"
 #include "memory/address.hpp"
+#include "memory/quota.hpp"
 #include "sched/thread.hpp"
 #include "sched/wait_queue.hpp"
 #include "sched/workqueue.hpp"
@@ -53,6 +54,10 @@
 
 namespace kernel::memory::vmm {
 class AddressSpace;
+}
+
+namespace kernel::hw::user {
+struct ResumeFrame;
 }
 
 namespace kernel::proc {
@@ -93,6 +98,12 @@ class alignas(std::hardware_destructive_interference_size) Process
   Process& operator=(const Process&) = delete;
 
   /// @brief Creates a process with an empty address space, and no threads yet.
+  ///
+  /// A process made by a user process shares its quota (memory/quota.hpp), so that a process
+  /// cannot get more to spend by making more of them. Only one whose parent is process 0 starts a
+  /// tree with a quota of its own. The process counts against it, with its address space, and
+  /// so does every page that address space fills in on demand.
+  /// @return QuotaExceeded if the tree has no room for another process.
   /// @param parent Null for the process of the calling thread, which is process 0 for a kernel
   ///               thread.
   /// @return The process, or Error::InvalidState if the parent is exiting already, or
@@ -121,12 +132,19 @@ class alignas(std::hardware_destructive_interference_size) Process
   /// @brief Makes a child with a copy of this address space, private memory shared copy-on-write,
   ///        and starts one thread in it at @p entry.
   ///
-  /// There is no system call to return from yet, so the child does not carry on where a thread of
-  /// this one is, but where it is told to. Everything else is what fork() means: the child sees
-  /// the memory as it was, and what either side writes from now on is its own.
+  /// @param setup Run on the child's thread before it may run, as spawn_thread() would.
   [[nodiscard]] auto fork(std::string_view name, memory::VirtualAddress entry,
-                          std::uint64_t arg = 0,
-                          const sched::UserThreadCreateOptions& opts = {}) noexcept
+                          std::uint64_t arg = 0, const sched::UserThreadCreateOptions& opts = {},
+                          ThreadSetup setup = nullptr, void* setup_context = nullptr) noexcept
+      -> std::expected<Process*, Error>;
+
+  /// @brief fork(), but the child's thread carries on where the calling thread is, at @p at, as a
+  ///        copy of it rather than from an entry point: a fork() that returns in both. See
+  ///        sched::Thread::create_user_copy() for what goes along.
+  /// @param setup Run on the child's thread before it may run, as spawn_thread() would.
+  /// @return The child, or Error::InvalidState if the calling thread is not one of this process.
+  [[nodiscard]] auto fork_here(std::string_view name, const hw::user::ResumeFrame& at,
+                               ThreadSetup setup = nullptr, void* setup_context = nullptr) noexcept
       -> std::expected<Process*, Error>;
 
   /// @brief Ends the process with @p status, from anywhere but an NMI. Only the first call counts.
@@ -154,6 +172,10 @@ class alignas(std::hardware_destructive_interference_size) Process
   [[nodiscard]] ProcessState state() const noexcept {
     return m_state.load(std::memory_order_acquire);
   }
+
+  /// @brief What objects made for the process count against: the quota of its tree. Null for
+  ///        process 0, whose objects count against nothing.
+  [[nodiscard]] memory::Quota* quota() const noexcept { return m_quota.get(); }
 
   /// @brief The address space, or null for process 0 and for one that is done.
   [[nodiscard]] memory::vmm::AddressSpace* address_space() const noexcept {
@@ -200,14 +222,32 @@ class alignas(std::hardware_destructive_interference_size) Process
                                  Process*& zombie) noexcept;
   [[nodiscard]] bool has_child_locked(ProcessId target) const noexcept;
 
+  [[nodiscard]] std::expected<void, Error> reserve_thread() noexcept;
+  [[nodiscard]] auto launch_thread(std::expected<sched::Thread*, Error> created, ThreadSetup setup,
+                                   void* setup_context) noexcept
+      -> std::expected<sched::Thread*, Error>;
+
+  // spawn_thread() with a copy of the calling thread. See fork_here().
+  [[nodiscard]] auto spawn_thread_copy(std::string_view name, const hw::user::ResumeFrame& at,
+                                       ThreadSetup setup, void* setup_context) noexcept
+      -> std::expected<sched::Thread*, Error>;
+
+  // A child with a copy of this address space, and no threads yet.
+  [[nodiscard]] auto fork_address_space(std::string_view name) noexcept
+      -> std::expected<Process*, Error>;
+
   friend void initialize() noexcept;
 
   ProcessId m_pid{KERNEL_PID};
   std::atomic<ProcessState> m_state{ProcessState::Running};
   memory::vmm::AddressSpace* m_address_space{nullptr};  ///< Taken away under m_lock.
+  memory::QuotaRef m_quota{};                           ///< Set once, before anyone sees it.
   std::atomic<std::uint32_t> m_space_users{0};          ///< See acquire_address_space().
   std::atomic<std::uint32_t> m_refs{1};                 ///< The tree's, and retain()'s.
   int m_exit_status{0};
+
+  // The process, its address space and the top of its page tables, counted against m_quota.
+  memory::QuotaCharge m_footprint{};
 
   // Threads, and the state changes that have to agree with them, under m_lock.
   utils::QSpinlock m_lock{};

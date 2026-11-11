@@ -28,10 +28,10 @@ bool Dpc::queue() noexcept {
     return false;
   }
 
-  const std::uint64_t flags = hw::irq::save();
+  const hw::RFlags flags = hw::irq::save();
   percpu::self()->dpcs.add(*this);
   const bool in_a_thread = !percpu::in_interrupt();
-  const bool interrupts_were_off = (flags & hw::irq::RFLAGS_IF) == 0;
+  const bool interrupts_were_off = !flags.get_interrupt_flag();
   const bool nothing_else_will = in_a_thread && interrupts_were_off && percpu::can_sleep();
   hw::irq::restore(flags);
 
@@ -71,7 +71,7 @@ void DpcQueue::add(Dpc& dpc) noexcept {
 void DpcQueue::run(Dpc& dpc) noexcept {
   if ((dpc.m_state.fetch_or(Dpc::RUNNING, std::memory_order_acquire) & Dpc::RUNNING) != 0) {
     // Running on another CPU right now, and it is this one's turn after that.
-    const std::uint64_t flags = hw::irq::save();
+    const hw::RFlags flags = hw::irq::save();
     add(dpc);
     hw::irq::restore(flags);
     return;

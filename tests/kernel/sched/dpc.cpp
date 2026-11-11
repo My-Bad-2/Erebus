@@ -180,7 +180,7 @@ void raise_it_here(std::atomic<bool>* raised) noexcept {
 }  // namespace
 
 KTEST(Ast, flags_go_up_and_come_down) {
-  const std::uint64_t flags = hw::irq::save();
+  const hw::RFlags flags = hw::irq::save();
   percpu::preempt_disable();
 
   (void)percpu::fetch_clear_ast(0xFF);
@@ -201,7 +201,7 @@ KTEST(Ast, flags_go_up_and_come_down) {
 }
 
 KTEST(Ast, pending_means_something_can_be_done_about_it) {
-  const std::uint64_t flags = hw::irq::save();
+  const hw::RFlags flags = hw::irq::save();
 
   KEXPECT(!percpu::ast_pending());
 

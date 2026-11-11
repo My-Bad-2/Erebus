@@ -103,6 +103,8 @@ class InterruptManager {
   /// @pre The calling thread can sleep, and @p reg is registered on @p vector.
   static void unregister_handler(std::uint8_t vector, InterruptRegistration* reg) noexcept;
 
+  /// @brief Where every event goes: interrupts to their handlers, exceptions to theirs or to the
+  ///        user fault handler, and under FRED system calls to core::syscall::handle().
   static void route_event(const Event& event) noexcept;
 
   /// @brief Sets what is done about an exception from ring 3 that no handler took care of.

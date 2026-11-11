@@ -9,6 +9,7 @@
 #include "../sched/support.hpp"
 #include "drivers/clock.hpp"
 #include "ktest.hpp"
+#include "memory/quota.hpp"
 #include "probe.hpp"
 #include "utils/logger.hpp"
 #include "utils/rcu/rcu.hpp"
@@ -327,6 +328,120 @@ KTEST(CSpace, an_address_that_cannot_be_packed_is_refused) {
   KEXPECT(!ipc::CapHeader::is_representable(reinterpret_cast<void*>(0x0000'8000'0000'0000ull)));
   KEXPECT(!ipc::CapHeader::is_representable(reinterpret_cast<void*>(0xFFFF'8000'0000'1238ull)));
   KEXPECT(!ipc::CapHeader::is_representable(reinterpret_cast<void*>(0xFF00'0000'0000'0000ull)));
+}
+
+// A copy keeps every ID: each finds the same object with the same rights, flags and badge, only
+// never as the original, so the original can still revoke it. A one-shot capability stays where it
+// was, and its ID finds nothing in the copy, not even whatever its slot gets there later.
+KTEST(CSpace, a_copy_keeps_every_id_and_the_originals_keep_revoking) {
+  Counters counters;
+  auto from = new_cspace();
+  auto to = new_cspace();
+  auto probe = new_probe(counters);
+  auto other = new_probe(counters);
+  KREQUIRE(from && to && probe && other);
+
+  const auto original = from->insert(*probe, CapRights::All);
+  KREQUIRE(original.has_value());
+  const auto badged = from->mint(*original, *from, CapRights::ReadWrite, 42);
+  const auto pinned = from->insert(*other, CapRights::Read, CapFlags::Original | CapFlags::Pinned);
+  const auto once = from->insert(*other, CapRights::Write, CapFlags::OneShot);
+  const auto gone = from->insert(*other, CapRights::Read);
+  KREQUIRE(badged && pinned && once && gone);
+  KEXPECT(from->remove(*gone).has_value());
+
+  KREQUIRE(from->copy_into(*to).has_value());
+  KEXPECT_EQ(to->active_count(), from->active_count() - 1);
+  KEXPECT_EQ(probe->cap_count(), 4u);
+
+  for (const CapId id : {*original, *badged, *pinned}) {
+    const auto here = look(*from, id);
+    const auto there = look(*to, id);
+    KREQUIRE(here.has_value() && there.has_value());
+    KEXPECT(there->object() == here->object());
+    KEXPECT(there->rights() == here->rights());
+    KEXPECT_EQ(there->badge, here->badge);
+    KEXPECT(!ipc::has_cap_flag(there->flags(), CapFlags::Original));
+    KEXPECT_EQ(ipc::has_cap_flag(there->flags(), CapFlags::Pinned),
+               ipc::has_cap_flag(here->flags(), CapFlags::Pinned));
+  }
+
+  KEXPECT(found(*from, *once));
+  KEXPECT(!found(*to, *once));
+  KEXPECT(!found(*to, *gone));
+
+  for (int i = 0; i < 8; ++i) {
+    KEXPECT(to->insert(*other, CapRights::Read).has_value());
+  }
+
+  KEXPECT(!found(*to, *once));
+
+  // Revoking an original here ends what was copied from it there.
+  KEXPECT(from->revoke(*original).has_value());
+  KEXPECT(!found(*to, *original));
+  KEXPECT(!found(*to, *badged));
+  KEXPECT(found(*from, *original));
+
+  from.reset();
+  to.reset();
+  probe.reset();
+  other.reset();
+  KEXPECT(core_probe::settle(counters, 2));
+}
+
+// A table of several nodes is copied whole, and the copy pays for its nodes. It only goes into an
+// empty CSpace, and one that fails is left with nothing in it, its quota as it was.
+KTEST(CSpace, a_copy_takes_every_node_and_pays_for_them) {
+  Counters counters;
+  auto from = new_cspace();
+  auto probe = new_probe(counters);
+  KREQUIRE(from && probe);
+
+  // 768 of them, past slot 0 of node 0, which nothing gets: four nodes.
+  constexpr std::uint32_t CAPS = 3 * CSpace::SLOTS_PER_NODE;
+  constexpr std::size_t NODES = 4;
+  std::array<CapId, CAPS> ids{};
+  for (CapId& id : ids) {
+    const auto inserted = from->insert(*probe, CapRights::Read);
+    KREQUIRE(inserted.has_value());
+    id = *inserted;
+  }
+
+  const auto quota = memory::QuotaRef::adopt(
+      memory::Quota::create(sizeof(CSpace) + NODES * sizeof(ipc::CapTableNode)));
+  KREQUIRE(quota.get() != nullptr);
+  auto to = CSpace::create_charged(quota.get());
+  KREQUIRE(to.has_value());
+
+  KREQUIRE(from->copy_into(**to).has_value());
+  KEXPECT_EQ(quota.get()->used(), sizeof(CSpace) + NODES * sizeof(ipc::CapTableNode));
+  KEXPECT_EQ((*to)->active_count(), CAPS);
+  for (const CapId id : ids) {
+    const auto there = look(**to, id);
+    KEXPECT(there.has_value() && there->object() == probe.get());
+  }
+
+  // Not into one that has something in it already.
+  auto busy = new_cspace();
+  KREQUIRE(busy && busy->insert(*probe, CapRights::Read).has_value());
+  KEXPECT(from->copy_into(*busy).error() == Error::InvalidState);
+  KEXPECT_EQ(busy->active_count(), 0u);
+
+  // Nor past the quota of the one it goes into.
+  const auto small = memory::QuotaRef::adopt(
+      memory::Quota::create(sizeof(CSpace) + 2 * sizeof(ipc::CapTableNode)));
+  KREQUIRE(small.get() != nullptr);
+  auto cramped = CSpace::create_charged(small.get());
+  KREQUIRE(cramped.has_value());
+  KEXPECT(from->copy_into(**cramped).error() == Error::QuotaExceeded);
+  KEXPECT_EQ((*cramped)->active_count(), 0u);
+
+  from.reset();
+  to->reset();
+  busy.reset();
+  cramped->reset();
+  probe.reset();
+  KEXPECT(core_probe::settle(counters, 1));
 }
 
 // CPU 0 makes objects and lets them go, mints and revokes, in one CSpace, as fast as it can, while

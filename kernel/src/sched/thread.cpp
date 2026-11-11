@@ -175,10 +175,14 @@ void free_thread(Thread* thread) noexcept {
 }  // namespace
 
 namespace details {
+// Interrupts from ring 3 find the stack in the TSS, and SYSCALL finds it in the CPU's area.
 void update_ring0_stack_legacy(const memory::VirtualAddress stack_top) noexcept {
-  hw::percpu::self()->gdt_table.set_kernel_stack(stack_top);
+  hw::PerCpu* cpu = hw::percpu::self();
+  cpu->gdt_table.set_kernel_stack(stack_top);
+  cpu->syscall_stack = stack_top.value();
 }
 
+// FRED delivers SYSCALL like every other event, on the stack in its RSP0.
 void update_ring0_stack_fred(const memory::VirtualAddress stack_top) noexcept {
   hw::percpu::self()->gdt_table.set_kernel_stack(stack_top);
   constexpr std::uint32_t MSR_FRED_RSP0 = 0x1CC;
@@ -319,6 +323,7 @@ void Thread::release_user_stack() noexcept {
 
 Thread::~Thread() noexcept {
   release_fpu_storage();
+  memory::heap::kfree(std::exchange(m_resume, nullptr));  // never got to run
 
   if (!m_stack_base.is_null() && !flags().get_stack_borrowed()) {
     if (m_stack_size == DEFAULT_KSTACK_SIZE && g_stacks.put(m_stack_base)) {
@@ -406,16 +411,21 @@ auto Thread::create_kernel(std::string_view name, RawEntryFn entry, void* arg,
   return thread;
 }
 
-auto Thread::create_user(const std::string_view name, proc::Process* process,
-                         const memory::VirtualAddress entry, const std::uint64_t arg,
-                         const UserThreadCreateOptions& opts) noexcept
+auto Thread::create_user_half(const std::string_view name, proc::Process* process,
+                              const UserThreadCreateOptions& opts,
+                              const std::size_t extra_charge) noexcept
     -> std::expected<Thread*, Error> {
-  if (process == nullptr || process->address_space() == nullptr ||
-      !hw::user::is_user_address(entry) || opts.user_stack_size == 0) {
-    return std::unexpected(Error::InvalidArgument);
+  // What the kernel holds for the thread counts against its process's tree, and is refused before
+  // anything is allocated. Its user stack is memory of the address space, which counts that.
+  const std::size_t kernel_stack =
+      utils::maths::align_up(opts.kernel_stack_size, memory::PAGE_SIZE);
+  auto charge = memory::QuotaCharge::take(
+      process->quota(),
+      sizeof(Thread) + kernel_stack + hw::fpu::area_size(opts.allocate_amx) + extra_charge);
+  if (!charge) [[unlikely]] {
+    return std::unexpected(charge.error());
   }
 
-  // The kernel half first: a kernel thread whose entry goes to ring 3 and does not come back.
   const ThreadCreateOptions kernel_opts{
       .stack_size = opts.kernel_stack_size,
       .priority = opts.priority,
@@ -434,6 +444,27 @@ auto Thread::create_user(const std::string_view name, proc::Process* process,
   }
 
   Thread* thread = *created;
+  thread->m_charge = std::move(*charge);
+  thread->m_arg = thread;
+  thread->m_process = process;
+  return thread;
+}
+
+auto Thread::create_user(const std::string_view name, proc::Process* process,
+                         const memory::VirtualAddress entry, const std::uint64_t arg,
+                         const UserThreadCreateOptions& opts) noexcept
+    -> std::expected<Thread*, Error> {
+  if (process == nullptr || process->address_space() == nullptr ||
+      !hw::user::is_user_address(entry) || opts.user_stack_size == 0) {
+    return std::unexpected(Error::InvalidArgument);
+  }
+
+  const auto created = create_user_half(name, process, opts, 0);
+  if (!created) {
+    return created;
+  }
+
+  Thread* thread = *created;
   const std::size_t stack_size = utils::maths::align_up(opts.user_stack_size, memory::PAGE_SIZE);
 
   using memory::vmm::AccessFlags;
@@ -444,8 +475,6 @@ auto Thread::create_user(const std::string_view name, proc::Process* process,
     return std::unexpected(stack.error());
   }
 
-  thread->m_arg = thread;
-  thread->m_process = process;
   thread->m_user_entry = entry;
   thread->m_user_arg = arg;
   thread->m_user_stack_base = *stack;
@@ -456,12 +485,91 @@ auto Thread::create_user(const std::string_view name, proc::Process* process,
   return thread;
 }
 
+auto Thread::create_user_copy(const std::string_view name, proc::Process* process,
+                              const hw::user::ResumeFrame& at) noexcept
+    -> std::expected<Thread*, Error> {
+  if (process == nullptr || process->address_space() == nullptr ||
+      !hw::user::is_user_address(memory::VirtualAddress{at.rip}) ||
+      at.rsp >= hw::user::lower_half_end()) {
+    return std::unexpected(Error::InvalidArgument);
+  }
+
+  Thread* const original = current();
+  if (original->is_kthread() || original->m_arch.fpu_storage == nullptr) [[unlikely]] {
+    return std::unexpected(Error::InvalidState);
+  }
+
+  auto* resume = static_cast<hw::user::ResumeFrame*>(
+      memory::heap::kmalloc(sizeof(hw::user::ResumeFrame), alignof(hw::user::ResumeFrame)));
+  if (resume == nullptr) [[unlikely]] {
+    return std::unexpected(Error::OutOfMemory);
+  }
+
+  *resume = at;
+
+  const UserThreadCreateOptions opts{
+      .kernel_stack_size = original->m_stack_size,
+      .priority = original->base_priority().priority_class,
+      .allocate_amx = original->uses_amx(),
+  };
+
+  const auto created = create_user_half(name, process, opts, sizeof(hw::user::ResumeFrame));
+  if (!created) {
+    memory::heap::kfree(resume);
+    return created;
+  }
+
+  Thread* thread = *created;
+  thread->m_resume = resume;
+
+  // What the CPU holds for the caller, as it is right now. A switch in between would read the
+  // bases back from another thread, so there is none. The caller's FPU registers are its own here,
+  // outside a kernel FPU section, and XSAVES leaves them as they are.
+  {
+    hw::percpu::preempt_disable();
+    const ArchitecturalState& from = original->m_arch;
+    ArchitecturalState& to = thread->m_arch;
+    KASSERT(to.fpu_buffer_size == from.fpu_buffer_size && to.xsave_mask == from.xsave_mask);
+
+    hw::fpu::saves(from.fpu_storage, from.xsave_mask);
+    klib::memcpy(to.fpu_storage, from.fpu_storage, from.fpu_buffer_size);
+
+    const bool bases_may_differ = hw::user::can_change_bases();
+    to.fs_base = bases_may_differ ? hw::read::fs_base() : from.fs_base;
+    to.user_gs_base = bases_may_differ ? hw::user::read_gs_base() : from.user_gs_base;
+    to.pkru = hw::user::read_pkru();
+    hw::percpu::preempt_enable();
+  }
+
+  // The address space copied the caller's stack to where it was. That copy is this thread's now,
+  // and goes with it.
+  thread->m_user_stack_base = original->m_user_stack_base;
+  thread->m_user_stack_top = original->m_user_stack_top;
+  thread->update_flags([](ThreadFlags f) { return f.without_is_kthread(); });
+
+  return thread;
+}
+
 void Thread::user_thread_start(void* self) noexcept {
-  const auto* thread = static_cast<const Thread*>(self);
+  auto* thread = static_cast<Thread*>(self);
+
+  // A copy of another thread carries on where that one was. The frame goes off the heap first,
+  // with interrupts still on, and onto this stack, which is about to be given up for ring 3.
+  hw::user::ResumeFrame* const resume = std::exchange(thread->m_resume, nullptr);
+  hw::user::ResumeFrame frame{};
+  if (resume != nullptr) {
+    frame = *resume;
+    memory::heap::kfree(resume);
+    thread->m_charge.shrink(sizeof(hw::user::ResumeFrame));
+  }
 
   // Exiting or being preempted cannot wait until the first interrupt from ring 3.
   hw::irq::disable();
   Scheduler::return_to_user();
+
+  if (resume != nullptr) {
+    hw::user::resume(frame);
+  }
 
   hw::user::enter(thread->m_user_entry,
                   thread->m_user_stack_top -
@@ -584,8 +692,16 @@ auto Thread::request_amx_context() noexcept -> std::expected<void, Error> {
     return {};
   }
 
+  // A user thread pays for the room tile data takes, on top of the area it had, if any.
+  const std::size_t added =
+      hw::fpu::area_size(true) - (m_arch.fpu_storage != nullptr ? m_arch.fpu_buffer_size : 0);
+  if (const auto charged = m_charge.grow(added); !charged) [[unlikely]] {
+    return charged;
+  }
+
   const auto area = g_amx_fpu_cache->alloc();
   if (!area) {
+    m_charge.shrink(added);
     return std::unexpected(area.error());
   }
 

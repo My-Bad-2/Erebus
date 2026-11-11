@@ -232,7 +232,7 @@ class Lapic {
     constexpr std::uint32_t icr_low = std::to_underlying(Reg::IcrLow);
     constexpr std::uint32_t icr_high = std::to_underlying(Reg::IcrHigh);
 
-    const std::uint64_t flags = irq::save();
+    const RFlags flags = irq::save();
 
     while (IcrSchema{m_mmio.read<std::uint32_t>(icr_low)}.get_delivery_status()) {
       pause();

@@ -33,6 +33,9 @@ struct EarlyBumpAllocator {
 
 EarlyBumpAllocator s_early_alloc;
 
+// Sum of what the nodes manage. Set at the end of initialize() and never again.
+constinit std::uint64_t g_total_pages = 0;
+
 VirtualAddress early_alloc(const std::size_t size, const std::size_t align) noexcept {
   return s_early_alloc.alloc(size, align);
 }
@@ -232,6 +235,7 @@ void inject_free_range(PhysicalAddress curr, const PhysicalAddress end, const st
     Page* head = pfn_to_page(pfn);
     head->setup_buddy_metadata(PageState::Free, mobility, order, node_id);
     node->get_zone(mobility).inject_free_page_cold(head, order);
+    node->add_managed_pages(std::uint64_t{1} << order);
 
     curr += static_cast<PhysicalAddress::OffsetType>(PAGE_SIZE << order);
   }
@@ -363,6 +367,28 @@ std::size_t drain_cpu_caches(const std::uint32_t node_id) noexcept {
   return drain.pages.load(std::memory_order_relaxed);
 }
 
+std::uint64_t total_pages() noexcept { return g_total_pages; }
+
+std::uint32_t node_count() noexcept { return g_router.get_active_nodes(); }
+
+MemoryInfo memory_info() noexcept {
+  MemoryInfo info{.total_pages = g_total_pages, .free_pages = 0};
+  for (std::uint32_t i = 0; i < g_router.get_active_nodes(); ++i) {
+    info.free_pages += g_router.get_node(i).free_pages();
+  }
+
+  return info;
+}
+
+MemoryInfo node_memory_info(const std::uint32_t node_id) noexcept {
+  if (node_id >= g_router.get_active_nodes()) [[unlikely]] {
+    return {};
+  }
+
+  const NumaNode& node = g_router.get_node(node_id);
+  return {.total_pages = node.managed_pages(), .free_pages = node.free_pages()};
+}
+
 void print_stats() noexcept {
   auto to_units = [](const std::uint64_t pages) -> std::pair<std::uint64_t, const char*> {
     const std::uint64_t bytes = pages * PAGE_SIZE;
@@ -427,11 +453,15 @@ void print_stats() noexcept {
 
     global_free_pages += node_free_pages;
     const auto [node_val, node_unit] = to_units(node_free_pages);
-    utils::logger::info("    Total Node Free: {} {}\n", node_val, node_unit);
+    const auto [managed_val, managed_unit] = to_units(node.managed_pages());
+    utils::logger::info("    Total Node Free: {} {} of {} {}\n", node_val, node_unit, managed_val,
+                        managed_unit);
   }
 
   const auto [global_val, global_unit] = to_units(global_free_pages);
-  utils::logger::info("Global Free RAM: {} {}\n", global_val, global_unit);
+  const auto [total_val, total_unit] = to_units(g_total_pages);
+  utils::logger::info("Global Free RAM: {} {} of {} {}\n", global_val, global_unit, total_val,
+                      total_unit);
 }
 
 void initialize(const std::span<limine_memmap_entry*> memmap,
@@ -503,6 +533,8 @@ void initialize(const std::span<limine_memmap_entry*> memmap,
       // Empty zones still get tuned: pages stolen from their siblings will end up there.
       zone.tune_pcp(total_cpus);
     }
+
+    g_total_pages += nodes[i]->managed_pages();
   }
 
   utils::logger::info("Physical Memory Manager Initialized!\n");

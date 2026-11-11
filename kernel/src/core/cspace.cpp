@@ -11,7 +11,6 @@ namespace kernel::core::ipc {
 namespace {
 memory::heap::KmemCache* g_node_cache = nullptr;
 
-// Generations run from 1 to MAX_GEN: 0 is null CapId.
 [[nodiscard]] constexpr std::uint16_t next_generation(const std::uint16_t current) noexcept {
   const auto next = static_cast<std::uint16_t>((current + 1) & CapId::MAX_GEN);
   return next == 0 ? 1 : next;
@@ -73,8 +72,15 @@ std::expected<CSpace::Reservation, Error> CSpace::reserve_locked() noexcept {
       return std::unexpected(Error::OutOfMemory);
     }
 
+    // A CSpace user code made pays for its table as it grows, a node at a time. Nodes stay until
+    // the CSpace goes, and so does what they were charged.
+    if (const auto charged = charge_more(sizeof(CapTableNode)); !charged) [[unlikely]] {
+      return std::unexpected(charged.error());
+    }
+
     CapTableNode* node = allocate_node();
     if (node == nullptr) [[unlikely]] {
+      uncharge(sizeof(CapTableNode));
       return std::unexpected(Error::OutOfMemory);
     }
 
@@ -467,5 +473,104 @@ void CSpace::clear() noexcept {
       batch[i]->release_ref();
     }
   }
+}
+
+std::expected<void, Error> CSpace::copy_into(CSpace& dest) const noexcept {
+  KASSERT(&dest != this);
+
+  Error error = Error::Success;
+  for (std::uint32_t n = 0; error == Error::Success; ++n) {
+    // A node at a time, so that interrupts are not off for the whole of a big table.
+    Guard guard{m_lock};
+    if (n >= m_node_count) {
+      break;
+    }
+
+    Guard dest_guard{dest.m_lock};
+    error = copy_node_locked(n, dest);
+  }
+
+  if (error != Error::Success) [[unlikely]] {
+    dest.clear();
+    return std::unexpected(error);
+  }
+
+  return {};
+}
+
+Error CSpace::copy_node_locked(const std::uint32_t n, CSpace& dest) const noexcept {
+  if (m_cleared || dest.m_cleared || dest.m_node_count != n) [[unlikely]] {
+    return Error::InvalidState;
+  }
+
+  if (const auto charged = dest.charge_more(sizeof(CapTableNode)); !charged) [[unlikely]] {
+    return charged.error();
+  }
+
+  CapTableNode* copy = allocate_node();
+  if (copy == nullptr) [[unlikely]] {
+    dest.uncharge(sizeof(CapTableNode));
+    return Error::OutOfMemory;
+  }
+
+  const CapTableNode& node = *m_nodes[n].load_writer_locked();
+  std::uint32_t copied = 0;
+  for (std::uint32_t i = 0; i < SLOTS_PER_NODE; ++i) {
+    const std::uint16_t generation = node.generations[i].load(std::memory_order_relaxed);
+    const CapHeader header{node.slots[i].header.load(std::memory_order_relaxed)};
+    if (header.is_null()) {
+      copy->generations[i].store(generation, std::memory_order_relaxed);
+      continue;
+    }
+
+    // Left behind, and a generation on, so that the ID it has here does not come to name whatever
+    // the slot gets there later.
+    if (has_cap_flag(header.get_flags(), CapFlags::OneShot)) {
+      copy->generations[i].store(next_generation(generation), std::memory_order_relaxed);
+      continue;
+    }
+
+    // The slot here holds a reference, and the lock keeps it in the slot, so the object is there
+    // to take another. A derived capability keeps the epoch it was made in, and stays dead if it
+    // is; a copy of an original is one from now.
+    CapObject* object = header.object();
+    object->add_ref();
+    object->add_cap();
+
+    const std::uint32_t epoch = has_cap_flag(header.get_flags(), CapFlags::Original)
+                                    ? object->epoch()
+                                    : node.epochs[i].load(std::memory_order_relaxed);
+    copy->generations[i].store(generation, std::memory_order_relaxed);
+    copy->epochs[i].store(epoch, std::memory_order_relaxed);
+    copy->slots[i].badge.store(node.slots[i].badge.load(std::memory_order_relaxed),
+                               std::memory_order_relaxed);
+    copy->slots[i].header.store(
+        CapHeader::make(header.get_type(), header.get_rights(),
+                        header.get_flags() & ~CapFlags::Original, generation, object)
+            .raw(),
+        std::memory_order_relaxed);
+    copy->used[i / 64] |= std::uint64_t{1} << (i % 64);
+    ++copied;
+  }
+
+  // Slot 0 of node 0 would be the null ID, so it is never handed out, here as anywhere.
+  if (n == 0) {
+    copy->used[0] |= 1;
+  }
+
+  bool full = true;
+  for (const std::uint64_t word : copy->used) {
+    full &= word == ~std::uint64_t{0};
+  }
+
+  // Published whole: the store is a release, and lookups load the node with an acquire.
+  dest.m_nodes[n].store(copy);
+  dest.m_node_count = n + 1;
+  if (!full) {
+    dest.m_room[n / 64] |= std::uint64_t{1} << (n % 64);
+  }
+
+  dest.m_active.fetch_add(copied, std::memory_order_relaxed);
+  return Error::Success;
 }
 }  // namespace kernel::core::ipc

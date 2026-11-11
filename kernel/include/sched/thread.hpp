@@ -41,6 +41,7 @@
 #include "hal/fpu.hpp"
 #include "hal/hal.hpp"
 #include "memory/address.hpp"
+#include "memory/quota.hpp"
 #include "sched/eevdf.hpp"
 #include "sched/priority.hpp"
 #include "utils/linked_list.hpp"
@@ -52,6 +53,10 @@ class ThreadIpcContext;
 
 namespace kernel::proc {
 class Process;
+}
+
+namespace kernel::hw::user {
+struct ResumeFrame;
 }
 
 namespace kernel::sched {
@@ -311,6 +316,13 @@ class alignas(std::hardware_destructive_interference_size) Thread
   void* m_destroy_cookie{nullptr};
   proc::Process* m_process{nullptr};
   core::ipc::ThreadIpcContext* m_ipc{nullptr};  ///< See ipc_context().
+
+  // What a user thread takes of the kernel, counted against its process's quota until it is
+  // destroyed. Nothing for a kernel thread.
+  memory::QuotaCharge m_charge{};
+
+  // Where a thread made by create_user_copy() carries on, until it does. Heap memory.
+  hw::user::ResumeFrame* m_resume{nullptr};
   std::uint32_t m_preferred_numa_node{NO_PREFERENCE};
 
   // Where a user thread starts in ring 3, and its stack there, in its process's address space.
@@ -363,6 +375,14 @@ class alignas(std::hardware_destructive_interference_size) Thread
   void set_name(std::string_view name) noexcept;
 
   [[noreturn]] static void user_thread_start(void* self) noexcept;
+
+  // What both kinds of user thread start out as: the kernel half, a kernel thread whose entry
+  // goes to ring 3 and does not come back, charged to the tree of @p process along with
+  // @p extra_charge bytes that go with it.
+  [[nodiscard]] static auto create_user_half(std::string_view name, proc::Process* process,
+                                             const UserThreadCreateOptions& opts,
+                                             std::size_t extra_charge) noexcept
+      -> std::expected<Thread*, Error>;
 
  public:
   Thread() noexcept = default;
@@ -428,13 +448,32 @@ class alignas(std::hardware_destructive_interference_size) Thread
   /// zero: a function that returns ends up at address zero, and its process with it.
   ///
   /// This only makes the thread. A process links it into its own list and hands it to the
-  /// scheduler (see proc::Process::spawn_thread()).
+  /// scheduler (see proc::Process::spawn_thread()). What the kernel holds for it, the thread, its
+  /// kernel stack and FPU state, counts against the process's quota until it is destroyed, and its
+  /// stack against the address space's.
   /// @return The thread, or Error::InvalidArgument for a process without an address space or an
-  ///         @p entry user code cannot have, Error::OutOfMemory, and whatever create_kernel()
-  ///         says about the kernel side.
+  ///         @p entry user code cannot have, Error::QuotaExceeded, Error::OutOfMemory, and
+  ///         whatever create_kernel() says about the kernel side.
   [[nodiscard]] static auto create_user(std::string_view name, proc::Process* process,
                                         memory::VirtualAddress entry, std::uint64_t arg = 0,
                                         const UserThreadCreateOptions& opts = {}) noexcept
+      -> std::expected<Thread*, Error>;
+
+  /// @brief A user thread of @p process that carries on from where the calling thread is in user
+  ///        code, at @p at, rather than from an entry point: what a fork() that returns in the
+  ///        child too makes.
+  ///
+  /// Everything else the CPU holds for the calling thread goes along as it is right now: its FPU
+  /// and vector registers, its FS and GS bases and PKRU. The process's address space is meant to
+  /// be a copy of the caller's, so the stack @p at points into is there too, and the new thread
+  /// takes over the copy of the caller's stack instead of getting one of its own. It has the
+  /// caller's priority, and AMX if the caller has it. Like create_user(), this only makes it.
+  /// @pre The calling thread is a user thread, outside any kernel FPU section.
+  /// @return The thread, or Error::InvalidArgument for a process without an address space, or a
+  ///         place or stack pointer user code cannot have, Error::InvalidState if the caller is
+  ///         not a user thread, Error::QuotaExceeded, or Error::OutOfMemory.
+  [[nodiscard]] static auto create_user_copy(std::string_view name, proc::Process* process,
+                                             const hw::user::ResumeFrame& at) noexcept
       -> std::expected<Thread*, Error>;
 
   /// @brief How many kernel stacks are kept for new threads, and how often one was taken.
@@ -474,8 +513,10 @@ class alignas(std::hardware_destructive_interference_size) Thread
   [[nodiscard]] auto enable_fpu_context() noexcept -> std::expected<void, Error>;
 
   /// @brief Makes this thread an AMX user: a save area with room for tile data, keeping what
-  ///        it has so far, and the tile registers enabled whenever it runs.
-  /// @return Error::NotImplemented if the CPU has no AMX, or Error::OutOfMemory.
+  ///        it has so far, and the tile registers enabled whenever it runs. A user thread pays
+  ///        for the larger area out of its process's quota.
+  /// @return Error::NotImplemented if the CPU has no AMX, Error::QuotaExceeded, or
+  ///         Error::OutOfMemory.
   [[nodiscard]] auto request_amx_context() noexcept -> std::expected<void, Error>;
 
   /// @brief Starts a section of kernel code using the FPU. Use utils::FpuGuard instead.

@@ -145,8 +145,9 @@ class alignas(std::hardware_destructive_interference_size) CSpace final
 
   /// @brief Puts an original capability to @p object in a free slot. The slot takes a reference of
   ///        its own; the caller keeps whatever it had.
-  /// @return The new ID; OutOfMemory if the table is full or no node can be had, InvalidState once
-  ///         the CSpace is cleared, InvalidArgument for an object that cannot be named.
+  /// @return The new ID; OutOfMemory if the table is full or no node can be had, QuotaExceeded if
+  ///         a new node would take the CSpace past its quota, InvalidState once the CSpace is
+  ///         cleared, InvalidArgument for an object that cannot be named.
   [[nodiscard]] std::expected<CapId, Error> insert(CapObject& object, CapRights rights,
                                                    CapFlags flags = CapFlags::Original,
                                                    std::uint64_t badge = 0) noexcept;
@@ -198,6 +199,19 @@ class alignas(std::hardware_destructive_interference_size) CSpace final
   ///        references through this CSpace; the destructor does it too.
   void clear() noexcept;
 
+  /// @brief Copies every capability here into @p dest, slot for slot, so that each CapId names
+  ///        the same object in both: what a process forked to carry on as it was needs.
+  ///
+  /// The copies are derived ones, with the rights, flags and badge each had, so that an original
+  /// here can revoke its copy there. A one-shot capability is the right to do something once, so
+  /// it stays here, and its ID finds nothing there. Each node of the table is copied as it is at
+  /// one moment, under the lock: a capability moved from one node to another meanwhile may end up
+  /// in both, or in neither. @p dest pays for the nodes it gets, as it would for growing.
+  /// @pre @p dest is new and empty, and nothing else uses it until this returns.
+  /// @return OutOfMemory or QuotaExceeded for a node @p dest cannot have, InvalidState if either
+  ///         is cleared already or @p dest is not empty. @p dest is cleared after a failure.
+  [[nodiscard]] std::expected<void, Error> copy_into(CSpace& dest) const noexcept;
+
  private:
   // A slot taken under the lock but not filled in yet.
   struct Reservation {
@@ -221,6 +235,9 @@ class alignas(std::hardware_destructive_interference_size) CSpace final
                       const CapObject* object) noexcept;
   [[nodiscard]] std::expected<Taken, Error> take_locked(CapId id) noexcept;
   void empty_slot_locked(CapTableNode& node, std::uint32_t slot) noexcept;
+
+  // Copies node @p n into @p dest, which has every node before it already. Both locks are held.
+  [[nodiscard]] Error copy_node_locked(std::uint32_t n, CSpace& dest) const noexcept;
 
   [[nodiscard]] std::expected<CapEntry, Error> take_one_shot(CapId id, CapType type,
                                                              CapRights required) noexcept;

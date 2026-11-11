@@ -34,8 +34,20 @@ auto AddressSpace::alloc(const std::size_t size_bytes, const AccessFlags access,
 
   const std::size_t bytes_per_page = get_page_bytes(page_size);
   const std::size_t aligned_size = utils::maths::align_up(size_bytes, bytes_per_page);
+  if (aligned_size < size_bytes) [[unlikely]] {
+    return std::unexpected(Error::InvalidArgument);
+  }
+
   if (hint && !hint.is_aligned(bytes_per_page)) {
     return std::unexpected(Error::InvalidAlignment);
+  }
+
+  // All the range may come to hold counts from the start, before anything is allocated for it.
+  // Device memory holds no pages of its own.
+  const bool is_wired = type == VMAType::HardwareMMIO || has_flag(access, AccessFlags::Mmio);
+  auto commit = QuotaCharge::take(is_wired ? nullptr : m_quota.get(), aligned_size);
+  if (!commit) [[unlikely]] {
+    return std::unexpected(commit.error());
   }
 
   // Object pages are indexed from the start of the VMA, and a stack grows down. Leave enough
@@ -85,7 +97,8 @@ auto AddressSpace::alloc(const std::size_t size_bytes, const AccessFlags access,
   }
 
   init_vma(vma, addr, aligned_size, access, cache, page_size, type, NUMAPolicy::FirstTouch, pkey);
-  vma->flags.set_is_wired(type == VMAType::HardwareMMIO || has_flag(access, AccessFlags::Mmio));
+  vma->flags.set_is_wired(is_wired);
+  obj->adopt_commit(std::move(*commit));
   vma->vm_object = obj;  // the creation reference now belongs to the VMA
   vma->object_offset = headroom_pages;
 
@@ -180,6 +193,12 @@ std::expected<VirtualAddress, Error> AddressSpace::realloc(const VirtualAddress 
   const std::size_t needed_pages = vma->object_offset + new_aligned / bytes_per_page;
   const auto grow_end = vma->start + static_cast<VirtualAddress::OffsetType>(new_aligned);
 
+  // What the object may come to hold grows with it, and counts against what it did before.
+  const std::size_t added = new_aligned - old_size;
+  if (const auto charged = vma->vm_object->commit_more(added); !charged) [[unlikely]] {
+    return std::unexpected(charged.error());
+  }
+
   if (range_is_free(vma->end, grow_end)) {
     vma->end = grow_end;
     vma->vm_object->expand_max_pages(needed_pages);
@@ -188,11 +207,13 @@ std::expected<VirtualAddress, Error> AddressSpace::realloc(const VirtualAddress 
 
   const VirtualAddress new_addr = find_free_gap(new_aligned, bytes_per_page);
   if (!new_addr) [[unlikely]] {
+    vma->vm_object->commit_less(added);
     return std::unexpected(Error::OutOfMemory);
   }
 
   // Claim the new key first: it is the only step that can fail.
   if (!m_vma_tree.insert(new_addr.value(), vma)) [[unlikely]] {
+    vma->vm_object->commit_less(added);
     return std::unexpected(Error::OutOfMemory);
   }
 

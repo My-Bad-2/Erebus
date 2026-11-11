@@ -16,6 +16,7 @@
 /// those yet for a thread other than the caller.
 #pragma once
 
+#include <chrono.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <expected>
@@ -28,6 +29,7 @@
 #include "core/ipc/endpoint.hpp"
 #include "core/ipc/message.hpp"
 #include "core/ipc/notification.hpp"
+#include "hal/user.hpp"
 #include "memory/address.hpp"
 #include "memory/vmm/vma/vma.hpp"
 #include "proc/process.hpp"
@@ -54,6 +56,13 @@ class alignas(std::hardware_destructive_interference_size) ThreadCap final
   /// @pre @p thread has not been handed to the scheduler, so that it cannot be gone meanwhile.
   [[nodiscard]] static std::expected<CapRef<ThreadCap>, Error> attach(sched::Thread& thread,
                                                                       CSpace* cspace) noexcept;
+
+  /// @brief Starts a user thread of @p process at @p entry, with a ThreadCap, @p cspace for its
+  ///        IPC, and its faults going to @p fault_endpoint, if there is one, with @p fault_badge.
+  [[nodiscard]] static std::expected<CapRef<ThreadCap>, Error> spawn_user(
+      proc::Process& process, CSpace* cspace, std::string_view name, memory::VirtualAddress entry,
+      std::uint64_t arg = 0, const sched::UserThreadCreateOptions& opts = {},
+      Endpoint* fault_endpoint = nullptr, std::uint64_t fault_badge = 0) noexcept;
 
   /// @brief Starts a kernel thread with a ThreadCap, and @p cspace for its IPC.
   [[nodiscard]] static std::expected<CapRef<ThreadCap>, Error> create_kernel_thread(
@@ -128,7 +137,8 @@ class alignas(std::hardware_destructive_interference_size) ProcessCap final
   [[nodiscard]] static std::expected<CapRef<ProcessCap>, Error> create(
       std::string_view name, proc::Process* parent = nullptr) noexcept;
 
-  /// @brief A ProcessCap for @p process, with @p cspace, or a new CSpace if null.
+  /// @brief A ProcessCap for @p process, with @p cspace, or if null a new CSpace, which counts
+  ///        against the process's quota.
   [[nodiscard]] static std::expected<CapRef<ProcessCap>, Error> wrap(
       proc::Process& process, CSpace* cspace = nullptr) noexcept;
 
@@ -138,8 +148,29 @@ class alignas(std::hardware_destructive_interference_size) ProcessCap final
       CapRights rights, std::string_view name, memory::VirtualAddress entry, std::uint64_t arg = 0,
       const sched::UserThreadCreateOptions& opts = {}) const noexcept;
 
-  /// @brief proc::Process::fork(), with a ProcessCap for the child, which gets a CSpace of its
-  ///        own and this one's fault endpoint. Takes Write and Manage.
+  /// @brief proc::Process::fork() of @p parent, with a ProcessCap for the child, which gets a
+  ///        CSpace of its own, and a ThreadCap for its thread, with that CSpace and
+  ///        @p fault_endpoint, if there is one, so that the thread has an IPC context from the
+  ///        start. @pre The caller keeps @p parent's address space there while it runs.
+  [[nodiscard]] static std::expected<CapRef<ProcessCap>, Error> fork_from(
+      proc::Process& parent, std::string_view name, memory::VirtualAddress entry,
+      std::uint64_t arg = 0, const sched::UserThreadCreateOptions& opts = {},
+      Endpoint* fault_endpoint = nullptr, std::uint64_t fault_badge = 0) noexcept;
+
+  /// @brief proc::Process::fork_here() of @p parent: a child whose thread carries on where the
+  ///        calling thread is, at @p at, as a copy of it.
+  ///
+  /// The child gets a ProcessCap, and a copy of @p caller's CSpace, slot for slot (see
+  /// CSpace::copy_into()), so that every capability the caller had is there under the ID it knew
+  /// it by. Its thread gets a ThreadCap, with that CSpace, the IpcBuffer the caller named, which
+  /// the address space has a copy of, and @p fault_endpoint, if there is one.
+  /// @pre The calling thread is a user thread of @p parent, and @p caller is its IPC context.
+  [[nodiscard]] static std::expected<CapRef<ProcessCap>, Error> fork_here(
+      proc::Process& parent, std::string_view name, const hw::user::ResumeFrame& at,
+      const ThreadIpcContext& caller, Endpoint* fault_endpoint = nullptr,
+      std::uint64_t fault_badge = 0) noexcept;
+
+  /// @brief fork_from() this process, with its fault endpoint. Takes Write and Manage.
   [[nodiscard]] std::expected<CapRef<ProcessCap>, Error> fork(
       CapRights rights, std::string_view name, memory::VirtualAddress entry, std::uint64_t arg = 0,
       const sched::UserThreadCreateOptions& opts = {}) const noexcept;
@@ -150,6 +181,11 @@ class alignas(std::hardware_destructive_interference_size) ProcessCap final
   /// @brief proc::Process::wait_child(), with its preconditions. Takes Read.
   [[nodiscard]] std::expected<proc::ProcessId, Error> wait_child(
       CapRights rights, proc::ProcessId target = proc::ANY_CHILD,
+      int* status = nullptr) const noexcept;
+
+  /// @brief wait_child() that gives up after @p timeout, with Error::Timeout. Takes Read.
+  [[nodiscard]] std::expected<proc::ProcessId, Error> wait_child_for(
+      CapRights rights, proc::ProcessId target, klib::Duration timeout,
       int* status = nullptr) const noexcept;
 
   /// @brief Where faults of threads started from now on go. Takes Manage.
@@ -177,6 +213,11 @@ class alignas(std::hardware_destructive_interference_size) ProcessCap final
       std::size_t length = 0,
       memory::VirtualAddress hint = memory::VirtualAddress{}) const noexcept;
 
+  /// @brief AddressSpace::protect() in the process. Takes Write and Manage.
+  [[nodiscard]] std::expected<void, Error> protect(CapRights rights, memory::VirtualAddress address,
+                                                   std::size_t size,
+                                                   memory::vmm::AccessFlags access) const noexcept;
+
   /// @brief Unmaps whatever starts at @p address. Takes Write.
   [[nodiscard]] std::expected<void, Error> unmap(CapRights rights,
                                                  memory::VirtualAddress address) const noexcept;
@@ -194,6 +235,12 @@ class alignas(std::hardware_destructive_interference_size) ProcessCap final
  private:
   // The address space, borrowed for as long as this lives.
   class SpaceLoan;
+
+  // The ProcessCap for a child just forked, with @p cspace and the fault endpoint its thread has.
+  // A child that cannot have one is ended.
+  [[nodiscard]] static std::expected<CapRef<ProcessCap>, Error> wrap_forked(
+      proc::Process& child, CSpace& cspace, Endpoint* fault_endpoint,
+      std::uint64_t fault_badge) noexcept;
 
   proc::Process* m_process;  ///< With a reference.
   proc::ProcessId m_pid;

@@ -83,7 +83,7 @@ enum class EventClass : std::uint8_t {
   Interrupt,  // Timer, Keyboard, etc.
   Exception,  // #PF, #GP, etc.
   NMI,        // Non-Maskable Interrupts
-  Syscall,    // Syscall/Sysenter or INT n
+  Syscall,    // SYSCALL from 64-bit user code, which only FRED delivers as an event
   Unknown,
 };
 

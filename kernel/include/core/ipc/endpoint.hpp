@@ -34,6 +34,7 @@
 #include "core/cspace.hpp"
 #include "core/errors.hpp"
 #include "core/ipc/message.hpp"
+#include "memory/address.hpp"
 #include "sched/thread.hpp"
 #include "utils/lock.hpp"
 
@@ -88,7 +89,22 @@ class ThreadIpcContext {
 
   /// @brief The thread is gone: fails the call it was to answer, and unbinds its notification.
   void abandon() noexcept;
-  void set_buffer(IpcBuffer* buffer) noexcept { m_buffer = buffer; }
+
+  /// @brief Where the thread's user code keeps its own IpcBuffer, null until it says.
+  [[nodiscard]] memory::VirtualAddress user_buffer() const noexcept { return m_user_buffer; }
+
+  /// @brief Says where user code keeps its IpcBuffer, null for nowhere.
+  ///
+  /// IPC only ever uses buffer(), which is kernel memory, and system calls copy what a message
+  /// needs between that and the user's, so no user page is written behind the back of the address
+  /// space it is in. A thread with no buffer of its own has no buffer() either, and IPC refuses
+  /// what would need one, rather than leave words and capabilities where its code cannot see them.
+  /// @pre Called by the thread itself, outside any IPC operation, as IPC reads buffer() from other
+  ///      threads while this one is in one.
+  void set_user_buffer(const memory::VirtualAddress address) noexcept {
+    m_user_buffer = address;
+    m_buffer = address.is_null() ? nullptr : m_kernel_buffer;
+  }
 
  private:
   friend class Endpoint;
@@ -97,7 +113,9 @@ class ThreadIpcContext {
 
   sched::Thread* m_thread;
   CapRef<CSpace> m_cspace;
-  IpcBuffer* m_buffer;
+  IpcBuffer* m_buffer;         ///< What IPC uses: m_kernel_buffer, or null.
+  IpcBuffer* m_kernel_buffer;  ///< The kernel's, whether IPC may use it at the moment or not.
+  memory::VirtualAddress m_user_buffer{};
 
   std::atomic<IpcWait> m_wait{IpcWait::Idle};
   Error m_result{Error::Success};
@@ -173,7 +191,8 @@ class alignas(std::hardware_destructive_interference_size) Endpoint final
                                                       Message& next, CapRights rights) noexcept;
 
   /// @brief Turns the right to answer the last call into a one-shot Reply capability, in the
-  ///        context's CSpace, so that the thread can receive again and answer later.
+  ///        context's CSpace, so that the thread can receive again and answer later. The Reply
+  ///        counts against the quota of the thread's process, if it has one.
   [[nodiscard]] static std::expected<CapId, Error> save_reply(ThreadIpcContext& ctx) noexcept;
 
   /// @brief Answers through the Reply capability @p reply, which goes in the process.

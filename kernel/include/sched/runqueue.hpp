@@ -55,7 +55,7 @@ enum class PickMode : std::uint8_t {
 
 /// @brief The run queue of one CPU. See the file comment.
 class alignas(std::hardware_destructive_interference_size) RunQueue {
-  // TestRunner, then RealTime.
+  // TestRunner -> RealTime.
   static constexpr std::uint32_t RT_LEVELS = 2;
 
   // How many threads a thief looks at. Pinned ones cannot be taken, and a queue full of them
