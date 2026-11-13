@@ -121,10 +121,17 @@ std::int64_t debug_log(Frame& frame) noexcept {
   std::ranges::replace_if(
       text, [](const char c) { return c != '\t' && (c < 0x20 || c > 0x7E); }, '?');
 
+  // The line is the process's, so it says so where a kernel line says which file and line it is
+  // from: [name:pid].
   const proc::Process* const process = proc::current_process();
-  utils::logger::info("[{}:{}] {}\n", process != nullptr ? process->name() : "?",
-                      process != nullptr ? process->pid() : 0u,
-                      std::string_view{text.data(), text.size()});
+  std::array<char, proc::Process::MAX_NAME_LEN + 16> origin{};
+  const std::size_t origin_length = klib::kprint(origin.data(), origin.size(), "[{}:{}]",
+                                                 process != nullptr ? process->name() : "?",
+                                                 process != nullptr ? process->pid() : 0u);
+
+  utils::logger::info_from(
+      std::string_view{origin.data(), std::min(origin_length, origin.size() - 1)}, "{}",
+      std::string_view{text.data(), text.size()});
   return 0;
 }
 }  // namespace kernel::core::syscall::handlers

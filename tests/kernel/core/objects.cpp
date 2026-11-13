@@ -167,13 +167,16 @@ KTEST(SharedVmObject, mappings_share_and_a_part_stays_within_its_window) {
   KEXPECT_EQ(in_slice->as<volatile std::uint64_t>()[0], 0xF01u);
   KEXPECT_EQ((*in_slice + PAGE_SIZE).as<volatile std::uint64_t>()[0], 0xF02u);
 
-  const auto page_one = shared->translate(CapRights::Read, 1);
-  const auto slice_zero = slice->translate(CapRights::Read, 0);
+  // Physical addresses take Manage as well, which a mapping alone does not.
+  constexpr CapRights TRANSLATE = CapRights::Read | CapRights::Manage;
+  const auto page_one = shared->translate(TRANSLATE, 1);
+  const auto slice_zero = slice->translate(TRANSLATE, 0);
   KEXPECT(page_one && slice_zero && *page_one == *slice_zero);
+  KEXPECT(shared->translate(CapRights::Read, 1).error() == Error::AccessDenied);
 
   // Out of the window, by any route: first pages, page counts, and sizes that would wrap.
   constexpr std::size_t HUGE = std::size_t{1} << 52;
-  KEXPECT(slice->translate(CapRights::Read, 2).error() == Error::OutOfBounds);
+  KEXPECT(slice->translate(TRANSLATE, 2).error() == Error::OutOfBounds);
   KEXPECT(slice->map_into(kernel, CapRights::Read, AccessFlags::Read, HUGE).error() ==
           Error::OutOfBounds);
   KEXPECT(slice->map_into(kernel, CapRights::Read, AccessFlags::Read, 1, HUGE).error() ==
@@ -191,7 +194,7 @@ KTEST(SharedVmObject, mappings_share_and_a_part_stays_within_its_window) {
 
   KEXPECT(shared->resize(CapRights::Write | CapRights::Manage, 6).has_value());
   KEXPECT_EQ(shared->pages(), 6u);
-  KEXPECT(shared->translate(CapRights::Read, 5).has_value());
+  KEXPECT(shared->translate(TRANSLATE, 5).has_value());
 
   KEXPECT(kernel.free(*one).has_value());
   KEXPECT(kernel.free(*two).has_value());

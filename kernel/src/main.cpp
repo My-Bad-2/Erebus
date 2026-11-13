@@ -37,11 +37,14 @@ std::expected<void, Error> give_ipc_context(sched::Thread& thread, void*) noexce
   return core::ipc::ThreadCap::attach(thread, cspace->get()).transform([](const auto&) {});
 }
 
-void start_root_task() noexcept {
+// Starts the first boot module in ring 3, as a child of process 0 that nobody collects. The test
+// kernel does: it waits for the user test image to say how its tests went.
+// @return The process, or null if there is no module.
+proc::Process* start_root_task() noexcept {
   const limine_module_response* modules = boot::module_request.response;
   if (modules == nullptr || modules->module_count == 0) {
     utils::logger::warn("init: no root task among the boot modules, so nothing runs in ring 3\n");
-    return;
+    return nullptr;
   }
 
   const limine_file& file = *modules->modules[0];
@@ -63,6 +66,7 @@ void start_root_task() noexcept {
   utils::logger::info("init: started {} (pid {}, tid {}) from {} at {:#x}\n",
                       spawned->process->name(), spawned->process->pid(), spawned->tid, file.path,
                       spawned->image.entry.value());
+  return spawned->process;
 }
 }  // namespace
 
@@ -86,10 +90,11 @@ void start_root_task() noexcept {
   utils::logger::info("Hello, World!\n");
 
 #ifdef EREBUS_KERNEL_TESTS
-  testing::run_all();
+  // The root task is the user test image here, which the tests start and wait for in turn.
+  testing::run_all(&start_root_task);
+#else
+  (void)start_root_task();
 #endif
-
-  start_root_task();
 
   sched::Scheduler::enter_idle_loop();
 }

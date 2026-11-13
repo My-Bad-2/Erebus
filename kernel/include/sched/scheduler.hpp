@@ -194,6 +194,14 @@ class Scheduler {
   /// @pre Interrupts are off, and the calling thread is about to go to ring 3.
   static void return_to_user() noexcept;
 
+  /// @brief Asks @p thread to exit (Thread::request_exit()), and sees that it hears soon.
+  ///
+  /// The flag alone is not enough. A thread running in ring 3 on another CPU only comes into the
+  /// kernel when something interrupts it, and on a CPU with nothing else to run no slice timer is
+  /// armed, so that may be never. A reschedule IPI brings it in, and return_to_user() ends it on
+  /// the way back. A thread that is not running goes through there when it next runs.
+  static void request_exit(Thread& thread) noexcept;
+
   /// @brief What an idle thread does for the rest of its life.
   [[noreturn]] static void enter_idle_loop() noexcept;
 

@@ -66,7 +66,8 @@ enum class CapRights : std::uint8_t {
   GrantReply = 1 << 3,  ///< Let the reply to a call carry capabilities back.
   Mint = 1 << 4,        ///< Make copies with a new badge, or a part of the object.
   Revoke = 1 << 5,      ///< Revoke every capability derived from this original.
-  Manage = 1 << 6,      ///< Configure the object: bind, acknowledge, pin, and the like.
+  Manage = 1 << 6,      ///< Configure the object: bind, acknowledge, pin, see where its memory
+                        ///< is in RAM, and the like.
   Execute = 1 << 7,     ///< Map executable.
 
   All = 0xFF,

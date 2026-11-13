@@ -3,7 +3,7 @@
 #include "buffers.hpp"
 #include "ktest.hpp"
 
-namespace kernel::testing::strings {
+namespace ktest::strings {
 namespace {
 alignas(64) char g_buffer[BUFFER_BYTES];
 
@@ -87,4 +87,4 @@ KTEST(Strchr, agrees_with_a_plain_loop_on_random_strings) {
     }
   }
 }
-}  // namespace kernel::testing::strings
+}  // namespace ktest::strings

@@ -2,7 +2,7 @@
 
 #include "ktest.hpp"
 
-namespace kernel::testing {
+namespace ktest {
 namespace {
 std::size_t g_comparisons = 0;
 
@@ -159,4 +159,4 @@ KTEST(Bsearch, handles_both_ends_of_a_large_array) {
   KEXPECT_EQ(find(beyond), nullptr);
   KEXPECT_EQ(find(odd), nullptr);
 }
-}  // namespace kernel::testing
+}  // namespace ktest

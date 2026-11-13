@@ -3,7 +3,7 @@
 #include "buffers.hpp"
 #include "ktest.hpp"
 
-namespace kernel::testing::strings {
+namespace ktest::strings {
 namespace {
 alignas(64) std::uint8_t g_src[BUFFER_BYTES];
 alignas(64) std::uint8_t g_dest[BUFFER_BYTES];
@@ -38,4 +38,4 @@ KTEST(Memcpy, zero_bytes_change_nothing) {
   // As in C2y, null pointers are fine when there is nothing to copy.
   KEXPECT_EQ(klib::memcpy(nullptr, nullptr, 0), nullptr);
 }
-}  // namespace kernel::testing::strings
+}  // namespace ktest::strings

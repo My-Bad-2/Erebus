@@ -1,29 +1,43 @@
 /// @file ktest.hpp
-/// @brief The in-kernel test framework.
+/// @brief The test framework, in the kernel and in user space alike.
 ///
-/// The tests in tests/ are built into kernel_test, a second kernel image that boots exactly like
-/// the real one and then, instead of going idle, runs every registered test, one after another.
-/// Results go to the serial console:
+/// Tests are built into two test images, each of which boots like the real thing and runs its
+/// tests instead of carrying on:
 ///
-///     ktest: running 214 tests on 4 CPUs
+///  - kernel_test, the kernel with tests/kernel/ and tests/klib/ built in, which runs them on the
+///    BSP and, for KTEST_ALL_CPUS(), on every CPU at once;
+///  - user_test, the root task with tests/user/ and tests/klib/ built in, which runs them in ring 3
+///    and, for KTEST_ALL_CPUS(), on several threads at once (see USER_PARTICIPANTS).
+///
+/// So klib's tests run twice, once against klib as the kernel builds it, and once against the
+/// copy user code gets, which is compiled for a different ABI. The test kernel starts the user
+/// image as its root task once its own tests are through, waits for it, and counts its exit status
+/// as one more result. Results go to the serial console, the user image's through DebugLog:
+///
+///     ktest: running 665 tests on 4 CPUs
 ///     ktest: pass Maths.align_up_rounds_up (0 ms)
-///     ktest: FAIL Blake2b.matches_rfc7693 (0 ms)
-///     ktest: 213 passed, 1 failed, 0 skipped
-///     ktest: FAILED
+///     ...
+///     [INF] [root_task:50]      | utest: running 190 tests
+///     [INF] [root_task:50]      | utest: pass Endpoint.six_words_go_across_in_registers (0 ms)
+///     [INF] [root_task:50]      | utest: 190 passed, 0 failed, 0 skipped
+///     ktest: pass UserSpace.every_user_test_passes (402 ms)
+///     ktest: 658 passed, 0 failed, 7 skipped
+///     ktest: ALL PASSED
 ///
-/// Run under QEMU with an isa-debug-exit device, the image then ends QEMU with exit status 1 if
-/// everything passed and 3 if not.
+/// Run under QEMU with an isa-debug-exit device, the test kernel then ends QEMU with exit status 1
+/// if everything passed and 3 if not.
 ///
 /// @code
 /// KTEST(Maths, align_up_rounds_up) {
 ///   KEXPECT_EQ(utils::maths::align_up(0x1234u, 0x1000u), 0x2000u);
 /// }
 ///
-/// // The body runs on every online CPU at once; `cpu` is the dense ID of the one running it.
+/// // The body runs on every participant at once; `cpu` is the one running it, the BSP or the
+/// // first thread being 0.
 /// KTEST_ALL_CPUS(QSpinlock, keeps_a_counter_exact, cpu) {
 ///   hammer(g_lock, g_counter);
-///   testing::sync_cpus();  // nobody goes on until every CPU got here
-///   KEXPECT_EQ(g_counter, ROUNDS * testing::cpu_count());
+///   ktest::sync_cpus();  // nobody goes on until every participant got here
+///   KEXPECT_EQ(g_counter, ROUNDS * ktest::cpu_count());
 /// }
 /// @endcode
 ///
@@ -32,9 +46,14 @@
 /// KTEST_SKIP() ends a test that cannot run on this machine, such as a two-CPU test on one.
 ///
 /// Tests run in the order the linker placed them, file by file, except that KTEST_LAST() tests
-/// come after all the others: they are for tests that leave the machine changed for good.
-/// Every test runs in thread context with interrupts enabled; a failed KASSERT, a fault or a
-/// hang stops the whole run, which the scripts that boot the image report as a failure.
+/// come after all the others, the user image included: they are for tests that leave the machine
+/// changed for good. Every test runs in thread context with interrupts enabled; in the kernel, a
+/// failed KASSERT, a fault or a hang stops the whole run, which the scripts that boot the image
+/// report as a failure, and in user space, a fault ends the image, which fails the run the same
+/// way.
+///
+/// The kernel's tests live in namespace kernel::testing and the user image's in user::testing,
+/// each of which has the framework's names in it; klib's, which both build, in ktest itself.
 #pragma once
 
 #include <concepts>
@@ -54,18 +73,17 @@
 // runner walks. The section is named like a C identifier so that lld never folds two entries.
 #define KTEST_REGISTER(suite, name, mode, order, cpu)                                          \
   static void KTEST_CONCAT(ktest_body_, __LINE__)(std::uint32_t cpu) noexcept;                 \
-  [[gnu::used,                                                                                 \
-    gnu::section("ktest_cases")]] static constinit const ::kernel::testing::detail::TestCase   \
+  [[gnu::used, gnu::section("ktest_cases")]] static constinit const ::ktest::detail::TestCase  \
       KTEST_CONCAT(ktest_case_, __LINE__){#suite, #name, &KTEST_CONCAT(ktest_body_, __LINE__), \
-                                          ::kernel::testing::detail::Mode::mode,               \
-                                          ::kernel::testing::detail::Order::order};            \
+                                          ::ktest::detail::Mode::mode,                         \
+                                          ::ktest::detail::Order::order};                      \
   static void KTEST_CONCAT(ktest_body_, __LINE__)([[maybe_unused]] std::uint32_t cpu) noexcept
 
-/// @brief Defines a test that runs on the BSP while the other CPUs wait.
+/// @brief Defines a test that runs on one CPU or thread while the others wait.
 #define KTEST(suite, name) KTEST_REGISTER(suite, name, Bsp, Normal, ktest_cpu)
 
-/// @brief Defines a test whose body runs on every online CPU at the same time. `cpu` names the
-///        parameter that holds the dense ID of the CPU running it; the BSP is 0.
+/// @brief Defines a test whose body runs on every participant at the same time. `cpu` names the
+///        parameter that holds which one is running it; the BSP, or the first thread, is 0.
 #define KTEST_ALL_CPUS(suite, name, cpu) KTEST_REGISTER(suite, name, AllCpus, Normal, cpu)
 
 /// @brief A KTEST() that runs after every other test, for one that leaves the machine changed.
@@ -74,27 +92,21 @@
 #define KTEST_HERE std::source_location::current()
 
 /// @brief Fails the test if `cond` is false.
-#define KEXPECT(cond) ::kernel::testing::detail::check(static_cast<bool>(cond), #cond, KTEST_HERE)
+#define KEXPECT(cond) ::ktest::detail::check(static_cast<bool>(cond), #cond, KTEST_HERE)
 
-#define KEXPECT_EQ(a, b) \
-  ::kernel::testing::detail::compare<::kernel::testing::detail::Op::Eq>(a, b, #a, #b, KTEST_HERE)
-#define KEXPECT_NE(a, b) \
-  ::kernel::testing::detail::compare<::kernel::testing::detail::Op::Ne>(a, b, #a, #b, KTEST_HERE)
-#define KEXPECT_LT(a, b) \
-  ::kernel::testing::detail::compare<::kernel::testing::detail::Op::Lt>(a, b, #a, #b, KTEST_HERE)
-#define KEXPECT_LE(a, b) \
-  ::kernel::testing::detail::compare<::kernel::testing::detail::Op::Le>(a, b, #a, #b, KTEST_HERE)
-#define KEXPECT_GT(a, b) \
-  ::kernel::testing::detail::compare<::kernel::testing::detail::Op::Gt>(a, b, #a, #b, KTEST_HERE)
-#define KEXPECT_GE(a, b) \
-  ::kernel::testing::detail::compare<::kernel::testing::detail::Op::Ge>(a, b, #a, #b, KTEST_HERE)
+#define KEXPECT_EQ(a, b) ::ktest::detail::compare<::ktest::detail::Op::Eq>(a, b, #a, #b, KTEST_HERE)
+#define KEXPECT_NE(a, b) ::ktest::detail::compare<::ktest::detail::Op::Ne>(a, b, #a, #b, KTEST_HERE)
+#define KEXPECT_LT(a, b) ::ktest::detail::compare<::ktest::detail::Op::Lt>(a, b, #a, #b, KTEST_HERE)
+#define KEXPECT_LE(a, b) ::ktest::detail::compare<::ktest::detail::Op::Le>(a, b, #a, #b, KTEST_HERE)
+#define KEXPECT_GT(a, b) ::ktest::detail::compare<::ktest::detail::Op::Gt>(a, b, #a, #b, KTEST_HERE)
+#define KEXPECT_GE(a, b) ::ktest::detail::compare<::ktest::detail::Op::Ge>(a, b, #a, #b, KTEST_HERE)
 
 /// @brief Fails the test unless the two strings are equal. Null pointers count as "(null)".
-#define KEXPECT_STREQ(a, b) ::kernel::testing::detail::compare_strings(a, b, #a, #b, KTEST_HERE)
+#define KEXPECT_STREQ(a, b) ::ktest::detail::compare_strings(a, b, #a, #b, KTEST_HERE)
 
 /// @brief Fails the test unless the two byte ranges are equal, and says where they first
 ///        differ.
-#define KEXPECT_BYTES_EQ(a, b) ::kernel::testing::detail::compare_bytes(a, b, #a, #b, KTEST_HERE)
+#define KEXPECT_BYTES_EQ(a, b) ::ktest::detail::compare_bytes(a, b, #a, #b, KTEST_HERE)
 
 // KREQUIRE_*: the same, then out of the test body.
 #define KTEST_OR_RETURN(check) \
@@ -106,12 +118,12 @@
 
 // Tests the condition itself, so that the early return is plain to see for static analysis:
 // `KREQUIRE(r.has_value());` makes the `*r` that follows provably safe.
-#define KREQUIRE(cond)                                            \
-  do {                                                            \
-    if (!static_cast<bool>(cond)) {                               \
-      ::kernel::testing::detail::check(false, #cond, KTEST_HERE); \
-      return;                                                     \
-    }                                                             \
+#define KREQUIRE(cond)                                  \
+  do {                                                  \
+    if (!static_cast<bool>(cond)) {                     \
+      ::ktest::detail::check(false, #cond, KTEST_HERE); \
+      return;                                           \
+    }                                                   \
   } while (false)
 #define KREQUIRE_EQ(a, b) KTEST_OR_RETURN(KEXPECT_EQ(a, b))
 #define KREQUIRE_NE(a, b) KTEST_OR_RETURN(KEXPECT_NE(a, b))
@@ -123,27 +135,39 @@
 #define KREQUIRE_BYTES_EQ(a, b) KTEST_OR_RETURN(KEXPECT_BYTES_EQ(a, b))
 
 /// @brief Ends the test as skipped, saying why. Only in the test body itself.
-#define KTEST_SKIP(reason)                   \
-  do {                                       \
-    ::kernel::testing::detail::skip(reason); \
-    return;                                  \
+#define KTEST_SKIP(reason)         \
+  do {                             \
+    ::ktest::detail::skip(reason); \
+    return;                        \
   } while (false)
 
-namespace kernel::testing {
-/// @brief Runs every registered test and reports the results. Called once, by the BSP, once
-///        every CPU is online. Returns when the run is over; the other CPUs go idle then.
-void run_all() noexcept;
+namespace ktest {
+/// @brief How many threads a KTEST_ALL_CPUS() body runs on in user space, which has no way to ask
+///        how many CPUs there are. More than one, so that the body does run concurrently, and
+///        enough that two CPUs or more get some of them.
+inline constexpr std::uint32_t USER_PARTICIPANTS = 4;
 
-/// @brief Where the APs wait for multi-CPU tests; install with hw::smp::set_ap_main().
-void run_on_ap() noexcept;
+/// @brief What a run of tests came to.
+struct Totals {
+  std::uint32_t passed{0};
+  std::uint32_t failed{0};
+  std::uint32_t skipped{0};
 
-/// @brief How many CPUs run the current test: every online one for KTEST_ALL_CPUS(), else 1.
+  constexpr Totals& operator+=(const Totals& other) noexcept {
+    passed += other.passed;
+    failed += other.failed;
+    skipped += other.skipped;
+    return *this;
+  }
+};
+
+/// @brief How many participants run the current test: all of them for KTEST_ALL_CPUS(), else 1.
 [[nodiscard]] std::uint32_t cpu_count() noexcept;
 
-/// @brief Waits until every CPU running the current test has called it, as often as this one.
+/// @brief Waits until every participant in the current test has called it, as often as this one.
 ///
-/// A CPU that leaves the test early, through KREQUIRE_*() say, no longer counts, so the others
-/// do not wait for it forever. Does nothing in a single-CPU test.
+/// A participant that leaves the test early, through KREQUIRE_*() say, no longer counts, so the
+/// others do not wait for it forever. Does nothing in a test that runs on one.
 void sync_cpus() noexcept;
 
 /// @brief A small, fast, deterministic generator (xorshift64), for test data. Not random enough
@@ -273,4 +297,44 @@ bool compare_bytes(const std::span<T, N> a, const std::span<U, M> b, const char*
   return compare_byte_spans(std::as_bytes(a), std::as_bytes(b), expr_a, expr_b, where);
 }
 }  // namespace detail
+
+#ifdef EREBUS_USER_TESTS
+/// @brief Runs every test in the user test image and reports the results.
+/// @return The image's exit status: 0 if none failed, 1 if any did.
+[[nodiscard]] int run_all() noexcept;
+#endif
+}  // namespace ktest
+
+#ifdef EREBUS_USER_TESTS
+// Where the user image's tests live, with the framework's names in reach.
+namespace user::testing {
+using ::ktest::cpu_count;
+using ::ktest::Rng;
+using ::ktest::sync_cpus;
+}  // namespace user::testing
+#endif
+
+#ifdef EREBUS_KERNEL_TESTS
+namespace kernel::proc {
+class Process;
+}  // namespace kernel::proc
+
+// Where the kernel's tests live, with the framework's names in reach.
+namespace kernel::testing {
+using ::ktest::cpu_count;
+using ::ktest::Rng;
+using ::ktest::sync_cpus;
+
+/// @brief Starts the user test image, or says there is none with null. The process it returns
+///        is a child of process 0, which run_all() collects.
+using StartUserTests = proc::Process* (*)() noexcept;
+
+/// @brief Runs every registered test and reports the results: the kernel's own, then the user
+///        test image @p start_user_tests starts, then the KTEST_LAST() ones. Called once, by the
+///        BSP, once every CPU is online. Returns when the run is over; the other CPUs go idle then.
+void run_all(StartUserTests start_user_tests) noexcept;
+
+/// @brief Where the APs wait for multi-CPU tests; install with hw::smp::set_ap_main().
+void run_on_ap() noexcept;
 }  // namespace kernel::testing
+#endif

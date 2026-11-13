@@ -4,7 +4,7 @@
 
 #include "ktest.hpp"
 
-namespace kernel::testing {
+namespace ktest {
 KTEST(Atoi, parses_decimal_numbers) {
   KEXPECT_EQ(klib::atoi("0"), 0);
   KEXPECT_EQ(klib::atoi("42"), 42);
@@ -36,4 +36,4 @@ KTEST(Atoll, reaches_both_limits) {
   KEXPECT_EQ(klib::atoll("9223372036854775807"), std::numeric_limits<long long>::max());
   KEXPECT_EQ(klib::atoll("-9223372036854775808"), std::numeric_limits<long long>::min());
 }
-}  // namespace kernel::testing
+}  // namespace ktest

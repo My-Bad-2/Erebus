@@ -223,8 +223,8 @@ class alignas(std::hardware_destructive_interference_size) Process
   [[nodiscard]] bool has_child_locked(ProcessId target) const noexcept;
 
   [[nodiscard]] std::expected<void, Error> reserve_thread() noexcept;
-  [[nodiscard]] auto launch_thread(std::expected<sched::Thread*, Error> created, ThreadSetup setup,
-                                   void* setup_context) noexcept
+  [[nodiscard]] auto launch_thread(const std::expected<sched::Thread*, Error>& created,
+                                   ThreadSetup setup, void* setup_context) noexcept
       -> std::expected<sched::Thread*, Error>;
 
   // spawn_thread() with a copy of the calling thread. See fork_here().

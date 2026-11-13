@@ -3,7 +3,7 @@
 #include "buffers.hpp"
 #include "ktest.hpp"
 
-namespace kernel::testing::strings {
+namespace ktest::strings {
 namespace {
 // Two pages, so that strings can be put right against the end of the first one.
 alignas(4096) char g_left[8192];
@@ -66,4 +66,4 @@ KTEST(Strncmp, handles_strings_against_a_page_end) {
     KREQUIRE_EQ(klib::strcmp(a, b), 0);
   }
 }
-}  // namespace kernel::testing::strings
+}  // namespace ktest::strings

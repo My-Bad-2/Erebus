@@ -4,7 +4,7 @@
 
 #include "ktest.hpp"
 
-namespace kernel::testing {
+namespace ktest {
 KTEST(Abs, returns_the_magnitude) {
   KEXPECT_EQ(klib::abs(-42), 42);
   KEXPECT_EQ(klib::abs(42), 42);
@@ -49,4 +49,4 @@ KTEST(Div, rounds_towards_zero) {
   KEXPECT_EQ(imax.quot, -3);
   KEXPECT_EQ(imax.rem, -1);
 }
-}  // namespace kernel::testing
+}  // namespace ktest

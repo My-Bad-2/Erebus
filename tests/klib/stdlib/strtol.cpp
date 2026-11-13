@@ -4,7 +4,7 @@
 
 #include "ktest.hpp"
 
-namespace kernel::testing {
+namespace ktest {
 KTEST(Strtol, parses_sign_and_stops_after_the_digits) {
   char* end = nullptr;
   KEXPECT_EQ(klib::strtol("   -123456", &end, 10), -123456);
@@ -89,4 +89,4 @@ KTEST(Strtoul, negates_modulo_two_to_the_64) {
   KEXPECT_EQ(klib::strtoull("18446744073709551615", &end, 10),
              std::numeric_limits<unsigned long long>::max());
 }
-}  // namespace kernel::testing
+}  // namespace ktest

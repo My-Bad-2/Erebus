@@ -228,7 +228,8 @@ class alignas(16) SharedVmObject final : public TypedCapObject<SharedVmObject, C
       std::size_t first_page = 0, std::size_t pages = 0,
       memory::VirtualAddress hint = memory::VirtualAddress{}) const noexcept;
 
-  /// @brief Where page @p page of the window is, filling it in first if need be. Takes Read.
+  /// @brief Where page @p page of the window is, filling it in first if need be. Takes Read and
+  ///        Manage: a physical address is a driver's business, not that of everyone who maps it.
   [[nodiscard]] std::expected<memory::PhysicalAddress, Error> translate(
       CapRights rights, std::size_t page) const noexcept;
 

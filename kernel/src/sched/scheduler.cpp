@@ -201,7 +201,7 @@ bool Scheduler::wake(Thread* thread) noexcept {
 
   // The queue of the CPU it was last on is the one that knows whether it has really left: that
   // lock is held all the way through a context switch.
-  std::uint32_t target_cpu = 0;
+  std::uint32_t target_cpu;
   while (true) {
     const std::uint32_t cpu = thread->cpu_id();
     RunQueue& rq = cpu_runqueue(cpu);
@@ -422,6 +422,18 @@ void Scheduler::return_to_user() noexcept {
 
     return;
   }
+}
+
+void Scheduler::request_exit(Thread& thread) noexcept {
+  hw::percpu::preempt_disable();
+  thread.request_exit();
+
+  const std::uint32_t cpu = thread.cpu_id();
+  if (thread.state() == ThreadState::Running && cpu != hw::percpu::id()) {
+    hw::ipi::send_reschedule(cpu);
+  }
+
+  hw::percpu::preempt_enable();
 }
 
 void Scheduler::idle_step() noexcept {

@@ -70,6 +70,14 @@ SECTIONS {
         *(.got .got.plt)
     } :rodata
 
+    /* The test image's registered tests (tests/framework/ktest.hpp); empty in the real one. */
+    .ktest : {
+        . = ALIGN(8);
+        PROVIDE_HIDDEN(__ktest_cases_start = .);
+        KEEP(*(ktest_cases))
+        PROVIDE_HIDDEN(__ktest_cases_end = .);
+    } :rodata
+
     PROVIDE_HIDDEN(__rodata_end = .);
 
     . = ALIGN(CONSTANT(MAXPAGESIZE));
@@ -86,6 +94,10 @@ SECTIONS {
         *(.tcommon)
         PROVIDE_HIDDEN(__tbss_end = .);
     } :tls
+
+    /* The PT_TLS segment's alignment, which the runtime needs to lay a thread's copy out the way
+     * the linker resolved its offsets (user/src/rt/tls.cpp). A value, not an address. */
+    PROVIDE_HIDDEN(__tls_align = MAX(ALIGNOF(.tdata), ALIGNOF(.tbss)));
 
     .data : ALIGN(CONSTANT(MAXPAGESIZE)) {
         PROVIDE_HIDDEN(__data_start = .);

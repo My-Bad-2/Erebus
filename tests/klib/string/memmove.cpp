@@ -3,7 +3,7 @@
 #include "buffers.hpp"
 #include "ktest.hpp"
 
-namespace kernel::testing::strings {
+namespace ktest::strings {
 namespace {
 // Room for the largest move shifted by more than its length either way.
 constexpr std::size_t MOVE_BYTES = 2 * BUFFER_BYTES;
@@ -60,4 +60,4 @@ KTEST(Memmove, same_pointer_and_zero_bytes_change_nothing) {
   KEXPECT_EQ(klib::memmove(g_buffer + 10, g_buffer + 20, 0), static_cast<void*>(g_buffer + 10));
   KEXPECT(same(g_buffer, g_expected, 256));
 }
-}  // namespace kernel::testing::strings
+}  // namespace ktest::strings

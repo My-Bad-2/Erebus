@@ -14,10 +14,6 @@
 
 Erebus is a hobby kernel for x86-64 PCs, written in C++.
 
-Right now it boots, maps memory, wakes up every CPU core, calibrates its clocks, echoes `Hello, World!` and then idles.
-Forever. There are processes, and threads that can run in ring 3, but nothing to run in them yet: no system calls, no
-elf loader and no filesystem. Not yet, anyway.
-
 What was built (till now):
 
 - A buddy allocator for physical memory, split per NUMA node and per mobility class, with
@@ -38,6 +34,7 @@ What was built (till now):
 - Processes with their own address spaces, user threads, and fork() with copy-on-write. Kernel threads borrow whatever
   page tables were loaded last instead of switching.
 - A monotonic clock on the invariant TSC, measured against the HPET or the ACPI PM timer as fallback.
+- A Basic Ring 3 Root Task.
 
 ## Building
 
@@ -105,10 +102,10 @@ cmake --workflow --preset check                # configure, build and test in on
 A run looks like this:
 
 ```text
-ktest: running 620 tests on 4 CPUs
+ktest: running 665 tests on 4 CPUs
 ktest: pass Maths.alignment (0 ms)
 ...
-ktest: 613 passed, 0 failed, 7 skipped
+ktest: 658 passed, 0 failed, 7 skipped
 ktest: ALL PASSED
 ```
 
@@ -199,7 +196,7 @@ None of this would be possible without other people's work. Thank you, all of yo
 | [Zydis](https://github.com/zyantific/zydis) and [Zycore](https://github.com/zyantific/zycore-c) | by Florian Bernd, Joel Höner, and contributors                                                              |
 | [freestanding-cxx-hdrs-gnu](https://github.com/osdev0/freestanding-cxx-hdrs-gnu)                | by The GNU Compiler Collection (GCC) project team                                                           |
 | [freestanding-lgrt](https://github.com/osdev0/freestanding-lgrt)                                | by The LLVM Project developer community (thanks to Mintsuki for separating out the freestanding components) |
-| [edk2-ovmf](https://github.com/osdev0/edk2-ovmf-stable-bins)                        | by the TianoCore community                                                                                  |
+| [edk2-ovmf](https://github.com/osdev0/edk2-ovmf-stable-bins)                                    | by the TianoCore community                                                                                  |
 
 Each submodule carries its own license file under `third_party/`, and Limine's comes with the
 download.

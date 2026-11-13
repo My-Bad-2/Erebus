@@ -118,6 +118,36 @@ void initialize(const drivers::uart::SerialPort& port) noexcept;
 /// @brief Writes @p msg to the console as one piece. Safe from interrupt context.
 void write_console(std::string_view msg) noexcept;
 
+namespace detail {
+// Where a line comes from takes this much room, whatever it is, so that messages line up: the
+// file name in 14 columns, a colon, and the line in 4.
+inline constexpr int FILE_WIDTH = 14;
+inline constexpr int LINE_WIDTH = 4;
+inline constexpr int ORIGIN_WIDTH = FILE_WIDTH + 1 + LINE_WIDTH;
+
+// Every line starts with its level.
+template <Level Lvl>
+constexpr void begin_line(klib::StringBuffer& buf) noexcept {
+  const auto [f, b, s] = get_level_style(Lvl);
+  klib::format_to(buf, "[{}] ", klib::styled(level_name(Lvl), f, b, s));
+}
+
+// Every line ends in a newline, one that was cut short included: its last character gives way,
+// or the next line would carry on from it on the console. Then it goes out in one piece.
+inline void end_line(klib::StringBuffer& buf) noexcept {
+  const std::span<char> active_span = buf.active_span();
+  if (!active_span.empty() && active_span.back() != '\n') {
+    if (const std::span<char> slot = buf.advance(1); !slot.empty()) {
+      slot.front() = '\n';
+    } else {
+      active_span.back() = '\n';
+    }
+  }
+
+  write_console(buf.view());
+}
+}  // namespace detail
+
 template <Level Lvl, typename... Args>
 constexpr void log(log_loc_str<std::type_identity_t<Args>...> fmt, Args&&... args) noexcept {
   if constexpr (Lvl < ACTIVE_LOG_LEVEL) {
@@ -128,22 +158,41 @@ constexpr void log(log_loc_str<std::type_identity_t<Args>...> fmt, Args&&... arg
   char local_buffer[512];
   klib::StringBuffer buf(local_buffer);
 
-  const auto [f, b, s] = detail::get_level_style(Lvl);
-  const char* lvl_name = detail::level_name(Lvl);
-  const auto file_name = detail::basename(fmt.loc.file_name());
-
-  klib::format_to(buf, "[{}] {}:{} | ", klib::styled(lvl_name, f, b, s), klib::dyn(file_name, 14),
-                  klib::dyn(fmt.loc.line(), 4));
-
+  detail::begin_line<Lvl>(buf);
+  klib::format_to(buf, "{}:{} | ",
+                  klib::dyn(detail::basename(fmt.loc.file_name()), detail::FILE_WIDTH),
+                  klib::dyn(fmt.loc.line(), detail::LINE_WIDTH));
   klib::format_to(buf, fmt.fmt, std::forward<Args>(args)...);
+  detail::end_line(buf);
+}
 
-  // Ensure the payload is implicitly newline-terminated.
-  const std::span<char> active_span = buf.active_span();
-  if (!active_span.empty() && active_span.back() != '\n') {
-    buf.push('\n');
+/// @brief log(), with @p origin where the file and line would be, in the same width.
+///
+/// For a line that says what something other than kernel code has to say, user code through
+/// DebugLog for one: the file and line of the kernel code that passes it on would only mislabel
+/// it.
+template <Level Lvl, typename... Args>
+constexpr void log_from(const std::string_view origin,
+                        klib::format_string<std::type_identity_t<Args>...> fmt,
+                        Args&&... args) noexcept {
+  if constexpr (Lvl < ACTIVE_LOG_LEVEL) {
+    return;
   }
 
-  write_console(buf.view());
+  char local_buffer[512];
+  klib::StringBuffer buf(local_buffer);
+
+  detail::begin_line<Lvl>(buf);
+  klib::format_to(buf, "{} | ", klib::dyn(origin, detail::ORIGIN_WIDTH));
+  klib::format_to(buf, fmt, std::forward<Args>(args)...);
+  detail::end_line(buf);
+}
+
+template <typename... Args>
+constexpr void info_from(const std::string_view origin,
+                         klib::format_string<std::type_identity_t<Args>...> fmt,
+                         Args&&... args) noexcept {
+  log_from<Level::Info>(origin, fmt, std::forward<Args>(args)...);
 }
 
 template <typename... Args>

@@ -3,7 +3,7 @@
 #include "buffers.hpp"
 #include "ktest.hpp"
 
-namespace kernel::testing::strings {
+namespace ktest::strings {
 namespace {
 alignas(64) std::uint8_t g_a[BUFFER_BYTES];
 alignas(64) std::uint8_t g_b[BUFFER_BYTES];
@@ -48,4 +48,4 @@ KTEST(Memcmp, compares_as_unsigned_char) {
   KEXPECT_GT(klib::memcmp(high, low, 1), 0);
   KEXPECT_EQ(klib::memcmp(low, high, 0), 0);
 }
-}  // namespace kernel::testing::strings
+}  // namespace ktest::strings

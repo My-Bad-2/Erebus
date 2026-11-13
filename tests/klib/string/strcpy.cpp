@@ -3,7 +3,7 @@
 #include "buffers.hpp"
 #include "ktest.hpp"
 
-namespace kernel::testing::strings {
+namespace ktest::strings {
 namespace {
 char g_dest[64];
 
@@ -46,4 +46,4 @@ KTEST(Strncpy, truncates_without_a_terminator) {
   KEXPECT_EQ(klib::strncpy(g_dest, "Kernel", 0), g_dest);
   KEXPECT_EQ(g_dest[0], static_cast<char>(SENTINEL));
 }
-}  // namespace kernel::testing::strings
+}  // namespace ktest::strings

@@ -3,7 +3,7 @@
 #include "buffers.hpp"
 #include "ktest.hpp"
 
-namespace kernel::testing::strings {
+namespace ktest::strings {
 namespace {
 char g_dest[64];
 
@@ -42,4 +42,4 @@ KTEST(Strncat, appends_at_most_count_characters_then_a_terminator) {
   KEXPECT_EQ(klib::strncat(g_dest, " Kernel", 0), g_dest);
   KEXPECT_STREQ(g_dest, "Erebus");
 }
-}  // namespace kernel::testing::strings
+}  // namespace ktest::strings

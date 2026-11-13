@@ -188,6 +188,18 @@ class AddressSpace {
                                               AccessFlags fault_type) noexcept
       -> std::expected<void, Error>;
 
+  // Where the byte at @p addr, in @p vma, is in the direct map, faulted in for @p access first if
+  // the page tables do not allow that yet. @pre As for resolve_vma_fault_locked(), and for as long
+  // as the caller uses the pointer.
+  [[nodiscard]] auto reach_locked(VMArea* vma, VirtualAddress addr, AccessFlags access) noexcept
+      -> std::expected<std::byte*, Error>;
+
+  // Runs @p use on the direct-map view of the page at @p addr, with writers kept out from before
+  // the page is looked up until @p use returns. See write_bytes().
+  template <typename Use>
+  [[nodiscard]] auto with_page(VirtualAddress addr, AccessFlags access, Use&& use) noexcept
+      -> std::expected<void, Error>;
+
  public:
   /// @param base_addr Where the heap and mmap bump pointers start (plus random offsets).
   explicit AddressSpace(VirtualAddress base_addr) noexcept;
@@ -314,8 +326,11 @@ class AddressSpace {
   /// allow writing at all says no, as it would to anyone. The copy goes through the direct map,
   /// so SMAP is no obstacle.
   ///
-  /// Meant for an address space nobody else changes in the meantime, one that is being set up or
-  /// looked at by a test, say: a page that is remapped halfway through may get part of the copy.
+  /// Other threads of the process may change the address space meanwhile, which is what makes
+  /// this safe for system calls. Each page is a reader, as a page fault is: it is found, filled in
+  /// and copied with writers kept out, so an unmap, a protect or a fork waits for the copy rather
+  /// than freeing or sharing the page under it. A writer can still come between two pages: the
+  /// copy then stops at the first page that is gone.
   /// @return The error of the first page that could not be faulted in. What came before it is
   ///         copied already.
   [[nodiscard]] auto write_bytes(VirtualAddress dest, std::span<const std::byte> bytes) noexcept

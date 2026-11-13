@@ -84,7 +84,7 @@ enum cap_rights {           // A bit mask, 8 bits.
   RIGHT_GRANT_REPLY = 0x08, // Let the reply to a call carry capabilities.
   RIGHT_MINT = 0x10,        // Badge a copy, or make a part of the object.
   RIGHT_REVOKE = 0x20,      // Revoke what was derived from an original.
-  RIGHT_MANAGE = 0x40,      // Configure the object.
+  RIGHT_MANAGE = 0x40,      // Configure the object, see where its memory is.
   RIGHT_EXECUTE = 0x80,     // Map executable.
   RIGHTS_ALL = 0xFF,
 };
@@ -211,7 +211,9 @@ struct memory_info {        // 40 bytes
 - `mem_map_object` takes `ACCESS_READ`, `ACCESS_WRITE`, `ACCESS_EXECUTE` and `ACCESS_POPULATE`,
   which the object's capability has to allow. `pages` of 0 maps to the end.
 - A `hint` of `NULL` lets the kernel pick the address; otherwise it is where the mapping goes.
-- `mem_translate_object` returns the physical address of the page, filling it in first.
+- `mem_translate_object` returns the physical address of the page, filling it in first. It takes
+  `RIGHT_MANAGE` as well as `RIGHT_READ`: where memory is in RAM is for whoever drives a device
+  with it, not for everyone who maps it.
 
 ## Devices (family `0x3`)
 
@@ -273,7 +275,11 @@ struct memory_info {        // 40 bytes
 ```
 
 - `thread_spawn` starts the thread at `entry`, with `arg` in RDI. As with processes, names longer
-  than 23 bytes are cut short.
+  than 23 bytes are cut short. The thread has a stack and nothing else: no thread-local storage
+  and no IPC buffer until its code sets them up (the runtime's `rt::Thread` does).
+- `thread_exit` with 0 ends the calling thread, and does not return. Given another thread, it
+  ends that one the next time it is on its way back to ring 3; one running in ring 3 on another
+  CPU is interrupted for it at once.
 - `thread_configure` binds `notification` to the thread unless it is 0, and sends its faults to
   `fault_endpoint` with `fault_badge`, or nowhere with 0. Given a process, it sets where faults of
   its threads go, and `notification` must be 0.
@@ -310,7 +316,8 @@ struct memory_info {        // 40 bytes
 /* 0x800 */ long debug_log(const char* text, size_t len);
 ```
 
-- Writes up to 512 bytes of `text` to the kernel log, as one line.
+- Writes up to 512 bytes of `text` to the kernel log, as one line. The log line's own prefix
+  shares a 512-byte buffer with it, so a long text is cut short a little before that.
 
 ## Errors
 

@@ -2,7 +2,7 @@
 
 #include "ktest.hpp"
 
-namespace kernel::testing {
+namespace ktest {
 namespace {
 // The "C" locale's classes, written out plainly. Every function gets every unsigned char value
 // and EOF; the bytes from 0x80 up and EOF belong to no class.
@@ -47,4 +47,4 @@ KTEST(Ctype, works_in_constant_expressions) {
   static_assert(klib::isalpha('q') && !klib::isalpha('7') && klib::toupper('q') == 'Q');
   KEXPECT(true);
 }
-}  // namespace kernel::testing
+}  // namespace ktest

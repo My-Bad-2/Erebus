@@ -7,7 +7,6 @@
 
 #include "drivers/clock.hpp"
 #include "hal/interrupts/interrupt_manager.hpp"
-#include "hal/smp/ipi.hpp"
 #include "hal/smp/percpu.hpp"
 #include "memory/heap.hpp"
 #include "memory/vmm/vma/vma.hpp"
@@ -211,7 +210,7 @@ std::expected<void, Error> Process::reserve_thread() noexcept {
   return {};
 }
 
-auto Process::launch_thread(const std::expected<sched::Thread*, Error> created,
+auto Process::launch_thread(const std::expected<sched::Thread*, Error>& created,
                             const ThreadSetup setup, void* const setup_context) noexcept
     -> std::expected<sched::Thread*, Error> {
   if (!created) {
@@ -333,15 +332,10 @@ void Process::exit(const int status) noexcept {
     m_exit_status = status;
     m_state.store(ProcessState::Exiting, std::memory_order_release);
 
+    // A thread in ring 3 does not come back by itself; an interrupt brings it in, and the way out
+    // of that ends it.
     for (sched::Thread& thread : m_threads) {
-      thread.request_exit();
-
-      // A thread in ring 3 does not come back by itself; an interrupt brings it in, and the way
-      // out of that ends it. One on this CPU is the one calling, on its way out already.
-      const std::uint32_t cpu = thread.cpu_id();
-      if (thread.state() == sched::ThreadState::Running && cpu != hw::percpu::id()) {
-        hw::ipi::send_reschedule(cpu);
-      }
+      sched::Scheduler::request_exit(thread);
     }
 
     finish_now = m_live_threads.load(std::memory_order_relaxed) == 0;

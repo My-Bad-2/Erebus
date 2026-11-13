@@ -3,7 +3,7 @@
 #include "buffers.hpp"
 #include "ktest.hpp"
 
-namespace kernel::testing::strings {
+namespace ktest::strings {
 namespace {
 alignas(64) char g_buffer[256];
 }  // namespace
@@ -50,4 +50,4 @@ KTEST(Strspn, handles_high_bytes) {
                            "\x80"),
              2u);
 }
-}  // namespace kernel::testing::strings
+}  // namespace ktest::strings

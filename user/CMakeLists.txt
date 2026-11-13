@@ -33,11 +33,12 @@ set(USER_MAIN "${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp")
 
 file(GLOB_RECURSE user_sources CONFIGURE_DEPENDS "src/*.cpp" "src/*.c" "src/*.S")
 file(GLOB_RECURSE user_headers CONFIGURE_DEPENDS "include/*.h" "include/*.hpp")
+file(GLOB_RECURSE user_private_headers CONFIGURE_DEPENDS "src/*.h" "src/*.hpp")
 list(REMOVE_ITEM user_sources "${USER_MAIN}")
 
 add_library(user_objects OBJECT)
 target_sources(user_objects
-        PRIVATE ${user_sources}
+        PRIVATE ${user_sources} ${user_private_headers}
         PUBLIC FILE_SET HEADERS BASE_DIRS include FILES ${user_headers}
         PUBLIC FILE_SET generated TYPE HEADERS BASE_DIRS "${generated_dir}"
         FILES "${generated_dir}/build_info.hpp"

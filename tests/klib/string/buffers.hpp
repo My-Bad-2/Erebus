@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace kernel::testing::strings {
+namespace ktest::strings {
 inline constexpr std::size_t BUFFER_BYTES = 4096;
 inline constexpr std::uint8_t SENTINEL = 0xAA;
 
@@ -37,4 +37,4 @@ inline void fill(std::uint8_t* bytes, const std::size_t count, const std::uint8_
 
   return true;
 }
-}  // namespace kernel::testing::strings
+}  // namespace ktest::strings

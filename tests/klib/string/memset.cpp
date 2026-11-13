@@ -3,7 +3,7 @@
 #include "buffers.hpp"
 #include "ktest.hpp"
 
-namespace kernel::testing::strings {
+namespace ktest::strings {
 namespace {
 alignas(64) std::uint8_t g_buffer[BUFFER_BYTES];
 }  // namespace
@@ -35,4 +35,4 @@ KTEST(Memset, zero_bytes_change_nothing) {
   KEXPECT_EQ(klib::memset(g_buffer + 10, 0, 0), static_cast<void*>(g_buffer + 10));
   KEXPECT_EQ(g_buffer[10], SENTINEL);
 }
-}  // namespace kernel::testing::strings
+}  // namespace ktest::strings

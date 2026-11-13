@@ -127,7 +127,8 @@ std::expected<void, Error> ThreadCap::request_exit(CapRights rights) const noexc
     return std::unexpected(Error::InvalidState);
   }
 
-  m_thread->request_exit();
+  // The thread may be spinning in ring 3 on another CPU, which only an interrupt brings back in.
+  sched::Scheduler::request_exit(*m_thread);
   return {};
 }
 

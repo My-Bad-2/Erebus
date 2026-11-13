@@ -3,7 +3,7 @@
 #include "buffers.hpp"
 #include "ktest.hpp"
 
-namespace kernel::testing::strings {
+namespace ktest::strings {
 namespace {
 alignas(64) char g_buffer[BUFFER_BYTES];
 
@@ -59,4 +59,4 @@ KTEST(Strnlen, stops_at_the_limit) {
     }
   }
 }
-}  // namespace kernel::testing::strings
+}  // namespace ktest::strings

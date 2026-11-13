@@ -563,7 +563,7 @@ std::expected<memory::VirtualAddress, Error> SharedVmObject::map_into(
 
 std::expected<memory::PhysicalAddress, Error> SharedVmObject::translate(
     CapRights rights, std::size_t page) const noexcept {
-  if (!has_rights(rights, CapRights::Read)) [[unlikely]] {
+  if (!has_rights(rights, CapRights::Read | CapRights::Manage)) [[unlikely]] {
     return std::unexpected(Error::AccessDenied);
   }
 

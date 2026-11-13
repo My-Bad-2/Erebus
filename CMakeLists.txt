@@ -49,7 +49,8 @@ add_qemu_targets(qemu
     OVMF_VARS "${OVMF_DIR}/ovmf-vars-x86_64.fd"
 )
 
-# The same image around the test kernel, and the targets that run it.
+# The same image around the test kernel, with the user test image as its root task, and the
+# targets that run it.
 add_uefi_iso(test_iso
     OUTPUT erebus-test.iso
     EFI_IMAGE boot/limine/limine-uefi-cd.bin
@@ -58,7 +59,7 @@ add_uefi_iso(test_iso
     "${LIMINE_DIR}/BOOTX64.EFI" EFI/BOOT/BOOTX64.EFI
     "${PROJECT_SOURCE_DIR}/misc/limine.conf" boot/limine/limine.conf
     "$<TARGET_FILE:kernel_test>" boot/kernel.elf
-    "$<TARGET_FILE:user>" boot/user.elf
+    "$<TARGET_FILE:user_test>" boot/user.elf
 )
 
 add_kernel_test_targets(

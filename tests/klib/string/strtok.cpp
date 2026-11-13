@@ -2,7 +2,7 @@
 
 #include "ktest.hpp"
 
-namespace kernel::testing::strings {
+namespace ktest::strings {
 KTEST(StrtokR, splits_on_any_delimiter) {
   char str[] = "Erebus OS: Fast, Secure kernel";
   char* save = nullptr;
@@ -51,4 +51,4 @@ KTEST(Strtok, works_like_strtok_r) {
   KEXPECT_STREQ(klib::strtok(nullptr, " "), "Kernel");
   KEXPECT_EQ(klib::strtok(nullptr, " "), nullptr);
 }
-}  // namespace kernel::testing::strings
+}  // namespace ktest::strings

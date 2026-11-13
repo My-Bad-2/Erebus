@@ -82,7 +82,7 @@ KTEST_ALL_CPUS(BmiWord, hands_each_slot_out_once_under_contention, cpu) {
       g_word.reset();
       g_seen.store(0, std::memory_order_relaxed);
     }
-    kernel::testing::sync_cpus();
+    ktest::sync_cpus();
 
     for (std::uint32_t idx = g_word.acquire_first_free(); idx != 64;
          idx = g_word.acquire_first_free()) {
@@ -91,7 +91,7 @@ KTEST_ALL_CPUS(BmiWord, hands_each_slot_out_once_under_contention, cpu) {
         g_duplicates.fetch_add(1, std::memory_order_relaxed);
       }
     }
-    kernel::testing::sync_cpus();
+    ktest::sync_cpus();
 
     if (cpu == 0) {
       KEXPECT_EQ(g_seen.load(), ~0ul);

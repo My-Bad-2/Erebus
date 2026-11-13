@@ -2,7 +2,7 @@
 
 #include "ktest.hpp"
 
-namespace kernel::testing::strings {
+namespace ktest::strings {
 KTEST(Strpbrk, finds_the_first_character_of_a_set) {
   const char* str = "ErebusOSInit";
   KEXPECT_EQ(klib::strpbrk(str, "zxO"), str + 6);
@@ -29,4 +29,4 @@ KTEST(Strstr, handles_repeating_prefixes) {
   KEXPECT_EQ(klib::strstr(str, "AAAAAB"), str + 23);
   KEXPECT_EQ(klib::strstr(str, "AAAAAC"), nullptr);
 }
-}  // namespace kernel::testing::strings
+}  // namespace ktest::strings
